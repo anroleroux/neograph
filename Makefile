@@ -29,12 +29,12 @@ build: ui/layout.html ui/dist/index.css ui/dist/index.js $(wildcard src/*.c) $(w
 unittest: src/config/config_iterator.c tests/test_config_iterator.c tests/unity.c
 	gcc -std=c11 -Wall -Wextra -Werror -DUNIT_TEST -Isrc -Itests $^ -o test_runner
 
-ui/dist/index.css: ui/layout.css ui/content/network.css ui/content/command.css ui/content/graph.css
+ui/dist/index.css: ui/layout.css ui/content/network.css ui/content/command.css ui/content/graph.css ui/content/settings.css
 	@mkdir -p ui/dist
 	$(call compose,ui/layout.css,make/css.map,ui/dist/index.css)
 	@echo "Built test version → ui/dist/index.css"
 
-ui/dist/index.js: ui/layout.js ui/content/network.js ui/content/command.js ui/content/graph.js ui/content/components.js
+ui/dist/index.js: ui/layout.js ui/content/network.js ui/content/command.js ui/content/graph.js ui/content/components.js ui/content/settings.js
 	@mkdir -p ui/dist
 	$(call compose,ui/layout.js,make/js.map,ui/dist/index.js)
 # 	sed -i '/\/\/testing$$/d' ui/dist/index.js

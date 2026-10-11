@@ -76,3 +76,5 @@ function mount(root, state, template) {
 /* {{components-js}} */
 
 /* {{graph-js}} */
+
+/* {{settings-js}} */

@@ -1,0 +1,8 @@
+#settings {
+    color: var(--clr-face);
+    background: var(--clr-pane);
+    margin-top: var(--step-1);
+    padding: var(--step-1);
+    box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px;
+    height: 100%;
+}

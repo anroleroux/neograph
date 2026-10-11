@@ -190,6 +190,7 @@ svg.addEventListener('pointerdown', function (e) {
 
         Object.entries(elements).forEach(([key,n]) => {
             n.highlight('hide');
+            n.clearSettings();
         });
     }
 
