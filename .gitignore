@@ -7,3 +7,5 @@ test_runner
 test_protocol
 test_ws_frame
 tests/protocol_examples.h
+check_packets
+node_modules/

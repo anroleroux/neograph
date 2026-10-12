@@ -33,6 +33,13 @@ void config_element_iterator_init(
 // bool next_config_element(config_element_iterator *elms);
 
 /*
+ * The payload length a received packet declares in its header, if the packet is
+ * long enough to hold it; -1 if it is shorter than a header or claims more bytes
+ * than it holds. This is the check the device applies to every received packet.
+ */
+int packet_data_length(const uint8_t *packet, size_t len);
+
+/*
  * Replace one field message in a stored packet (header included). The first message
  * with the same type, element ID and field ID (first payload byte) as msg is
  * replaced by msg's first message, and the result is written to out with its length

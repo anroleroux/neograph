@@ -575,3 +575,9 @@ Current behaviour that is probably not intended. Each one is a candidate for its
     example of the same name.
 
   A new packet example gets the structural checks automatically.
+- **The UI's real packets.** `make ui-test` loads the page the firmware serves in a
+  headless browser, with a fake device in place of the WebSocket. It connects, edits
+  and saves the graph, presses a button, edits every network field and reconnects,
+  then checks every packet the UI sent with the firmware's own code
+  (`tests/check_packets.c`): the length check, the message iterator, the lengths
+  `unmarshal_controls` accepts, and the field replacement behind `0B`/`0C`.

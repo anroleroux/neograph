@@ -200,13 +200,11 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
 
 // Handle one complete binary frame: a packet (see PROTOCOL.md).
 static void handle_packet(uint8_t *payload, size_t length) {
-    if (length < PKT_HEADER_LEN) {
-        printf("packet too short (%u bytes), ignored\n", length);
-        return;
-    }
-    uint16_t data_length = (payload[1] << 8) | payload[2];
-    if (PKT_HEADER_LEN + data_length > length) {
-        printf("packet says %u bytes but the frame holds %u, ignored\n", data_length, length - PKT_HEADER_LEN);
+    int data_length = packet_data_length(payload, length);
+    if (data_length < 0) {
+        if (length < PKT_HEADER_LEN) printf("packet too short (%u bytes), ignored\n", length);
+        else printf("packet says %u bytes but the frame holds %u, ignored\n",
+                    (payload[1] << 8) | payload[2], length - PKT_HEADER_LEN);
         return;
     }
 

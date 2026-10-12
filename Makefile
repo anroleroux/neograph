@@ -8,8 +8,10 @@ include make/tpl.mk
 #
 #   uidev  browser-only. Online code stripped; offline stand-ins and logging kept.
 #          This is the GitHub Pages demo.
+#   uihw   the page the release firmware serves, without building the firmware.
+#          Offline stand-ins and logging stripped.
 #   hwdev  firmware with the debug UI. Offline stand-ins stripped; logging kept.
-#   build  release firmware. Offline stand-ins and logging stripped.
+#   build  release firmware, serving the uihw page.
 
 # Compose the UI into ui/dist/. Always recomposed: every target strips markers
 # from ui/dist/index.js in place, so a file-timestamp rule would let one build
@@ -24,15 +26,14 @@ endef
 # Strip a //NAME-start … //NAME-end block and every //NAME line from the JS.
 strip_markers = @sed -i -e '/\/\/$(1)-start$$/,/\/\/$(1)-end$$/d' -e '/\/\/$(1)$$/d' ui/dist/index.js
 
-# Inline the JS/CSS into the page, then gzip it into a C header for the firmware.
+# Gzip the composed page into a C header and build the firmware.
 define firmware
-	$(call compose,ui/layout.html,make/html.map,ui/dist/index.html)
 	gzip -k -9 -f ui/dist/index.html
 	xxd -i ui/dist/index.html.gz > src/ui_dist_index_html_gz.h
 	cd build && cmake -DPICO_BOARD=pico2_w .. && $(MAKE)
 endef
 
-.PHONY: test protocol-check uidev hwdev build flash clean
+.PHONY: test ui-test protocol-check uidev uihw hwdev build flash clean
 
 # Unit tests, plus the checks that keep PROTOCOL.md and the C/JS constants honest.
 test: protocol-check test_runner test_protocol test_ws_frame
@@ -49,18 +50,30 @@ uidev: ui/content/components.js
 	$(call compose,ui/layout.html,make/html.map,ui/dist/index.html)
 	@echo "Built browser-only UI → ui/dist/index.html"
 
-hwdev: ui/content/components.js
-	$(compose_ui)
-	$(call strip_markers,offline)
-	$(firmware)
-	@echo "Built debug firmware → build/"
-
-build: ui/content/components.js
+uihw: ui/content/components.js
 	$(compose_ui)
 	$(call strip_markers,offline)
 	$(call strip_markers,debug)
+	$(call compose,ui/layout.html,make/html.map,ui/dist/index.html)
+	@echo "Built hardware UI → ui/dist/index.html"
+
+hwdev: ui/content/components.js
+	$(compose_ui)
+	$(call strip_markers,offline)
+	$(call compose,ui/layout.html,make/html.map,ui/dist/index.html)
+	$(firmware)
+	@echo "Built debug firmware → build/"
+
+build: uihw
 	$(firmware)
 	@echo "Built release firmware → build/"
+
+# Drive the hardware UI in a headless browser against a fake device, then check
+# every packet it sent with the firmware's own parsing code. Needs Node and
+# Playwright (see .github/workflows/test.yml).
+ui-test: uihw check_packets
+	node tests/ui_packets.cjs ui/dist/index.html ui/dist/packets.txt
+	./check_packets ui/dist/packets.txt
 
 TEST_CFLAGS = -std=c11 -Wall -Wextra -Werror -DUNIT_TEST -Isrc -Itests
 
@@ -68,6 +81,9 @@ test_runner: src/config/config_iterator.c tests/test_config_iterator.c tests/uni
 	gcc $(TEST_CFLAGS) $^ -o $@
 
 test_protocol: src/config/config_iterator.c tests/test_protocol.c tests/unity.c tests/protocol_examples.h src/protocol.h
+	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@
+
+check_packets: src/config/config_iterator.c tests/check_packets.c src/protocol.h
 	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
 test_ws_frame: src/networking/ws_frame.c tests/test_ws_frame.c tests/unity.c src/networking/ws_frame.h
@@ -86,4 +102,4 @@ flash:
 clean:
 	rm -rf ui/dist
 	rm -f ui/content/components.js
-	rm -f test_runner test_protocol test_ws_frame tests/protocol_examples.h
+	rm -f test_runner test_protocol test_ws_frame check_packets tests/protocol_examples.h

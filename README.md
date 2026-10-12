@@ -57,7 +57,9 @@ make flash
 | `make uidev` | Browser-only UI in `ui/dist/index.html`, with canned controller data. This is the GitHub Pages demo. |
 | `make hwdev` | Firmware with the debug UI (console logging kept). |
 | `make build` | Release firmware. |
+| `make uihw` | The page the release firmware serves, in `ui/dist/index.html`, without building the firmware. |
 | `make test` | Runs the C unit tests and checks `PROTOCOL.md`'s examples and the C/JS protocol constants. |
+| `make ui-test` | Drives the `uihw` page in a headless browser against a fake device and checks every packet it sends with the firmware's own parsing code. Needs Node and Playwright. |
 
 The UI source is shared; the targets differ only in which marked code they strip from the JS:
 

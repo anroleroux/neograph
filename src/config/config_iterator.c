@@ -122,3 +122,10 @@ size_t config_replace_field(
     }
     return 0;
 }
+
+int packet_data_length(const uint8_t *packet, size_t len)
+{
+    if (len < 3) return -1;
+    int data_length = packet[1] << 8 | packet[2];
+    return (size_t)3 + data_length > len ? -1 : data_length;
+}
