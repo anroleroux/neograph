@@ -396,13 +396,10 @@ function touchEnd(e) {
 svg.addEventListener('pointerup', touchEnd, true);
 svg.addEventListener('pointercancel', touchEnd, true);
 
+// The demo graph: the button drives the onboard LED.
 new uiButton(-200, -40);
 new uiLED(100, 40);
 new uiGPO(200, 0);
-
-// saveGraph();
+createEdge('n1', 'n2');
 
 toGraph();
-
-// createEdge("n2","n1")
-// createEdge("n1","n3")

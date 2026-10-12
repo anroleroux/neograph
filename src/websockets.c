@@ -219,6 +219,7 @@ static void handle_packet(uint8_t *payload, size_t length) {
         config_element_iterator_init(&itr, payload+3, data_length);
 
         while (itr.next(&itr)) {
+            printf("command from element %u, value %u: sending to core 1\n", itr.id, itr.len ? itr.pay[0] : 0);
             uint32_t hwop_buf = fifo_op_word(FIFO_OP_CONTROL_ACTION, itr.type, itr.id, itr.pay[0]);
             multicore_fifo_push_blocking(hwop_buf);
 

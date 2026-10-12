@@ -102,10 +102,11 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await connect(page, FIRST_BOOT_CONFIG);
     expect(await page.evaluate(() => networks[0].ssid) === 'LRX', 'the first-boot config was not read');
     expect((await sent(page)).length === 0, 'the UI sent something on connect');
+    expect(await page.evaluate(() => gEdges.map(e => e.start.node.name + '>' + e.end.node.name).join()) === 'n1>n2',
+        'the demo graph does not wire n1 to n2');
 
     await page.evaluate(() => {
-        createEdge('n1', 'n2');
-        createEdge('n1', 'n3');
+        createEdge('n1', 'n3');      // n1 -> n2 is wired by default
         elements.n1.setLabel('Start');
         elements.n2.setLabel('Pompe à eau');
         elements.n3.setPin('7');
