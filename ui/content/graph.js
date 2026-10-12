@@ -14,27 +14,47 @@ let idEdgeCounter = 1;
 let selected = null;
 let wireMode = false;
 
+const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FIELD];
+
 function saveGraph() {
     commandInterface = document.getElementById('command');
     commandInterface.innerHTML = '';
 
     const output = [];
 
+    // Keep the device's networking messages. Controls and labels saved before are
+    // dropped: the current graph replaces them.
+    configMessages(gfig)
+        .filter(m => NETWORK_TYPES.includes(m.type))
+        .forEach(m => output.push(...m.bytes));
+
     Object.entries(elements).forEach(([key,elm]) => {
         elm.buildUI(commandInterface);
         output.push(...elm.marshal());
+        output.push(...elm.marshalLabel());
     })
 
     const binary = Uint8Array.from(output);
-    const wsConfigMsg = new Uint8Array(3 + gfig.length + binary.length);
+    const wsConfigMsg = new Uint8Array(3 + binary.length);
     wsConfigMsg[0] = PKT_CONFIG;
-    wsConfigMsg[1] = (gfig.length + binary.length >> 8) & 0xFF;
-    wsConfigMsg[2] = gfig.length + binary.length & 0xFF;
-    wsConfigMsg.set(gfig, 3);
-    wsConfigMsg.set(binary, 3 + gfig.length);
+    wsConfigMsg[1] = (binary.length >> 8) & 0xFF;
+    wsConfigMsg[2] = binary.length & 0xFF;
+    wsConfigMsg.set(binary, 3);
 
     console.log(wsConfigMsg) //debug
     socket.send(wsConfigMsg); //online
+}
+
+// Put the labels saved in a config (MSG_STRING messages, keyed by node ID) back
+// onto the graph's nodes. Labels for nodes that don't exist are ignored.
+function applyLabels(strings) {
+    const decoder = new TextDecoder();
+    strings.forEach(s => {
+        const elm = elements['n' + s.id];
+        if (!elm) return;
+        elm.setLabel(decoder.decode(s.pay));
+        if (elm === selected) elm.createSettings();
+    });
 }
 
 function toggleConnectMode() {

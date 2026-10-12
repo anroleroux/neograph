@@ -103,6 +103,8 @@ class uiComponents {
     setLabel(label) {
         label = label.trim();
         if (!label) return;
+        // A label is saved as one message, whose payload is at most 255 bytes.
+        if (new TextEncoder().encode(label).length > 255) return false;
         this.label = label;
         this.gElm.children[2].textContent = label;
     }
@@ -149,6 +151,12 @@ class uiComponents {
                 });
                 break;
         }
+    }
+
+    // The label as a MSG_STRING message keyed by this node's ID (see PROTOCOL.md).
+    marshalLabel() {
+        const text = new TextEncoder().encode(this.label);
+        return [MSG_STRING, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, text.length, ...text];
     }
 
     clearSettings() {

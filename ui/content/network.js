@@ -149,27 +149,43 @@ function toggleWebSocket(n,d) {
     }
 }
 
-function unmarshalConfigs(binary) {
-    const decoder = new TextDecoder();
-    const view = new DataView(binary.buffer, binary.byteOffset, binary.byteLength);
-    const configs = {};
+// Split a config payload into its messages: {type, id, len, pay, bytes}.
+// `bytes` is the whole message, header included. A truncated last message is dropped.
+function configMessages(binary) {
+    const msgs = [];
     let offset = 0;
 
-    while (offset < binary.length) {
-        let elm = {};
+    while (offset + MSG_HEADER_LEN <= binary.length) {
+        const len = binary[offset + 4];
+        const end = offset + MSG_HEADER_LEN + len;
+        if (end > binary.length) break;
 
-        const type = view.getUint8(offset++);
-        offset++;
-        elm.id = view.getUint16(offset); offset += 2;
-        elm.len = view.getUint8(offset++);
-        elm.pay = binary.slice(offset,offset+elm.len); offset += elm.len;
+        msgs.push({
+            type: binary[offset],
+            id: binary[offset + 2] << 8 | binary[offset + 3],
+            len: len,
+            pay: binary.slice(offset + MSG_HEADER_LEN, end),
+            bytes: binary.slice(offset, end),
+        });
+        offset = end;
+    }
 
-        if (!configs.hasOwnProperty(type)) {
-            configs[type] = [];
+    return msgs;
+}
+
+function unmarshalConfigs(binary) {
+    const decoder = new TextDecoder();
+    const configs = {};
+
+    for (const elm of configMessages(binary)) {
+        if (!configs.hasOwnProperty(elm.type)) {
+            configs[elm.type] = [];
         }
 
-        configs[type].push(elm);
+        configs[elm.type].push(elm);
     }
+
+    applyLabels(configs[MSG_STRING] || []);
 
     for (const device of configs[MSG_DEVICE]) {
         const did = networks[0].devices[0].did;

@@ -173,13 +173,42 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     messages(&it, ex);
     assert_default_networking(&it);
 
+    /* Each node: its control message, then its label. */
     assert_message(&it, MSG_UI_BUTTON, 1, 0);
+    assert_message(&it, MSG_STRING, 1, 5);
+    TEST_ASSERT_EQUAL_MEMORY("Start", it.pay, 5);
     assert_message(&it, MSG_HW_LED, 2, 2);
     TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
+    assert_message(&it, MSG_STRING, 2, 12);
+    TEST_ASSERT_EQUAL_MEMORY("Pompe \xC3\xA0 eau", it.pay, 12);   /* UTF-8 */
     assert_message(&it, MSG_HW_GPO, 3, 3);
     TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
     TEST_ASSERT_EQUAL_UINT8(1, it.pay[2]);                         /* pin 1 */
+    assert_message(&it, MSG_STRING, 3, 3);
+    TEST_ASSERT_EQUAL_MEMORY("GPO", it.pay, 3);
     TEST_ASSERT_FALSE(it.next(&it));
+}
+
+/* Every label in a config example labels a control element in the same config. */
+void test_labels_belong_to_controls(void)
+{
+    for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
+        const struct protocol_example *ex = &protocol_examples[i];
+        if (ex->bytes[0] != PKT_CONFIG) continue;
+
+        config_element_iterator labels, controls;
+        messages(&labels, ex);
+        while (labels.next(&labels)) {
+            if (labels.type != MSG_STRING) continue;
+            TEST_ASSERT_TRUE_MESSAGE(labels.len > 0, ex->name);
+
+            bool found = false;
+            messages(&controls, ex);
+            while (controls.next(&controls))
+                if (controls.type <= 0x3F && controls.id == labels.id) found = true;
+            TEST_ASSERT_TRUE_MESSAGE(found, ex->name);
+        }
+    }
 }
 
 /* ── Element type bits ────────────────────────────────────────────────── */
@@ -257,6 +286,7 @@ int main(void)
     RUN_TEST(test_update_examples);
     RUN_TEST(test_default_config);
     RUN_TEST(test_save_config_keeps_device_config_then_appends_graph);
+    RUN_TEST(test_labels_belong_to_controls);
     RUN_TEST(test_element_type_bits);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);

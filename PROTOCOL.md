@@ -112,7 +112,7 @@ BD FC EA C1 4E 1E 79 4D     # DID
 
 #### `0A` Config
 
-The full configuration: networking elements and control elements. The same packet,
+The full configuration: networking, control and label elements. The same packet,
 header included, is what the device stores in flash (see [Storage](#storage)).
 
 - **HW → UI.** Sent on connect, after `0D`, if flash holds a config.
@@ -219,7 +219,9 @@ Every packet payload except `0D` is a sequence of messages:
   each page load. In the graph a node shows its ID as `n<ID>`.
 - **Networking elements** (`B0`–`B3`) have their own IDs. The device and network
   created on first boot both have ID 0.
-- IDs are unique within those two groups, not across them.
+- **Strings** (`A0`) take the ID of the control element they label (see
+  [Labels](#labels)).
+- IDs are unique within each of those groups, not across them.
 - **ID 0 in a source reference means "not connected"**, so a control element never
   has ID 0.
 
@@ -254,7 +256,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `30` | `MSG_HW_CORE` | HW input: core telemetry | Reserved |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Reserved |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Reserved |
-| `A0` | `MSG_STRING` | String (e.g. a label) | Reserved |
+| `A0` | `MSG_STRING` | String: a node's label | Implemented |
 | `B0` | `MSG_DEVICE` | Device | Implemented |
 | `B1` | `MSG_DEVICE_FIELD` | Device field | Implemented |
 | `B2` | `MSG_NETWORK` | Network | Implemented |
@@ -268,7 +270,8 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
 | `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
 
-Node positions and labels are not part of the config.
+Node positions are not part of the config. Labels are, as separate `A0` messages
+(see [Labels](#labels)).
 
 ### The graph
 
@@ -280,19 +283,24 @@ references**. A wire is not a message of its own:
 
 When the user saves, the UI sends a `0A` config whose payload is:
 
-1. the payload of the last config the device sent, **byte for byte** (so the
-   networking elements are kept), then
-2. one message per graph node, in the order the nodes were created.
+1. the networking messages (`B0`–`B3`) of the last config the device sent, byte
+   for byte, then
+2. for each graph node, in the order the nodes were created, its control message
+   followed by its label.
 
-The UI does not read control elements from the configs it receives, so a saved
-graph is not redrawn on the next connect (see [Known issues](#known-issues)).
+Control and label messages in the device's previous config are dropped, so a save
+replaces the stored graph rather than adding to it.
+
+When a config arrives, the UI puts each label onto the graph node with the same ID.
+It ignores the other control messages, so nodes, wires and pins are not restored
+(see [Known issues](#known-issues)).
 
 Example: the demo graph with button `n1` wired to LED `n2` and to GPO `n3` on pin 1,
-saved against the first-boot config below.
+with `n1` and `n2` renamed, saved against the first-boot config below.
 
 ```hex example=save-config
-0A 00 4E                                        # Config, 78 bytes
-# kept from the device's config
+0A 00 71                                        # Config, 113 bytes
+# networking, kept from the device's config
 B0 00 00 00 09  00 BD FC EA C1 4E 1E 79 4D      # device 0: DID
 B1 00 00 00 05  01 4C 38 53 47                  # device 0: name "L8SG"
 B1 00 00 00 03  02 00 00                        # device 0: network 0
@@ -301,9 +309,31 @@ B3 00 00 00 05  01 4C 38 53 47                  # network 0: name "L8SG"
 B3 00 00 00 04  02 4C 52 58                     # network 0: SSID "LRX"
 # the graph
 10 00 00 01 00                                  # button n1
+A0 00 00 01 05  53 74 61 72 74                  #   label "Start"
 20 00 00 02 02  00 01                           # LED n2 ← n1
+A0 00 00 02 0C  50 6F 6D 70 65 20 C3 A0 20 65 61 75   #   label "Pompe à eau"
 21 00 00 03 03  00 01 01                        # GPO n3 ← n1, pin 1
+A0 00 00 03 03  47 50 4F                        #   label "GPO"
 ```
+
+### Labels
+
+A node's label is an `A0` String message:
+
+| Byte | Field | Notes |
+|---|---|---|
+| 0 | Message type | `A0` |
+| 1 | Reserved | `00` |
+| 2–3 | Element ID | The ID of the node it labels |
+| 4 | Payload length | 1–255 |
+| 5… | Text | UTF-8, not null-terminated |
+
+- The UI saves one label for every node, including unchanged default labels.
+- The Settings view rejects a label longer than 255 bytes.
+- The device stores labels with the rest of the config and sends them back on
+  connect. It sends nothing to core 1 for them.
+- Labels add to the config's size. See known issue 1 for the current limit of
+  about 1 KB.
 
 ### Networking
 
@@ -472,43 +502,42 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 **Config and graph**
 
-6. **Saving appends; it never replaces.** The UI resends the device's config,
-   including any controls saved earlier, plus the current graph. Since IDs restart at
-   1 on each page load, every save adds duplicate control elements.
-7. **The graph is not restored on connect.** The UI ignores control elements in a
-   received config.
-8. **The button config payload is empty.** The earlier reference described a 7-byte
+6. **Only labels are restored on connect.** The UI ignores the control messages in a
+   received config and always starts from its built-in demo graph (`n1`–`n3`), so
+   saved nodes, wires and pins are not redrawn. A saved label comes back only if a
+   node with its ID exists.
+7. **The button config payload is empty.** The earlier reference described a 7-byte
    payload (label ID, X, Y, style) that was never implemented.
-9. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
+8. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
    instead of `|` to combine the ID bytes.
-10. **Field values are copied without a length check.** The device copies names, SSIDs
+9. **Field values are copied without a length check.** The device copies names, SSIDs
    and passwords into 32-byte buffers using the message's length.
-11. **The first-boot defaults are hardcoded:** SSID `LRX`, a fixed password, and
+10. **The first-boot defaults are hardcoded:** SSID `LRX`, a fixed password, and
     options = join, so a fresh board tries to join that network rather than start
     its own access point.
 
 **Flash**
 
-12. **Flash is written while core 1 is running.** `write_config` and
+11. **Flash is written while core 1 is running.** `write_config` and
     `update_config` disable interrupts on core 0 only. If core 1 executes from flash
     during the erase, it can crash. The Pico SDK's `flash_safe_execute` handles this.
 
 **Inter-core FIFO**
 
-13. **Controls are set up again on every connect.** `retrieve_store` sends setup
+12. **Controls are set up again on every connect.** `retrieve_store` sends setup
     words each time a client connects, and `0A` sends them again. Nothing sends clean
     setup (`op` 3), so core 1's table gains duplicates each time.
-14. **Clean setup falls through into the action handler** (missing `break`).
-15. **Extra action words are never read.** Core 0 sends one word per further 4
+13. **Clean setup falls through into the action handler** (missing `break`).
+14. **Extra action words are never read.** Core 0 sends one word per further 4
     payload bytes, but core 1 doesn't read them, so it would treat them as operation
     words. It also reads past the payload when the length isn't 1 + 4n. Buttons are
     unaffected (length 1).
-16. **A setup word whose reference word is late uses stale data.** If the reference
+15. **A setup word whose reference word is late uses stale data.** If the reference
     word misses its 1 ms timeout, core 1 decodes the setup word itself as the
     reference.
-17. **There is no framing.** Tags and values, and operation and extra words, are told
+16. **There is no framing.** Tags and values, and operation and extra words, are told
     apart only by order, so one lost or extra word desyncs everything after it.
-18. **Uptime counts 1.2 s ticks**, not seconds.
+17. **Uptime counts 1.2 s ticks**, not seconds.
 
 ---
 
