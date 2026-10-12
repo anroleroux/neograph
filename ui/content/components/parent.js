@@ -14,7 +14,7 @@ function settingIcon(path, title, onClick) {
 // An editable settings field, like the ones on the Network view: shows the value
 // with an edit icon; editing shows an input with confirm and cancel. Enter
 // confirms, Escape cancels. `get` reads the value, `set` stores a new one and may
-// return false to reject it, which keeps the input open. `attrs` are set on the
+// return false to reject it, which keeps the input open and outlines it in red. `attrs` are set on the
 // input (e.g. {type: 'number', min: 0}).
 function editableSetting(label, get, set, attrs = {}) {
     const row = document.createElement('div');
@@ -34,12 +34,14 @@ function editableSetting(label, get, set, attrs = {}) {
         input.value = get();
         const confirm = () => {
             if (set(input.value) === false) {
+                input.setAttribute('aria-invalid', 'true');
                 input.focus();
                 input.select();
                 return;
             }
             showValue();
         };
+        input.addEventListener('input', () => input.removeAttribute('aria-invalid'));
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') confirm();
             if (e.key === 'Escape') showValue();

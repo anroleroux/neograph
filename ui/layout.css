@@ -5,6 +5,7 @@
     --clr-face-fade: #BFCDE740;
     --clr-red: #E7BFBF60;
     --clr-green: #4CAF5060;
+    --clr-error: #E57373;
 
     --ratio: 1.25;
     --step-0: 1rem;
@@ -81,6 +82,11 @@ input {
 .editable > input {
     margin-right: var(--step--2);
     width: 100%;
+}
+
+/* A value the setting rejected; cleared on the next edit. */
+.editable > input[aria-invalid="true"] {
+    outline: 2px solid var(--clr-error);
 }
 
 .editable > svg {
