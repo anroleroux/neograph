@@ -55,6 +55,40 @@ input {
     box-shadow: none;
 }
 
+/* An editable field: label, value or input, and edit/confirm/cancel icons. */
+.editable {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--clr-face-fade);
+    padding: var(--step--5);
+    margin-bottom: var(--step--2);
+    width: var(--step-13);
+    /* height: var(--step-4); */
+}
+
+.editable > .label {
+    margin-right: var(--step--2);
+}
+
+.editable > .value {
+    margin-right: var(--step--2);
+    width: 100%;
+}
+
+.editable > input {
+    margin-right: var(--step--2);
+    width: 100%;
+}
+
+.editable > svg {
+    width: var(--step-2);
+    height: var(--step-2);
+    flex: 0 0 var(--step-4);
+    cursor: pointer;
+}
+
 #container {
     display: flex;
     width: 400vw;

@@ -10,39 +10,6 @@
     margin-bottom: var(--step-1);
 }
 
-.network-box .editable {
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid var(--clr-face-fade);
-    padding: var(--step--5);
-    margin-bottom: var(--step--2);
-    width: var(--step-13);
-    /* height: var(--step-4); */
-}
-
-.network-box .editable > .label {
-    margin-right: var(--step--2);
-}
-
-.network-box .editable > .value {
-    margin-right: var(--step--2);
-    width: 100%;
-}
-
-.network-box .editable > input {
-    margin-right: var(--step--2);
-    width: 100%;
-}
-
-.network-box .editable > svg {
-    width: var(--step-2);
-    height: var(--step-2);
-    flex: 0 0 var(--step-4);
-    cursor: pointer;
-}
-
 .network-box .network-attributes {
     /* width: var(--step-10);
     height: var(--step-5); */
