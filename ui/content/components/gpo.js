@@ -57,8 +57,8 @@ class uiGPO extends uiComponents {
         const buffer = [];
         let sourceID = 0;
 
-        if (this.inputs[0].length > 0) {
-            sourceID = this.inputs[0].conns[0].start.id;
+        if (this.inputs[0].conn) {
+            sourceID = this.inputs[0].conn.start.node.id;
         }
 
         buffer.push(this.tc);
