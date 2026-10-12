@@ -228,13 +228,11 @@ function endPan(e) { panning = false;
 
 }
 
-// wheel zoom around mouse
-svg.addEventListener('wheel', function (e) {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 1.12 : 0.88;
-    const mouse = svgPoint(e);
-    const newW = viewBox.w * delta;
-    const newH = viewBox.h * delta;
+// zoom by factor around a screen point
+function zoomAt(clientX, clientY, factor) {
+    const mouse = svgPoint({ clientX, clientY });
+    const newW = viewBox.w * factor;
+    const newH = viewBox.h * factor;
 
     // keep mouse stable
     const mxRatio = (mouse.x - viewBox.x) / viewBox.w;
@@ -244,7 +242,65 @@ svg.addEventListener('wheel', function (e) {
     viewBox.w = newW;
     viewBox.h = newH;
     setView();
+}
+
+// wheel zoom around mouse
+svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? 1.12 : 0.88);
 });
+
+// touch: one finger on the background pans, two fingers pinch-zoom
+const touches = new Map();
+let touchPanning = false;
+
+function touchMidDist() {
+    const [a, b] = [...touches.values()];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) };
+}
+
+function panByScreen(dx, dy) {
+    const scale = svg.getScreenCTM().a;
+    viewBox.x -= dx / scale;
+    viewBox.y -= dy / scale;
+    setView();
+}
+
+svg.addEventListener('pointerdown', function (e) {
+    if (e.pointerType !== 'touch') return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (touches.size === 1) {
+        touchPanning = e.target === svg || e.target === document.getElementById('grid');
+    } else {
+        touchPanning = false;
+        if (selected) selected.dragging = false;
+    }
+}, true);
+
+svg.addEventListener('pointermove', function (e) {
+    const t = touches.get(e.pointerId);
+    if (!t) return;
+    const before = touches.size === 2 ? touchMidDist() : null;
+    const dx = e.clientX - t.x, dy = e.clientY - t.y;
+    t.x = e.clientX;
+    t.y = e.clientY;
+
+    if (touchPanning) {
+        panByScreen(dx, dy);
+    } else if (before) {
+        const after = touchMidDist();
+        panByScreen(after.x - before.x, after.y - before.y);
+        if (after.d > 0) zoomAt(after.x, after.y, before.d / after.d);
+    }
+}, true);
+
+function touchEnd(e) {
+    touches.delete(e.pointerId);
+    touchPanning = false;
+}
+svg.addEventListener('pointerup', touchEnd, true);
+svg.addEventListener('pointercancel', touchEnd, true);
 
 new uiButton(-200, -40);
 new uiLED(100, 40);

@@ -17,6 +17,11 @@
     user-select: none;
 }
 
+#graph .svg-canvas {
+    /* let the graph handle touch pan and pinch-zoom, not the browser */
+    touch-action: none;
+}
+
 #graph > .buttons {
     position:absolute;
     display: flex;
