@@ -2,7 +2,7 @@ class uiGPO extends uiComponents {
     constructor(x = 0, y = 0) {
         super("gpo",x,y);
 
-        this.tc = 0x21;
+        this.tc = MSG_HW_GPO;
 
         this.inputs.push(
             {
@@ -36,20 +36,17 @@ class uiGPO extends uiComponents {
         this.gElmHighlight = g.children[3];
     }
 
+    setPin(pin) {
+        pin = String(pin).trim();
+        if (!/^\d+$/.test(pin) || Number(pin) > 28) return false;
+        this.pin = Number(pin);
+    }
+
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        settings.insertAdjacentHTML('beforeend', `
-            <label>GPIO pin: <input type="number" id="pin-input" min="0" max="28" value="${this.pin}"></label>
-        `);
-        document.getElementById('pin-input').addEventListener('change', (e) => {
-            const pin = parseInt(e.target.value, 10);
-            if (pin >= 0 && pin <= 28) {
-                this.pin = pin;
-            } else {
-                e.target.value = this.pin;
-            }
-        });
+        settings.appendChild(editableSetting('GPIO pin', () => this.pin, (pin) => this.setPin(pin),
+            {type: 'number', min: 0, max: 28, step: 1}));
     }
 
     buildUI(commandInterface) {}

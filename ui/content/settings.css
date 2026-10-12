@@ -6,3 +6,7 @@
     box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px;
     height: 100%;
 }
+
+#settings h3 {
+    margin-bottom: var(--step-1);
+}

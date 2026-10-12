@@ -1,0 +1,40 @@
+name: Test
+
+on:
+  push:
+    branches: [main, "claude/**", "ccr-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unit tests, the PROTOCOL.md example checks and the C/JS constant check.
+      - name: make test
+        run: make test
+
+  ui-packets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Test-only dependency; the project itself has no npm packages.
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+
+      # Drive the hardware UI against a fake device and check every packet it
+      # sends with the firmware's own parsing code.
+      - name: make ui-test
+        run: make ui-test

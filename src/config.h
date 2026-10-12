@@ -2,12 +2,15 @@
 #define CONFIG_H_INCLUDED
 
 #include "pico/unique_id.h"
+#include "protocol.h"
 
 #define FLASH_SIZE 0x1000
 #define SECURE_FLASH_SIZE 0x100
 
 #define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SIZE)
 #define SECURE_FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SIZE - SECURE_FLASH_SIZE)
+
+_Static_assert(PKT_CONFIG_MAX == FLASH_SIZE, "the largest config packet is the flash config region");
 
 static const char ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 static const char LETTERS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -31,32 +34,6 @@ typedef struct {
     device_config device;
     network_config network;
 } network_setup;
-
-typedef enum {
-    CONFIG_OPERATION_CONTROL_ACTION = 1,
-    CONFIG_OPERATION_TYPE_SETUP = 2,
-    CONFIG_OPERATION_TYPE_CLEAN_SETUP = 3
-} ConfigOpType;
-
-typedef enum {
-    CONTROL_TYPE_LED = 0x20,
-    CONTROL_TYPE_GPO = 0x21,
-    CONTROL_TYPE_PWM = 0x22
-} PayloadType;
-
-typedef struct {
-    uint8_t type;
-    uint16_t id;
-    PayloadType payload_type;
-
-    union {
-        uint16_t ref_id;     // for type 0x01
-        struct {
-            uint8_t length;
-            char* str;
-        } string_payload;    // for type 0xA0
-    };
-} Control;
 
 void retrieve_networking_config(network_setup *out);
 void apply_config(const uint8_t* data, size_t length);

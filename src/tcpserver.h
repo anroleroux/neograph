@@ -32,6 +32,10 @@ typedef struct tcpclient {
     // int recv_len;
     // int run_count;
     bool upgraded;
+    uint8_t *rx;        // WebSocket receive buffer (WS_RX_BUF bytes), once upgraded
+    size_t rx_len;
+    const uint8_t *page;    // the part of the page not yet queued for sending
+    size_t page_left;
 } tcpclient;
 
 tcpserver* tcp_server_init(void);

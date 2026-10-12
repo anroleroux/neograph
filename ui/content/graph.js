@@ -14,29 +14,123 @@ let idEdgeCounter = 1;
 let selected = null;
 let wireMode = false;
 
-function saveGraph() {
+const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FIELD];
+
+// The node classes a config can restore, by control message type.
+const NODE_CLASSES = {
+    [MSG_UI_BUTTON]: uiButton,
+    [MSG_HW_LED]: uiLED,
+    [MSG_HW_GPO]: uiGPO,
+};
+
+// Rebuild the Command view from the graph's UI inputs.
+function buildCommandInterface() {
     commandInterface = document.getElementById('command');
     commandInterface.innerHTML = '';
+    Object.values(elements).forEach(elm => elm.buildUI(commandInterface));
+}
+
+function saveGraph() {
+    buildCommandInterface();
 
     const output = [];
 
-    Object.entries(elements).forEach(([key,elm]) => {
-        elm.buildUI(commandInterface);
+    // Keep the device's networking messages. Graph messages saved before are
+    // dropped: the current graph replaces them.
+    configMessages(gfig)
+        .filter(m => NETWORK_TYPES.includes(m.type))
+        .forEach(m => output.push(...m.bytes));
+
+    Object.values(elements).forEach(elm => {
         output.push(...elm.marshal());
+        output.push(...elm.marshalLabel());
+        output.push(...elm.marshalLayout());
+        output.push(...elm.marshalWire());
     })
 
     const binary = Uint8Array.from(output);
-    const wsConfigMsg = new Uint8Array(3 + gfig.length + binary.length);
-    wsConfigMsg[0] = 0x0A;
-    wsConfigMsg[1] = (gfig.length + binary.length >> 8) & 0xFF;
-    wsConfigMsg[2] = gfig.length + binary.length & 0xFF;
-    wsConfigMsg.set(gfig, 3);
-    wsConfigMsg.set(binary, 3 + gfig.length);
+    if (PKT_HEADER_LEN + binary.length > PKT_CONFIG_MAX) {
+        alert(`The graph is too large to save: ${PKT_HEADER_LEN + binary.length} bytes, `
+            + `and the device holds at most ${PKT_CONFIG_MAX}. Remove some nodes or shorten labels.`);
+        return;
+    }
+    const wsConfigMsg = new Uint8Array(3 + binary.length);
+    wsConfigMsg[0] = PKT_CONFIG;
+    wsConfigMsg[1] = (binary.length >> 8) & 0xFF;
+    wsConfigMsg[2] = binary.length & 0xFF;
+    wsConfigMsg.set(binary, 3);
 
-    console.log(wsConfigMsg) //testing
-    if (!testing) { //testing
-    socket.send(wsConfigMsg);
-    } //testing
+    console.log(wsConfigMsg) //debug
+    socket.send(wsConfigMsg); //online
+    offlineConfig = wsConfigMsg; //offline
+}
+
+// Replace the graph with the one saved in a config's messages (see PROTOCOL.md,
+// "The graph"). A config without control messages leaves the graph as it is.
+function restoreGraph(msgs) {
+    // The last message for an ID wins: configs saved by older UIs repeat controls.
+    const controls = new Map();
+    const labels = new Map();
+    const layouts = new Map();
+    const wires = new Map();
+    for (const m of msgs) {
+        if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
+        else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
+        else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
+        else if (m.type === MSG_WIRE && m.len === 4) wires.set(m.id, m);
+    }
+    if (controls.size === 0) return;
+
+    nodes.innerHTML = '';
+    elements = {};
+    gEdges = [];
+    idEdgeCounter = 1;
+    selected = null;
+
+    // Nodes saved without a position are stacked: inputs left, outputs right.
+    const stacked = { inputs: 0, outputs: 0 };
+    const decoder = new TextDecoder();
+    const int16 = (hi, lo) => ((hi << 8 | lo) << 16) >> 16;
+
+    for (const [id, m] of controls) {
+        idCounter = id;   // the constructor takes the next ID
+        const elm = new NODE_CLASSES[m.type]();
+
+        const layout = layouts.get(id);
+        if (layout) {
+            elm.x = int16(layout.pay[0], layout.pay[1]);
+            elm.y = int16(layout.pay[2], layout.pay[3]);
+        } else {
+            const side = elm.actDir === 'outputs' ? 'inputs' : 'outputs';
+            elm.x = side === 'inputs' ? -200 : 150;
+            elm.y = -100 + 100 * stacked[side]++;
+        }
+        elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
+
+        if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
+        if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
+    }
+    idCounter = Math.max(...controls.keys()) + 1;
+
+    // Wires: each output's source reference, shaped by its MSG_WIRE message if
+    // there is one (otherwise drawn straight between the nodes).
+    const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
+    for (const [id, m] of controls) {
+        if (m.type !== MSG_HW_LED && m.type !== MSG_HW_GPO) continue;
+        const source = m.len >= 2 ? (m.pay[0] << 8 | m.pay[1]) : 0;
+        if (!source || !elements['n' + source]) continue;
+
+        const edge = createEdge('n' + source, 'n' + id);
+        const wire = wires.get(id);
+        if (wire) {
+            edge.start.angle = angle(wire.pay[0], wire.pay[1]);
+            edge.end.angle = angle(wire.pay[2], wire.pay[3]);
+            edge.moveStart();
+            edge.moveEnd();
+        }
+    }
+
+    buildCommandInterface();
 }
 
 function toggleConnectMode() {
@@ -97,7 +191,7 @@ function createEdge(id1,id2) {
     let el1 = elements[id1];
     let el2 = elements[id2];
 
-    new gEdge(el1, el2);
+    return new gEdge(el1, el2);
 }
 
 // render nodes from elements
@@ -302,13 +396,10 @@ function touchEnd(e) {
 svg.addEventListener('pointerup', touchEnd, true);
 svg.addEventListener('pointercancel', touchEnd, true);
 
+// The demo graph: the button drives the onboard LED.
 new uiButton(-200, -40);
 new uiLED(100, 40);
 new uiGPO(200, 0);
-
-// saveGraph();
+createEdge('n1', 'n2');
 
 toGraph();
-
-// createEdge("n2","n1")
-// createEdge("n1","n3")

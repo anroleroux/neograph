@@ -9,6 +9,7 @@
 #include "pico/multicore.h"
 #include "hardware/flash.h"
 #include "config.h"
+#include "hwman.h"
 #include "config/config_iterator.h"
 
 #define PREFIX "neoGraph-"
@@ -30,7 +31,7 @@ bool next_config_element(config_element_iterator *elms) {
     if (elms->pos >= elms->size) return false;
 
     if (elms->pos == 0 && elms->pay == NULL) {
-        if (elms->type == 0x0A) {
+        if (elms->type == PKT_CONFIG) {
             elms->pos = 3;
         }
     } else {
@@ -50,22 +51,54 @@ bool next_config_element(config_element_iterator *elms) {
     printf("debug pos:%d, size:%d, type:%X, id:%d, len:%d\n",elms->pos,elms->size,elms->type,elms->id,elms->len);
 }
 
+// Payload length of the packet stored in a flash region, from its header. 0 if the
+// region holds no config or the length doesn't fit the region (corrupt flash).
+static uint16_t stored_length(const uint8_t header[3], size_t region_size) {
+    if (header[0] != PKT_CONFIG) return 0;
+    uint16_t data_length = (header[1] << 8) | header[2];
+    if (PKT_HEADER_LEN + data_length > region_size) {
+        printf("stored length %u does not fit its %u-byte region, ignored\n", data_length, region_size);
+        return 0;
+    }
+    return data_length;
+}
+
+// Erase a flash region and program a packet into it. Flash is programmed in whole
+// pages, so the packet is padded with 0xFF to a page boundary. A packet bigger than
+// the region is refused and nothing is erased. Core 1 is paused for the write: it
+// executes from flash and would crash while flash is erased. Core 0's interrupts
+// are off only for the erase and program, so core 1 can finish what it is doing
+// (e.g. a printf over USB, serviced by a core 0 interrupt) before it parks.
+static bool program_region(uint32_t offset, size_t region_size, const uint8_t *data, size_t length) {
+    static uint8_t page_buf[FLASH_SIZE];
+    if (length > region_size || length > sizeof(page_buf)) {
+        printf("%u bytes do not fit the %u-byte flash region, not written\n", length, region_size);
+        return false;
+    }
+    size_t padded = (length + FLASH_PAGE_SIZE - 1) & ~(size_t)(FLASH_PAGE_SIZE - 1);
+    memcpy(page_buf, data, length);
+    memset(page_buf + length, 0xFF, padded - length);
+
+    if (!core1_pause()) {
+        printf("core 1 did not pause, flash not written\n");
+        return false;
+    }
+    uint32_t ints = save_and_disable_interrupts();
+    flash_range_erase(offset, region_size);
+    flash_range_program(offset, page_buf, padded);
+    restore_interrupts(ints);
+    core1_resume();
+    return true;
+}
+
 void write_secrets(const uint8_t* data, size_t length) {
     printf("storing secrets to rom\n");
-    uint32_t ints = save_and_disable_interrupts();
-
-    flash_range_erase(SECURE_FLASH_TARGET_OFFSET, SECURE_FLASH_SIZE);
-    flash_range_program(SECURE_FLASH_TARGET_OFFSET, data, length);
-    restore_interrupts(ints);
+    program_region(SECURE_FLASH_TARGET_OFFSET, SECURE_FLASH_SIZE, data, length);
 }
 
 void write_config(const uint8_t* data, size_t length) {
     printf("storing config to rom\n");
-    uint32_t ints = save_and_disable_interrupts();
-
-    flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SIZE);
-    flash_range_program(FLASH_TARGET_OFFSET, data, length);
-    restore_interrupts(ints);
+    program_region(FLASH_TARGET_OFFSET, FLASH_SIZE, data, length);
 }
 
 void update_secrets(const uint8_t* new_buf, size_t new_len) {
@@ -87,59 +120,21 @@ void update_secrets(const uint8_t* new_buf, size_t new_len) {
     }
     printf("\n");
 
-    uint32_t ints = save_and_disable_interrupts();
-
     uint8_t header_buffer[3];
     read_secrets(header_buffer,3);
-    uint16_t data_length = (header_buffer[1] << 8) | header_buffer[2];
+    uint16_t data_length = stored_length(header_buffer, SECURE_FLASH_SIZE);
     uint8_t config_buffer[SECURE_FLASH_SIZE];
     read_secrets(config_buffer,data_length+3);
 
-    config_element_iterator itr;
-    config_element_iterator_init(&itr, config_buffer+3, data_length);
-
-    config_element_iterator new_itr;
-    config_element_iterator_init(&new_itr, new_buf, new_len);
-
-    if (!new_itr.next(&new_itr)) {
-        printf("no message in update packet\n");
+    uint8_t assem_buf[SECURE_FLASH_SIZE];
+    size_t assem_len = data_length
+        ? config_replace_field(config_buffer, data_length+3, new_buf, new_len, assem_buf, sizeof(assem_buf))
+        : 0;
+    if (assem_len) {
+        program_region(SECURE_FLASH_TARGET_OFFSET, SECURE_FLASH_SIZE, assem_buf, assem_len);
+    } else {
+        printf("no matching secret stored, or it would not fit; nothing written\n");
     }
-
-    while (itr.next(&itr)) {
-        if (itr.type == new_itr.type) {
-            if (itr.id != new_itr.id) continue;
-
-            if (itr.pay[0] == new_itr.pay[0]) {
-                const uint8_t *flash_target_contents = (const uint8_t *)(XIP_BASE + SECURE_FLASH_TARGET_OFFSET);
-                const size_t target_mem_loc = itr.pos+3-(itr.len-1);
-                printf("target msg\n");
-                for (int i = itr.pos+3-(itr.len-1); i < itr.pos+3; i++) {
-                    printf("%02X", flash_target_contents[i]);
-                    printf(" ");
-                }
-                printf("\n");
-
-                printf("replacing pos %d, len %d with %d, val %02X with %02X\n", itr.pos+3-(itr.len-1), itr.len-1, new_itr.len-1, flash_target_contents[target_mem_loc], new_itr.pay[1]);
-                
-                flash_range_erase(SECURE_FLASH_TARGET_OFFSET, SECURE_FLASH_SIZE);
-
-                uint8_t assem_buf[SECURE_FLASH_SIZE];
-                size_t assem_len = itr.pos+3-itr.len-5;
-                memcpy(assem_buf, config_buffer, assem_len);
-                memcpy(assem_buf+assem_len, new_buf, new_len);
-                assem_len += new_len;
-                memcpy(assem_buf+assem_len, config_buffer+(itr.pos+3), data_length-itr.pos);
-                assem_len += data_length-itr.pos;
-                assem_buf[1] = ((assem_len-3) >> 8) & 0xFF;
-                assem_buf[2] = (assem_len-3) & 0xFF;
-
-                flash_range_program(SECURE_FLASH_TARGET_OFFSET, assem_buf, assem_len);
-                break;
-            }
-        }
-    }
-
-    restore_interrupts(ints);
 
     uint8_t config_test2_buffer[SECURE_FLASH_SIZE];
     size_t data_test2_length = 70;
@@ -156,48 +151,24 @@ void update_secrets(const uint8_t* new_buf, size_t new_len) {
 }
 
 void update_config(const uint8_t* new_buf, size_t new_len) {
-    uint32_t ints = save_and_disable_interrupts();
+    // Static: each holds a whole config, too big for core 0's stack.
+    static uint8_t config_buffer[FLASH_SIZE];
+    static uint8_t assem_buf[FLASH_SIZE];
 
     uint8_t header_buffer[3];
     read_config(header_buffer,3);
-    uint16_t data_length = (header_buffer[1] << 8) | header_buffer[2];
-    uint8_t config_buffer[FLASH_SIZE];
+    uint16_t data_length = stored_length(header_buffer, FLASH_SIZE);
     read_config(config_buffer,data_length+3);
 
-    config_element_iterator itr;
-    config_element_iterator_init(&itr, config_buffer+3, data_length);
-
-    config_element_iterator new_itr;
-    config_element_iterator_init(&new_itr, new_buf, new_len);
-
-    if (!new_itr.next(&new_itr)) {
-        printf("no message in update packet\n");
+    size_t assem_len = data_length
+        ? config_replace_field(config_buffer, data_length+3, new_buf, new_len, assem_buf, sizeof(assem_buf))
+        : 0;
+    if (assem_len) {
+        program_region(FLASH_TARGET_OFFSET, FLASH_SIZE, assem_buf, assem_len);
+    } else {
+        printf("no matching field stored, or it would not fit; nothing written\n");
     }
 
-    while (itr.next(&itr)) {
-        if (itr.type == new_itr.type) {
-            if (itr.id != new_itr.id) continue;
-
-            if (itr.pay[0] == new_itr.pay[0]) {
-                flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SIZE);
-
-                uint8_t assem_buf[FLASH_SIZE];
-                size_t assem_len = itr.pos+3-itr.len-5;
-                memcpy(assem_buf, config_buffer, assem_len);
-                memcpy(assem_buf+assem_len, new_buf, new_len);
-                assem_len += new_len;
-                memcpy(assem_buf+assem_len, config_buffer+(itr.pos+3), data_length-itr.pos);
-                assem_len += data_length-itr.pos;
-                assem_buf[1] = ((assem_len-3) >> 8) & 0xFF;
-                assem_buf[2] = (assem_len-3) & 0xFF;
-
-                flash_range_program(FLASH_TARGET_OFFSET, assem_buf, assem_len);
-                break;
-            }
-        }
-    }
-
-    restore_interrupts(ints);
     printf("done updating config\n");
 }
 
@@ -229,12 +200,12 @@ size_t build_secrets(uint8_t *buf, const char name[5]) {
     uint8_t *p = buf;
 
     // --- 0xB3 block #2 ---
-    *p++ = 0xB3;
+    *p++ = MSG_NETWORK_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x09; // elm Len
-    *p++ = 0x03; // field 0x03=pass
+    *p++ = FIELD_NETWORK_PASSWORD;
     memcpy(p, "47353749", 8);
     // memcpy(p, "neoGraph", 8);
     p += 8;
@@ -252,62 +223,62 @@ size_t build_config(uint8_t *buf, const char name[5]) {
     pico_get_unique_board_id(&board_id);
 
     // --- 0xB0 block ---
-    *p++ = 0xB0;
+    *p++ = MSG_DEVICE;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = PICO_UNIQUE_BOARD_ID_SIZE_BYTES+1; // elm Len
-    *p++ = 0x00; // field 0x00=deviceID
+    *p++ = FIELD_DEVICE_DID;
     memcpy(p, board_id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
     p += PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
 
     // --- 0xB1 block #1 ---
-    *p++ = 0xB1;
+    *p++ = MSG_DEVICE_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x05; // elm Len
-    *p++ = 0x01; // field 0x01=name
+    *p++ = FIELD_DEVICE_NAME;
     memcpy(p, name, NAME_LEN);
     p += NAME_LEN;
 
     // --- 0xB1 block #2 ---
-    *p++ = 0xB1;
+    *p++ = MSG_DEVICE_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x03; // elm Len
-    *p++ = 0x02; // field 0x02=network
+    *p++ = FIELD_DEVICE_NETWORK;
     *p++ = 0x00; // ref network elm ID H
     *p++ = 0x00; // ref network elm ID L
 
     // --- 0xB2 block ---
-    *p++ = 0xB2;
+    *p++ = MSG_NETWORK;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x02; // elm Len
-    *p++ = 0x00; // field 0x00=options
-    *p++ = 0x01; // options
+    *p++ = FIELD_NETWORK_OPTIONS;
+    *p++ = NET_OPT_JOIN;
 
     // --- 0xB3 block #1 ---
-    *p++ = 0xB3;
+    *p++ = MSG_NETWORK_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x05; // elm Len
-    *p++ = 0x01; // field 0x01=name
+    *p++ = FIELD_NETWORK_NAME;
     memcpy(p, name, NAME_LEN);
     p += NAME_LEN;
 
     // --- 0xB3 block #2 ---
-    *p++ = 0xB3;
+    *p++ = MSG_NETWORK_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     // *p++ = 0x0E; // elm Len
     *p++ = 0x04; // elm Len
-    *p++ = 0x02; // field 0x02=ssid
+    *p++ = FIELD_NETWORK_SSID;
     // memcpy(p, PREFIX, PREFIX_LEN);
     // p += PREFIX_LEN;
     // memcpy(p, name, NAME_LEN);
@@ -323,7 +294,7 @@ size_t wrap_secrets(uint8_t *out, const char name[5]) {
 
     uint8_t *p = out;
 
-    *p++ = 0x0A;
+    *p++ = PKT_CONFIG;
     *p++ = (inner_len >> 8) & 0xFF;
     *p++ = inner_len & 0xFF;
     memcpy(p, inner, inner_len);
@@ -333,12 +304,12 @@ size_t wrap_secrets(uint8_t *out, const char name[5]) {
 }
 
 size_t wrap_config(uint8_t *out, const char name[5]) {
-    uint8_t inner[FLASH_SIZE];
+    static uint8_t inner[FLASH_SIZE];
     size_t inner_len = build_config(inner, name);
 
     uint8_t *p = out;
 
-    *p++ = 0x0A;
+    *p++ = PKT_CONFIG;
     *p++ = (inner_len >> 8) & 0xFF;
     *p++ = inner_len & 0xFF;
     memcpy(p, inner, inner_len);
@@ -375,35 +346,28 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
         uint32_t control_setup_msg;
 
         switch (itr.type) {
-        case CONTROL_TYPE_LED:
+        case MSG_HW_LED:
             if (itr.len != 2) break;
 
-            control_setup_msg = (CONFIG_OPERATION_TYPE_SETUP << 30)
-                | ((CONTROL_TYPE_LED & 0x1F) << 24)
-                | (itr.id>>8 & 0xFF) << 16
-                | (itr.id>>0 & 0xFF) << 8;
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_LED, itr.id, 0);
 
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw LED setup %X\n",control_setup_msg);
             
-            control_setup_msg =  (itr.pay[0]<<24 | itr.pay[1]<<16);
+            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw LED setup %X\n",control_setup_msg);
             break;
         
-        case CONTROL_TYPE_GPO:
+        case MSG_HW_GPO:
             if (itr.len != 3) break;
 
-            control_setup_msg = (CONFIG_OPERATION_TYPE_SETUP << 30)
-                | ((CONTROL_TYPE_GPO & 0x1F) << 24)
-                | (itr.id>>8 & 0xFF) << 16
-                | (itr.id>>0 & 0xFF) << 8
-                | itr.pay[2];
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPO, itr.id, itr.pay[2]);
 
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw GPO setup %X\n",control_setup_msg);
 
-            control_setup_msg = (itr.pay[0]<<24 | itr.pay[1]<<16);
+            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
 
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw GPO setup %X\n",control_setup_msg);
@@ -542,7 +506,7 @@ int unmarshal_network_config(
     // };
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB0) {
+        if (itr.type == MSG_DEVICE) {
             // printf("got B0\n");
             if (memcmp(itr.pay+1, target_did, PICO_UNIQUE_BOARD_ID_SIZE_BYTES) == 0) {
                 // printf("match DID\n");
@@ -556,18 +520,18 @@ int unmarshal_network_config(
     itr.reset(&itr);
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB1) {
+        if (itr.type == MSG_DEVICE_FIELD) {
             // printf("got B1\n");
             if (itr.id != out->device.id) continue;
             uint8_t field_number = itr.pay[0];
-            if (field_number == 0x01) {
+            if (field_number == FIELD_DEVICE_NAME) {
                 // printf("match device name\n");
                 memcpy(out->device.name, itr.pay+1, itr.len-1);
                 // printf("debug name:%s\n", out->device.name);
                 continue;
             }
 
-            if (field_number == 0x02) {
+            if (field_number == FIELD_DEVICE_NETWORK) {
                 // printf("match device network\n");
                 out->network.id = itr.pay[1]<<8 | itr.pay[2];
                 continue;
@@ -578,12 +542,12 @@ int unmarshal_network_config(
     itr.reset(&itr);
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB2) {
+        if (itr.type == MSG_NETWORK) {
             // printf("got B2\n");
             if (itr.id != out->network.id) continue;
             uint8_t field_number = itr.pay[0];
 
-            if (field_number == 0x00) {
+            if (field_number == FIELD_NETWORK_OPTIONS) {
                 // printf("match network opts\n");
                 out->network.opts = itr.pay[1];
                 // printf("debug opts:%d\n", out->network.opts);
@@ -595,26 +559,26 @@ int unmarshal_network_config(
     itr.reset(&itr);
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB3) {
+        if (itr.type == MSG_NETWORK_FIELD) {
             // printf("got B3\n");
             if (itr.id != out->network.id) continue;
             uint8_t field_number = itr.pay[0];
 
-            if (field_number == 0x01) {
+            if (field_number == FIELD_NETWORK_NAME) {
                 // printf("match network name\n");
                 memcpy(out->network.name, itr.pay+1, itr.len-1);
                 // printf("debug name:%s\n", out->network.name);
                 continue;
             }
 
-            if (field_number == 0x02) {
+            if (field_number == FIELD_NETWORK_SSID) {
                 // printf("match network ssid\n");
                 memcpy(out->network.ssid, itr.pay+1, itr.len-1);
                 // printf("debug ssid:%s\n", out->network.ssid);
                 continue;
             }
 
-            if (field_number == 0x03) {
+            if (field_number == FIELD_NETWORK_PASSWORD) {
                 // printf("match network password\n");
                 memcpy(out->network.pass, itr.pay+1, itr.len-1);
                 // printf("debug pass:%s\n", out->network.pass);
@@ -632,13 +596,13 @@ void retrieve_networking_config(network_setup *out) {
 
     uint8_t header_buffer[3];
     read_config(header_buffer,3);
-    if (header_buffer[0] != 10) {
+    if (header_buffer[0] != PKT_CONFIG) {
         printf("no networking config found, creating default config\n");
 
         char name[NAME_LEN+1];
         device_name(name);
 
-        uint8_t config[FLASH_SIZE];
+        static uint8_t config[FLASH_SIZE];
         size_t config_length = wrap_config(config, name);
         // printf("debug config_length %d\n",config_length);
         write_config(config, config_length);
@@ -664,10 +628,10 @@ void retrieve_networking_config(network_setup *out) {
     // }
 
     read_config(header_buffer,3);
-    uint16_t data_length = (header_buffer[1] << 8) | header_buffer[2];
+    uint16_t data_length = stored_length(header_buffer, FLASH_SIZE);
     // printf("debug: header %02X %02X %02X length %d \n",header_buffer[0],header_buffer[1],header_buffer[2],data_length);
 
-    uint8_t config_buffer[FLASH_SIZE];
+    static uint8_t config_buffer[FLASH_SIZE];
     read_config(config_buffer,data_length+3);
     // printf("retrieved config (%d bytes) from rom\n", data_length);
 
@@ -680,7 +644,7 @@ void retrieve_networking_config(network_setup *out) {
     unmarshal_network_config(config_buffer+3,data_length,board_id.id,out);
 
     read_secrets(header_buffer,3);
-    data_length = (header_buffer[1] << 8) | header_buffer[2];
+    data_length = stored_length(header_buffer, SECURE_FLASH_SIZE);
     // printf("debug: header %02X %02X %02X length %d \n",header_buffer[0],header_buffer[1],header_buffer[2],data_length);
 
     uint8_t secrets_buffer[SECURE_FLASH_SIZE];
@@ -696,12 +660,12 @@ uint16_t retrieve_store(uint8_t* data_buffer) {
 
     uint8_t header_buffer[3];
     read_config(header_buffer,3);
-    if (header_buffer[0] != 10) {
+    uint16_t data_length = stored_length(header_buffer, FLASH_SIZE);
+    if (data_length == 0) {
         restore_interrupts(ints);
         printf("retrieved %d %d %d, no config stored\n", header_buffer[0], header_buffer[1], header_buffer[2]);
         return 0;
     }
-    uint16_t data_length = (header_buffer[1] << 8) | header_buffer[2];
 
     read_config(data_buffer,data_length+3);
     restore_interrupts(ints);
@@ -712,6 +676,10 @@ uint16_t retrieve_store(uint8_t* data_buffer) {
 }
 
 void apply_config(const uint8_t* data, size_t length) {
+    if (length > PKT_CONFIG_MAX) {
+        printf("config of %u bytes is over the %u-byte limit, not applied\n", length, PKT_CONFIG_MAX);
+        return;
+    }
     write_config(data,length);
     printf("unmarshalling config\n");
     unmarshal_controls(data+3,length-3);

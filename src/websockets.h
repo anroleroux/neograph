@@ -1,7 +1,12 @@
 #ifndef WEBSOCKETS_H_INCLUDED
 #define WEBSOCKETS_H_INCLUDED
 
-void unmask_payload(uint8_t *payload, size_t length, uint8_t mask[4]);
+#include "protocol.h"
+#include "networking/ws_frame.h"
+
+/* Per-connection receive buffer: one frame carrying the largest packet. */
+#define WS_RX_BUF (PKT_CONFIG_MAX + WS_MAX_HEADER_LEN)
+
 void compute_websocket_accept(const char *client_key, char *accept_key);
 void base64_encode(const unsigned char *input, int input_length, char *output, int output_size);
 void send_websocket_message(void *arg, const char *message);

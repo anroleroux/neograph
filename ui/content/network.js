@@ -1,10 +1,11 @@
 let socket, gfig;
+let offlineConfig = null; //offline
 
 function networkingTemplate(state) {
     const editableField = (obj, type, field, label, nindex=-1, secret=false, dindex=-1) => {
         const value = obj[field];
         const editing = obj._editing === field;
-        const packettype = secret?0x0C:0x0B;
+        const packettype = secret?PKT_UPDATE_SECRET:PKT_UPDATE_CONFIG;
         const callback = `updateNetworkFields(${packettype},${type}, ${nindex}, '${field}')`;
 
         if (!editing) {
@@ -56,12 +57,12 @@ function networkingTemplate(state) {
                 <div class="network-head">
                     <h3>Network</h3>
                     <div class="netconn-buttons">
-                        <div class="${network.options===0?"sel":"nosel"}" onclick="networks[${nindex}].options=networks[${nindex}].options&254;updateNetworkFields(0x0B,0xB2,${nindex},'options')">
+                        <div class="${network.options===0?"sel":"nosel"}" onclick="networks[${nindex}].options=networks[${nindex}].options&254;updateNetworkFields(PKT_UPDATE_CONFIG,MSG_NETWORK,${nindex},'options')">
                             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                 <path stroke="#BFCDE7C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15V9M7.41604 11.0005C7.14845 10.388 7 9.71159 7 9.00049C7 7.87466 7.37209 6.83574 8 6M16.584 11.0005C16.8516 10.388 17 9.71159 17 9.00049C17 7.87466 16.6279 6.83574 16 6M18.7083 3C20.1334 4.59227 21 6.69494 21 9C21 9.68739 20.9229 10.3568 20.777 11M5.29168 3C3.86656 4.59227 3 6.69494 3 9C3 9.68739 3.07706 10.3568 3.22302 11M6 18H6.01M9 18H9.01M12 18H12.01M18 15.0001C18.9319 15.0001 19.3978 15 19.7654 15.1522C20.2554 15.3552 20.6448 15.7446 20.8478 16.2346C21 16.6022 21 17.0681 21 18C21 18.9319 21 19.3978 20.8478 19.7654C20.6448 20.2554 20.2554 20.6448 19.7654 20.8478C19.3978 21 18.9319 21 18 21H6C5.06812 21 4.60218 21 4.23463 20.8478C3.74458 20.6448 3.35523 20.2554 3.15224 19.7654C3 19.3978 3 18.9319 3 18C3 17.0681 3 16.6022 3.15224 16.2346C3.35523 15.7446 3.74458 15.3552 4.23463 15.1522C4.59855 15.0015 5.05894 15 5.97256 15C9.98171 15 13.9909 15 18 15.0001Z"/>
                             </svg>
                         </div>
-                        <div class="${network.options===1?"sel":"nosel"}" onclick="networks[${nindex}].options=networks[${nindex}].options|1;updateNetworkFields(0x0B,0xB2,${nindex},'options')">
+                        <div class="${network.options===1?"sel":"nosel"}" onclick="networks[${nindex}].options=networks[${nindex}].options|1;updateNetworkFields(PKT_UPDATE_CONFIG,MSG_NETWORK,${nindex},'options')">
                             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                 <path transform="rotate(180) translate(-24 -24)" stroke="#BFCDE7C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 21H6.2C5.0799 21 4.51984 21 4.09202 20.782C3.71569 20.5903 3.40973 20.2843 3.21799 19.908C3 19.4802 3 18.9201 3 17.8V6.2C3 5.0799 3 4.51984 3.21799 4.09202C3.40973 3.71569 3.71569 3.40973 4.09202 3.21799C4.51984 3 5.0799 3 6.2 3H11.8C12.9201 3 13.4802 3 13.908 3.21799C14.2843 3.40973 14.5903 3.71569 14.782 4.09202C15 4.51984 15 5.0799 15 6.2V10M21 21H21.01M8 6H10M17 21C17 18.7909 18.7909 17 21 17M13 21C13 16.5817 16.5817 13 21 13"/>
                             </svg>
@@ -69,9 +70,9 @@ function networkingTemplate(state) {
                     </div>
                 </div>
                 <div>
-                    ${editableField(network,0xB3,"name","Name",nindex)}
-                    ${editableField(network,0xB3,"ssid","SSID",nindex)}
-                    ${editableField(network,0xB3,"password","Password",nindex,true)}
+                    ${editableField(network,MSG_NETWORK_FIELD,"name","Name",nindex)}
+                    ${editableField(network,MSG_NETWORK_FIELD,"ssid","SSID",nindex)}
+                    ${editableField(network,MSG_NETWORK_FIELD,"password","Password",nindex,true)}
                 </div>
             </div>
             <div class="device-box">
@@ -97,17 +98,13 @@ const networks = mount(document.getElementById("network"), [
                 socket:null
             }
         ],
-        fields:{options:0, name:1, ssid:2, password:3}
+        fields:{options:FIELD_NETWORK_OPTIONS, name:FIELD_NETWORK_NAME, ssid:FIELD_NETWORK_SSID, password:FIELD_NETWORK_PASSWORD}
     }
 ], networkingTemplate);
 
 // function updateNetworkOptions(netID) {
 //     const data = new Uint8Array([0x0B, 0, 7, 0xB2, 0, (netID >> 8) & 0xFF, netID & 0xFF, 2, 0, networks[netID].options]);
-//     if (!testing) {  //testing
 //     socket.send(data);
-//     } else { //testing
-//         console.log(data); //testing
-//     } //testing
 // }
 
 function updateNetworkFields(pt,type,netID,field) {
@@ -123,64 +120,76 @@ function updateNetworkFields(pt,type,netID,field) {
     const pcktlen = 5 + 1 + value.length;
 
     const data = new Uint8Array([pt, 0, pcktlen, type, 0, (netID >> 8) & 0xFF, netID & 0xFF, value.length + 1, networks[netID].fields[field], ...value]);
-    if (!testing) {  //testing
-    socket.send(data);
-    } else { //testing
-        console.log(data); //testing
-    } //testing
+    console.log(data); //debug
+    socket.send(data); //online
 }
 
 function toggleWebSocket(n,d) {
     const dv = networks[n].devices[d];
     if (dv.connected) {
         dv.connected = false;
-        if (!testing) { //testing
-        disconnectWebSocket(networks[n].devices[d]);
-        } //testing
+        disconnectWebSocket(networks[n].devices[d]); //online
     } else {
         dv.connected = true;
-        if (!testing) {  //testing
-        connectWebSocket(networks[n].devices[d]);
-        } else { //testing
-            const data = new Uint8Array([ //testing
-                0xA0, 0, 60, //testing
-                0xB0, 0, 0, 0, 9, 0, 189, 252, 234, 193, 78, 30, 121, 77, //testing
-                0xB1, 0, 0, 0, 5, 1, 76, 56, 83, 71, //testing
-                0xB1, 0, 0, 0, 3, 2, 0, 0, //testing
-                0xB2, 0, 0, 0, 2, 0, 1, //testing
-                0xB3, 0, 0, 0, 5, 1, 76, 56, 83, 71, //testing
-                0xB3, 0, 0, 0, 4, 2, 76, 82, 88, //testing
-            ]); //testing
-            networks[0].devices[0].did = data.slice(9,17); //testing
-            gfig = data.slice(3); //testing
-            unmarshalConfigs(gfig); //testing
-        } //testing
+        connectWebSocket(networks[n].devices[d]); //online
+        //offline-start
+        // No controller to talk to: feed in the last saved config, or a canned
+        // first-boot config, as if the device sent it.
+        const data = offlineConfig || new Uint8Array([
+            PKT_CONFIG, 0, 58,
+            0xB0, 0, 0, 0, 9, 0, 189, 252, 234, 193, 78, 30, 121, 77,
+            0xB1, 0, 0, 0, 5, 1, 76, 56, 83, 71,
+            0xB1, 0, 0, 0, 3, 2, 0, 0,
+            0xB2, 0, 0, 0, 2, 0, 1,
+            0xB3, 0, 0, 0, 5, 1, 76, 56, 83, 71,
+            0xB3, 0, 0, 0, 4, 2, 76, 82, 88,
+        ]);
+        networks[0].devices[0].did = data.slice(9,17);
+        gfig = data.slice(3);
+        unmarshalConfigs(gfig);
+        //offline-end
     }
+}
+
+// Split a config payload into its messages: {type, id, len, pay, bytes}.
+// `bytes` is the whole message, header included. A truncated last message is dropped.
+function configMessages(binary) {
+    const msgs = [];
+    let offset = 0;
+
+    while (offset + MSG_HEADER_LEN <= binary.length) {
+        const len = binary[offset + 4];
+        const end = offset + MSG_HEADER_LEN + len;
+        if (end > binary.length) break;
+
+        msgs.push({
+            type: binary[offset],
+            id: binary[offset + 2] << 8 | binary[offset + 3],
+            len: len,
+            pay: binary.slice(offset + MSG_HEADER_LEN, end),
+            bytes: binary.slice(offset, end),
+        });
+        offset = end;
+    }
+
+    return msgs;
 }
 
 function unmarshalConfigs(binary) {
     const decoder = new TextDecoder();
-    const view = new DataView(binary.buffer, binary.byteOffset, binary.byteLength);
     const configs = {};
-    let offset = 0;
 
-    while (offset < binary.length) {
-        let elm = {};
-
-        const type = view.getUint8(offset++);
-        offset++;
-        elm.id = view.getUint16(offset); offset += 2;
-        elm.len = view.getUint8(offset++);
-        elm.pay = binary.slice(offset,offset+elm.len); offset += elm.len;
-
-        if (!configs.hasOwnProperty(type)) {
-            configs[type] = [];
+    for (const elm of configMessages(binary)) {
+        if (!configs.hasOwnProperty(elm.type)) {
+            configs[elm.type] = [];
         }
 
-        configs[type].push(elm);
+        configs[elm.type].push(elm);
     }
 
-    for (const device of configs[0xB0]) {
+    restoreGraph(configMessages(binary));
+
+    for (const device of configs[MSG_DEVICE]) {
         const did = networks[0].devices[0].did;
         let netId = -1;
 
@@ -188,8 +197,8 @@ function unmarshalConfigs(binary) {
             const devId = device.id;
 
             let iElm = 0;
-            while (iElm < configs[0xB1].length) {
-                const devParam = configs[0xB1][iElm];
+            while (iElm < configs[MSG_DEVICE_FIELD].length) {
+                const devParam = configs[MSG_DEVICE_FIELD][iElm];
                 if (devParam.id !== devId) {
                     iElm++;
                     continue;
@@ -197,11 +206,11 @@ function unmarshalConfigs(binary) {
 
                 const field = devParam.pay[0];
                 switch (field) {
-                    case 0x01:
+                    case FIELD_DEVICE_NAME:
                         networks[0].devices[0].name = decoder.decode(devParam.pay.slice(1));
                         break;
                 
-                    case 0x02:
+                    case FIELD_DEVICE_NETWORK:
                         netId = devParam.pay[1] << 8 || devParam.pay[2];
                         break;
                 
@@ -209,12 +218,12 @@ function unmarshalConfigs(binary) {
                         break;
                 }
 
-                configs[0xB1].splice(iElm,1);
+                configs[MSG_DEVICE_FIELD].splice(iElm,1);
             }
 
             iElm = 0;
-            while (iElm < configs[0xB2].length) {
-                const netParam = configs[0xB2][iElm];
+            while (iElm < configs[MSG_NETWORK].length) {
+                const netParam = configs[MSG_NETWORK][iElm];
                 if (netParam.id !== netId) {
                     iElm++;
                     continue;
@@ -222,7 +231,7 @@ function unmarshalConfigs(binary) {
 
                 const field = netParam.pay[0];
                 switch (field) {
-                    case 0x00:
+                    case FIELD_NETWORK_OPTIONS:
                         networks[0].options = netParam.pay[1];
                         break;
                 
@@ -230,12 +239,12 @@ function unmarshalConfigs(binary) {
                         break;
                 }
 
-                configs[0xB2].splice(iElm,1);
+                configs[MSG_NETWORK].splice(iElm,1);
             }
 
             iElm = 0;
-            while (iElm < configs[0xB3].length) {
-                const netParam = configs[0xB3][iElm];
+            while (iElm < configs[MSG_NETWORK_FIELD].length) {
+                const netParam = configs[MSG_NETWORK_FIELD][iElm];
                 if (netParam.id !== netId) {
                     iElm++;
                     continue;
@@ -243,11 +252,11 @@ function unmarshalConfigs(binary) {
 
                 const field = netParam.pay[0];
                 switch (field) {
-                    case 0x01:
+                    case FIELD_NETWORK_NAME:
                         networks[0].name = decoder.decode(netParam.pay.slice(1));
                         break;
                 
-                    case 0x02:
+                    case FIELD_NETWORK_SSID:
                         networks[0].ssid = decoder.decode(netParam.pay.slice(1));
                         break;
                 
@@ -255,7 +264,7 @@ function unmarshalConfigs(binary) {
                         break;
                 }
 
-                configs[0xB3].splice(iElm,1);
+                configs[MSG_NETWORK_FIELD].splice(iElm,1);
             }
         }
     }
@@ -265,6 +274,7 @@ function areByteArraysEqual(arr1, arr2) {
   return arr1.length === arr2.length && arr1.every((value, index) => value === arr2[index]);
 }
 
+//online-start
 function connectWebSocket(device) {
     // const socket = device.socket;
 
@@ -287,13 +297,13 @@ function connectWebSocket(device) {
             const data = new Uint8Array(event.data);
             console.log("Received binary data:", data);
 
-            if (data[0] === 0x0A) {
+            if (data[0] === PKT_CONFIG) {
                 gfig = data.slice(3);
                 unmarshalConfigs(gfig);
                 // console.log(config);
                 // reconstructConfigInterface(config);
                 // buildInterface(config);
-            } else if (data[0] === 0x0D) {
+            } else if (data[0] === PKT_DEVICE_ID) {
                 networks[0].devices[0].did = data.slice(3);
             }
 
@@ -338,3 +348,4 @@ function disconnectWebSocket(device) {
         // clearControlInterface();
     }
 }
+//online-end

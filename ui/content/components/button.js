@@ -2,7 +2,7 @@ class uiButton extends uiComponents {
     constructor(x = 0, y = 0) {
         super("button", x, y);
 
-        this.tc = 0x10;
+        this.tc = MSG_UI_BUTTON;
 
         this.outputs.push(
             {
@@ -61,9 +61,9 @@ class uiButton extends uiComponents {
         this.value = this.value?false:true;
 
         const cmdPkt = new Uint8Array(9);
-        cmdPkt[0] = 0x01;
+        cmdPkt[0] = PKT_COMMAND;
         cmdPkt[1] = 0;
-        cmdPkt[2] = 7;
+        cmdPkt[2] = cmdPkt.length - PKT_HEADER_LEN;
         cmdPkt[3] = this.tc;
         cmdPkt[4] = 0;
         cmdPkt[5] = (this.id >> 8) & 0xFF;
@@ -71,9 +71,7 @@ class uiButton extends uiComponents {
         cmdPkt[7] = 1;
         cmdPkt[8] = this.value;
 
-        console.log(cmdPkt) //testing
-        if (!testing) { //testing
-        socket.send(cmdPkt);
-        } //testing
+        console.log(cmdPkt) //debug
+        socket.send(cmdPkt); //online
     }
 }

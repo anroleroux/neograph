@@ -15,6 +15,7 @@
 #include "websockets.h"
 #include "config.h"
 #include "hwman.h"
+#include "protocol.h"
 #include "hardware/adc.h"
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
@@ -82,7 +83,7 @@ int main() {
         uint32_t value;
         if (multicore_fifo_pop_timeout_us(1000, &value)) {
             switch (value) {
-            case 0:
+            case FIFO_TAG_UPTIME:
                 value = multicore_fifo_pop_blocking();
                 for (int i = 0; i < 10; i++) {
                     if ((state->clients[i] != NULL) && (state->clients[i]->upgraded)) {
@@ -92,7 +93,7 @@ int main() {
                     }
                 }
                 break;
-            case 1:
+            case FIFO_TAG_TEMPERATURE:
                 value = multicore_fifo_pop_blocking();
                 float temperature;
                 memcpy(&temperature, &value, sizeof(float));
@@ -104,7 +105,7 @@ int main() {
                     }
                 }
                 break;
-            case 2:
+            case FIFO_TAG_LED:
                 value = multicore_fifo_pop_blocking();
                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, value);
                 break;

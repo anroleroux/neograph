@@ -62,6 +62,7 @@ err_t tcp_client_close(void *arg) {
         }
         clientstate->client_pcb = NULL;
     }
+    free(clientstate->rx);
     free(clientstate);
 
     printf("client closed\n");
@@ -136,6 +137,40 @@ bool header_contains(const char *request, const char *header_name, const char *v
     return false;
 }
 
+// Queue as much of the page as lwIP's send buffer takes. The page is static, so
+// it is queued without copying; page_sent queues the rest as the browser
+// acknowledges what was sent, so the page can be bigger than the send buffer.
+static err_t send_page(tcpclient *clientstate) {
+    struct tcp_pcb *pcb = clientstate->client_pcb;
+
+    while (clientstate->page_left > 0) {
+        // One segment at a time, so whatever fits is queued even when lwIP is
+        // short of segments for a larger write.
+        size_t space = tcp_sndbuf(pcb);
+        if (space == 0) break;
+        size_t n = clientstate->page_left;
+        if (n > space) n = space;
+        if (n > TCP_MSS) n = TCP_MSS;
+
+        err_t err = tcp_write(pcb, clientstate->page, n, clientstate->page_left > n ? TCP_WRITE_FLAG_MORE : 0);
+        if (err == ERR_MEM) break;      // out of segments for now: retry on the next ack
+        if (err != ERR_OK) {
+            printf("Error writing page: %d\n", err);
+            return err;
+        }
+        clientstate->page += n;
+        clientstate->page_left -= n;
+    }
+    return tcp_output(pcb);
+}
+
+static err_t page_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
+    tcpclient *clientstate = (tcpclient*)arg;
+    if (clientstate->page_left == 0) return ERR_OK;
+    if (send_page(clientstate) != ERR_OK) return tcp_client_close(clientstate);
+    return ERR_OK;
+}
+
 err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     tcpclient *clientstate = (tcpclient*)arg;
 
@@ -149,9 +184,9 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     if (p->tot_len > 0) {
         if (!clientstate->upgraded) {
             printf("tcp_server_recv %d bytes, err %d\n", p->tot_len, err);
-            char buffer[1024];
-            pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
-            buffer[p->tot_len] = '\0';  // Ensure null termination
+            static char buffer[1024];
+            uint16_t copied = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
+            buffer[copied] = '\0';  // Ensure null termination
 
             if (header_contains(buffer, "Upgrade", "websocket")
                 && header_contains(buffer, "Connection", "Upgrade")) {
@@ -159,6 +194,10 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                 return handle_websocket_req(clientstate, tpcb, p, err);
             } else {
                 printf("%s\n",buffer);
+
+                // The request has been read; acknowledge it and release its buffer.
+                tcp_recved(tpcb, p->tot_len);
+                pbuf_free(p);
 
                 char header[256];  // Make sure this is large enough for your headers
 
@@ -175,20 +214,16 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                 err_t err = tcp_write(tpcb, header, header_len, TCP_WRITE_FLAG_COPY);
                 if (err != ERR_OK) {
                     printf("Error writing header: %d\n", err);
-                    return ERR_ABRT;
+                    return tcp_client_close(clientstate);
                 }
             
-                // Send gzipped body
-                err = tcp_write(tpcb, ui_dist_index_html_gz, ui_dist_index_html_gz_len, TCP_WRITE_FLAG_COPY);
-                if (err != ERR_OK) {
-                    printf("Error writing gzipped content: %d\n", err);
-                    return ERR_ABRT;
+                // Send the gzipped body, in pieces if it is bigger than the send buffer
+                clientstate->page = ui_dist_index_html_gz;
+                clientstate->page_left = ui_dist_index_html_gz_len;
+                tcp_sent(tpcb, page_sent);
+                if (send_page(clientstate) != ERR_OK) {
+                    return tcp_client_close(clientstate);
                 }
-            
-                tcp_output(tpcb);
-
-                // pbuf_free(p);
-                // return tcp_client_close(clientstate);
             }
         } else {
             return handle_websocket_msg(clientstate, tpcb, p, err);

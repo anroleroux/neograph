@@ -16,6 +16,7 @@
 #include "tcpserver.h"
 #include "config.h"
 #include "config/config_iterator.h"
+#include "networking/ws_frame.h"
 
 void compute_websocket_accept(const char *client_key, char *accept_key) {
     const char *websocket_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -74,67 +75,36 @@ void base64_encode(const unsigned char *input, int input_length, char *output, i
 
     output[j] = '\0';
 }
-// Function to unmask WebSocket payload
-void unmask_payload(uint8_t *payload, size_t length, uint8_t mask[4]) {
-    for (size_t i = 0; i < length; i++) {
-        payload[i] ^= mask[i % 4];
+
+// Send one WebSocket frame. The header and the data are queued separately, so a
+// frame is limited by lwIP's send buffer (TCP_SND_BUF), not by a local copy.
+static err_t send_websocket_frame(tcpclient *clientstate, uint8_t opcode, const uint8_t *data, size_t length) {
+    struct tcp_pcb *pcb = clientstate->client_pcb;
+
+    uint8_t header[4];
+    size_t header_length = ws_frame_header(header, opcode, length);
+    if (header_length == 0) {
+        printf("websocket frame of %u bytes is too long\n", length);
+        return ERR_VAL;
     }
+    if (tcp_sndbuf(pcb) < header_length + length) {
+        printf("websocket frame of %u bytes does not fit the send buffer (%u free)\n", length, tcp_sndbuf(pcb));
+        return ERR_MEM;
+    }
+
+    err_t err = tcp_write(pcb, header, header_length, TCP_WRITE_FLAG_COPY | (length ? TCP_WRITE_FLAG_MORE : 0));
+    if (err == ERR_OK && length) err = tcp_write(pcb, data, length, TCP_WRITE_FLAG_COPY);
+    if (err == ERR_OK) err = tcp_output(pcb);
+    if (err != ERR_OK) printf("websocket send failed: %d\n", err);
+    return err;
 }
 
 void send_websocket_message(void *arg, const char *message) {
-    tcpclient *clientstate = (tcpclient*)arg;
-
-    size_t message_length = strlen(message);
-    uint8_t frame[1024];
-
-    frame[0] = 0x81;  // FIN = 1, OpCode = 0x1 (Text)
-    
-    if (message_length <= 125) {
-        frame[1] = message_length;
-        memcpy(frame + 2, message, message_length);
-        tcp_write(clientstate->client_pcb, frame, message_length + 2, TCP_WRITE_FLAG_COPY);
-        tcp_output(clientstate->client_pcb);
-    } else if (message_length <= 65535) {
-        frame[1] = 126;
-        frame[2] = (message_length >> 8) & 0xFF;
-        frame[3] = message_length & 0xFF;
-        memcpy(frame + 4, message, message_length);
-        tcp_write(clientstate->client_pcb, frame, message_length + 4, TCP_WRITE_FLAG_COPY);
-        tcp_output(clientstate->client_pcb);
-    }
+    send_websocket_frame((tcpclient*)arg, WS_OP_TEXT, (const uint8_t *)message, strlen(message));
 }
 
 void send_websocket_binary(void *arg, const uint8_t *data, size_t data_length) {
-    tcpclient *clientstate = (tcpclient*)arg;
-
-    uint8_t frame[1024]; // Ensure this is large enough for your largest payload
-
-    frame[0] = 0x82;  // FIN = 1, OpCode = 0x2 (Binary)
-
-    if (data_length <= 125) {
-        frame[1] = data_length;
-        memcpy(frame + 2, data, data_length);
-        tcp_write(clientstate->client_pcb, frame, data_length + 2, TCP_WRITE_FLAG_COPY);
-    } else if (data_length <= 65535) {
-        frame[1] = 126;
-        frame[2] = (data_length >> 8) & 0xFF;
-        frame[3] = data_length & 0xFF;
-        memcpy(frame + 4, data, data_length);
-        tcp_write(clientstate->client_pcb, frame, data_length + 4, TCP_WRITE_FLAG_COPY);
-    // } else {
-    //     // For payloads larger than 65535, use 64-bit length encoding (not common)
-    //     frame[1] = 127;
-    //     // Fill 8 bytes for 64-bit length (only last 4 bytes used here)
-    //     frame[2] = frame[3] = frame[4] = frame[5] = 0;
-    //     frame[6] = (data_length >> 24) & 0xFF;
-    //     frame[7] = (data_length >> 16) & 0xFF;
-    //     frame[8] = (data_length >> 8) & 0xFF;
-    //     frame[9] = data_length & 0xFF;
-    //     memcpy(frame + 10, data, data_length);
-    //     tcp_write(clientstate->client_pcb, frame, data_length + 10, TCP_WRITE_FLAG_COPY);
-    }
-
-    tcp_output(clientstate->client_pcb);
+    send_websocket_frame((tcpclient*)arg, WS_OP_BINARY, data, data_length);
 }
 
 void print_buf(const uint8_t *buf, size_t len) {
@@ -151,9 +121,9 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
     tcpclient *clientstate = (tcpclient*)arg;
 
     printf("tcp_server_recv %d bytes, err %d\n", p->tot_len, err);
-    char buffer[1024];
-    pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
-    buffer[p->tot_len] = '\0';  // Ensure null termination
+    static char buffer[1024];
+    uint16_t copied = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
+    buffer[copied] = '\0';  // Ensure null termination
     printf("%s\n",buffer);
 
     tcp_recved(tpcb, p->tot_len);  // Notify lwIP that data is received
@@ -161,12 +131,14 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
     // Find "Sec-WebSocket-Key" in the request
     char *key_start = strstr(buffer, "Sec-WebSocket-Key: ");
     if (!key_start) {
+        pbuf_free(p);
         return tcp_client_close(clientstate);
     }
 
     key_start += 19; // Move past "Sec-WebSocket-Key: "
     char *key_end = strstr(key_start, "\r\n");
     if (!key_end) {
+        pbuf_free(p);
         return tcp_client_close(clientstate);
     }
 
@@ -189,6 +161,15 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
 
     // send(client_sock, response, strlen(response), 0);
 
+    // Frames are reassembled here; one can span several TCP segments.
+    clientstate->rx = malloc(WS_RX_BUF);
+    clientstate->rx_len = 0;
+    if (!clientstate->rx) {
+        printf("no memory for the websocket receive buffer\n");
+        pbuf_free(p);
+        return tcp_client_close(clientstate);
+    }
+
     printf("WebSocket connected\n");
     clientstate->upgraded = true;
 
@@ -202,106 +183,130 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
     pico_get_unique_board_id(&board_id);
 
     uint8_t did_packet[3+PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
-    did_packet[0] = 0x0D; did_packet[1] = 0x00; did_packet[2] = PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
+    did_packet[0] = PKT_DEVICE_ID; did_packet[1] = 0x00; did_packet[2] = PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
     memcpy(did_packet+3, board_id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
     send_websocket_binary(clientstate, did_packet, 3+PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
 
-    uint8_t config[FLASH_SIZE];
-    // uint16_t config_length = 23;
+    // Static: a config is up to PKT_CONFIG_MAX bytes, too big for core 0's stack.
+    static uint8_t config[FLASH_SIZE];
     uint16_t config_length = retrieve_store(config);
-    // uint8_t config_msg[config_length+7];
-    // snprintf(config_msg,config_length+7,"config:")
-    if (config[0] == 10) {
+    if (config_length > 0) {
         printf("config exist, sending to client\n");
         send_websocket_binary(clientstate, config, config_length+3);
-        // print_buf(config,config_length+3);
     }
 
     return ERR_OK;
 }
 
-err_t handle_websocket_msg(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
-    tcpclient *clientstate = (tcpclient*)arg;
-
-    // printf("tcp_server_recv %d bytes, err %d\n", p->tot_len, err);
-    uint8_t buffer[1024];
-    pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
-    buffer[p->tot_len] = '\0';
-    tcp_recved(tpcb, p->tot_len);
-
-    // Extract WebSocket frame header
-    uint8_t fin = buffer[0] >> 7;
-    uint8_t opcode = buffer[0] & 0x0F;
-    uint8_t masked = buffer[1] >> 7;
-    uint64_t payload_length = buffer[1] & 0x7F;
-
-    int header_size = 2;
-    if (payload_length == 126) {
-        payload_length = (buffer[2] << 8) | buffer[3];
-        header_size += 2;
-    } else if (payload_length == 127) {
-        payload_length = 0;
-        for (int i = 0; i < 8; i++) {
-            payload_length |= (uint64_t)buffer[2 + i] << (8 * (7 - i));
-        }
-        header_size += 8;
+// Handle one complete binary frame: a packet (see PROTOCOL.md).
+static void handle_packet(uint8_t *payload, size_t length) {
+    int data_length = packet_data_length(payload, length);
+    if (data_length < 0) {
+        if (length < PKT_HEADER_LEN) printf("packet too short (%u bytes), ignored\n", length);
+        else printf("packet says %u bytes but the frame holds %u, ignored\n",
+                    (payload[1] << 8) | payload[2], length - PKT_HEADER_LEN);
+        return;
     }
 
-    if (masked) {
-        uint8_t mask[4];
-        memcpy(mask, buffer + header_size, 4);
-        header_size += 4;
-        unmask_payload(buffer + header_size, payload_length, mask);
-    }
-    buffer[header_size + payload_length] = '\0';
+    if (*payload == PKT_CONFIG) {
+        apply_config(payload,data_length+3);
+    } else if (*payload == PKT_UPDATE_CONFIG) {
+        update_config(payload+3,data_length);
+    } else if (*payload == PKT_UPDATE_SECRET) {
+        update_secrets(payload+3,data_length);
+    } else if (*payload == PKT_COMMAND) {
+        config_element_iterator itr;
+        config_element_iterator_init(&itr, payload+3, data_length);
 
-    if (opcode == 0x1) {  // Text frame
-        printf("Text Message: %s\n", buffer + header_size);
-    } else if (opcode == 0x2) {  // Binary frame
-        uint8_t *payload = buffer + header_size;
-        uint16_t data_length = (payload[1] << 8) | payload[2];
-        // printf("length: %i, Data: %X\n", data_length,*payload);
+        while (itr.next(&itr)) {
+            printf("command from element %u, value %u: sending to core 1\n", itr.id, itr.len ? itr.pay[0] : 0);
+            uint32_t hwop_buf = fifo_op_word(FIFO_OP_CONTROL_ACTION, itr.type, itr.id, itr.pay[0]);
+            multicore_fifo_push_blocking(hwop_buf);
 
-        if (*payload == 0x0A) {
-            apply_config(payload,data_length+3);
-        } else if (*payload == 0x0B) {
-            update_config(payload+3,data_length);
-        } else if (*payload == 0x0C) {
-            update_secrets(payload+3,data_length);
-        } else if (*payload == 0x01) {
-            config_element_iterator itr;
-            config_element_iterator_init(&itr, payload+3, data_length);
-            
-            while (itr.next(&itr)) {
-                // printf("value %i [%X %X %X %X]\n", iValue, *(payload+(7+iValue*4)), *(payload+(8+iValue*4)), *(payload+(9+iValue*4)), *(payload+(10+iValue*4)));
-                uint32_t hwop_buf = CONFIG_OPERATION_CONTROL_ACTION << 30
-                    | (itr.type & 0x1F) << 24
-                    | (itr.id>>8 & 0xFF) << 16
-                    | (itr.id>>0 & 0xFF) << 8
-                    | itr.pay[0];
-                multicore_fifo_push_blocking(hwop_buf);
-
-                for (size_t i = 1; i < itr.len; i+=4) {
-                    uint32_t value = itr.pay[i] << 24
-                        | itr.pay[i+1] << 16
-                        | itr.pay[i+2] << 8
-                        | itr.pay[i+3];
-                    multicore_fifo_push_blocking(value);
-                }
+            for (size_t i = 1; i < itr.len; i+=4) {
+                uint32_t value = itr.pay[i] << 24
+                    | itr.pay[i+1] << 16
+                    | itr.pay[i+2] << 8
+                    | itr.pay[i+3];
+                multicore_fifo_push_blocking(value);
             }
         }
-    } else if (opcode == 0x8) {  // Close frame
-        printf("Client requested to close WebSocket\n");
-        // break;
-        return tcp_client_close(clientstate);
-    } else if (opcode == 0x9) {  // Ping frame
-        printf("Ping received, sending Pong...\n");
-        uint8_t pong_frame[2] = {0x8A, 0x00};  // Pong frame (0xA opcode)
-        // send(client_sock, pong_frame, sizeof(pong_frame), 0);
-        tcp_write(tpcb, pong_frame, strlen(pong_frame), TCP_WRITE_FLAG_COPY);
-        tcp_output(tpcb);
     }
-    
+}
+
+// Handle the complete frames in the client's receive buffer and keep any partial
+// frame for the next segment. Returns false if the connection was closed.
+static bool handle_frames(tcpclient *clientstate, err_t *result) {
+    size_t used = 0;
+
+    for (;;) {
+        ws_frame f;
+        ws_frame_status status = ws_parse_frame(clientstate->rx + used, clientstate->rx_len - used, WS_RX_BUF, &f);
+        if (status == WS_FRAME_INCOMPLETE) break;
+        if (status == WS_FRAME_TOO_BIG) {
+            printf("websocket frame larger than %u bytes, closing\n", WS_RX_BUF);
+            *result = tcp_client_close(clientstate);
+            return false;
+        }
+
+        uint8_t *payload = clientstate->rx + used + f.header_len;
+        size_t length = f.payload_len;
+        if (f.masked) ws_unmask(payload, length, f.mask);
+        used += f.header_len + length;
+
+        switch (f.opcode) {
+        case WS_OP_TEXT:
+            printf("Text Message: %.*s\n", length, payload);
+            break;
+        case WS_OP_BINARY:
+            handle_packet(payload, length);
+            break;
+        case WS_OP_CLOSE:
+            printf("Client requested to close WebSocket\n");
+            *result = tcp_client_close(clientstate);
+            return false;
+        case WS_OP_PING:
+            printf("Ping received, sending Pong...\n");
+            send_websocket_frame(clientstate, WS_OP_PONG, payload, length);
+            break;
+        default:
+            printf("websocket opcode %X not supported, ignored\n", f.opcode);
+            break;
+        }
+    }
+
+    memmove(clientstate->rx, clientstate->rx + used, clientstate->rx_len - used);
+    clientstate->rx_len -= used;
+    return true;
+}
+
+err_t handle_websocket_msg(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+    tcpclient *clientstate = (tcpclient*)arg;
+    err_t result = ERR_OK;
+
+    uint16_t total = p->tot_len;
+    tcp_recved(tpcb, total);
+
+    // Copy the segment into the receive buffer, handling frames as they complete.
+    // A frame that fits the buffer always completes before the buffer is full.
+    for (uint16_t offset = 0; offset < total; ) {
+        size_t space = WS_RX_BUF - clientstate->rx_len;
+        size_t n = total - offset < space ? total - offset : space;
+        if (n == 0) {
+            printf("websocket receive buffer full, closing\n");
+            pbuf_free(p);
+            return tcp_client_close(clientstate);
+        }
+        pbuf_copy_partial(p, clientstate->rx + clientstate->rx_len, n, offset);
+        clientstate->rx_len += n;
+        offset += n;
+
+        if (!handle_frames(clientstate, &result)) {
+            pbuf_free(p);
+            return result;
+        }
+    }
+
     pbuf_free(p);
-    return ERR_OK;
+    return result;
 }

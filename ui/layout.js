@@ -1,6 +1,3 @@
-const testing = true; //testing
-const debug = false; //testing
-
 const container = document.getElementById('container');
 const bcSelect = document.getElementById('bcselect');
 function toNetwork() {
@@ -68,6 +65,8 @@ function mount(root, state, template) {
     render();
     return r;
 }
+
+/* {{protocol-js}} */
 
 /* {{network-js}} */
 
