@@ -70,6 +70,7 @@ input {
 
 .editable > .label {
     margin-right: var(--step--2);
+    white-space: nowrap;
 }
 
 .editable > .value {
