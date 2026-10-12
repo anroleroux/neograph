@@ -57,7 +57,7 @@ make flash
 | `make uidev` | Browser-only UI in `ui/dist/index.html`, with canned controller data. This is the GitHub Pages demo. |
 | `make hwdev` | Firmware with the debug UI (console logging kept). |
 | `make build` | Release firmware. |
-| `make test` | Builds and runs the C unit tests. |
+| `make test` | Runs the C unit tests and checks `PROTOCOL.md`'s examples and the C/JS protocol constants. |
 
 The UI source is shared; the targets differ only in which marked code they strip from the JS:
 
@@ -82,6 +82,12 @@ If you have a hot reload server you can use `entr` to rebuild whenever a file ch
 ```bash
 ls ui/content/*.* ui/content/components/* ui/layout.* | entr make uidev
 ```
+
+---
+
+## 📡 Protocol
+
+[PROTOCOL.md](PROTOCOL.md) describes the packets between the browser and the device, the config and graph format, and the messages between the two cores. Protocol numbers live in `src/protocol.h` and `ui/content/protocol.js`; use those constants rather than literal values.
 
 ---
 

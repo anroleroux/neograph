@@ -32,10 +32,15 @@ define firmware
 	cd build && cmake -DPICO_BOARD=pico2_w .. && $(MAKE)
 endef
 
-.PHONY: test uidev hwdev build flash clean
+.PHONY: test protocol-check uidev hwdev build flash clean
 
-test: unittest
+# Unit tests, plus the checks that keep PROTOCOL.md and the C/JS constants honest.
+test: protocol-check test_runner test_protocol
 	./test_runner
+	./test_protocol
+
+protocol-check:
+	@awk -f make/check-constants.awk src/protocol.h ui/content/protocol.js
 
 uidev: ui/content/components.js
 	$(compose_ui)
@@ -56,8 +61,17 @@ build: ui/content/components.js
 	$(firmware)
 	@echo "Built release firmware → build/"
 
-unittest: src/config/config_iterator.c tests/test_config_iterator.c tests/unity.c
-	gcc -std=c11 -Wall -Wextra -Werror -DUNIT_TEST -Isrc -Itests $^ -o test_runner
+TEST_CFLAGS = -std=c11 -Wall -Wextra -Werror -DUNIT_TEST -Isrc -Itests
+
+test_runner: src/config/config_iterator.c tests/test_config_iterator.c tests/unity.c
+	gcc $(TEST_CFLAGS) $^ -o $@
+
+test_protocol: src/config/config_iterator.c tests/test_protocol.c tests/unity.c tests/protocol_examples.h src/protocol.h
+	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@
+
+# The `hex example=` / `fifo example=` blocks in PROTOCOL.md, as C arrays.
+tests/protocol_examples.h: PROTOCOL.md make/examples.awk
+	awk -f make/examples.awk PROTOCOL.md > $@.tmp && mv $@.tmp $@
 
 ui/content/components.js: $(wildcard ui/content/components/*.js)
 	$(call compose,ui/content/components/components.js,make/js-comp.map,ui/content/components.js)
@@ -68,4 +82,4 @@ flash:
 clean:
 	rm -rf ui/dist
 	rm -f ui/content/components.js
-	rm -f test_runner
+	rm -f test_runner test_protocol tests/protocol_examples.h
