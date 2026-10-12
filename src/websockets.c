@@ -131,12 +131,14 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
     // Find "Sec-WebSocket-Key" in the request
     char *key_start = strstr(buffer, "Sec-WebSocket-Key: ");
     if (!key_start) {
+        pbuf_free(p);
         return tcp_client_close(clientstate);
     }
 
     key_start += 19; // Move past "Sec-WebSocket-Key: "
     char *key_end = strstr(key_start, "\r\n");
     if (!key_end) {
+        pbuf_free(p);
         return tcp_client_close(clientstate);
     }
 
