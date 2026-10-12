@@ -98,6 +98,7 @@ class uiComponents {
         `;
         document.getElementById('label-input').addEventListener('change', (e) => {
             this.label = e.target.value;
+            this.gElm.children[2].textContent = this.label;
         });
     }
 
