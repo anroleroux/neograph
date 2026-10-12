@@ -492,6 +492,36 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
 - **Clean setup** (`op` 3): clears the table and resets all GPIO pins and PWM slices,
   then carries on as if it were an action word.
 
+### Pausing core 1 for flash writes
+
+Core 1 executes from flash, so it must not run while core 0 erases or programs flash
+(saving a config, `0B`/`0C`). Every flash write goes through `program_region`, which
+pauses core 1 first:
+
+```mermaid
+sequenceDiagram
+    participant C0 as Core 0
+    participant C1 as Core 1
+    C0->>C1: park_request = true (shared RAM)
+    Note over C1: at the top of its loop, or while waiting<br/>for room in core 0's FIFO
+    C1->>C0: parked = true
+    Note over C1: core1_park: runs from RAM,<br/>interrupts off, waits (WFE)
+    Note over C0: interrupts off, erase + program, interrupts on
+    C0->>C1: park_request = false, SEV
+    C1->>C0: parked = false
+```
+
+- The handshake uses two flags in RAM, not the FIFO. The SDK's
+  `flash_safe_execute` pauses the other core through the FIFO, and its handler
+  would consume the protocol's words.
+- Core 1 checks for a request at the top of its loop, where it holds no locks.
+  It also checks while it waits for room in core 0's FIFO: core 0 doesn't drain that
+  FIFO while it waits, so without this check the two cores could deadlock.
+- If core 1 hasn't parked within 1 s, nothing is written and core 0 logs
+  `core 1 did not pause, flash not written`.
+- Before core 1 is launched, for example when the first-boot config is written, no
+  pause is needed.
+
 ### Core 1 → core 0
 
 Each message is two words: a **tag**, then a **value**.
@@ -533,29 +563,26 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 **Flash**
 
-8. **Flash is written while core 1 is running.** `write_config` and
-    `update_config` disable interrupts on core 0 only. If core 1 executes from flash
-    during the erase, it can crash. The Pico SDK's `flash_safe_execute` handles this.
-9. **The secrets region is not sector aligned.** `flash_range_erase` works on whole
+8. **The secrets region is not sector aligned.** `flash_range_erase` works on whole
     4096-byte sectors at aligned offsets, but the secrets region is 256 bytes at
     4352 bytes from the end of flash, so erasing it is outside the SDK's contract.
 
 **Inter-core FIFO**
 
-10. **Controls are set up again on every connect.** `retrieve_store` sends setup
+9. **Controls are set up again on every connect.** `retrieve_store` sends setup
     words each time a client connects, and `0A` sends them again. Nothing sends clean
     setup (`op` 3), so core 1's table gains duplicates each time.
-11. **Clean setup falls through into the action handler** (missing `break`).
-12. **Extra action words are never read.** Core 0 sends one word per further 4
+10. **Clean setup falls through into the action handler** (missing `break`).
+11. **Extra action words are never read.** Core 0 sends one word per further 4
     payload bytes, but core 1 doesn't read them, so it would treat them as operation
     words. It also reads past the payload when the length isn't 1 + 4n. Buttons are
     unaffected (length 1).
-13. **A setup word whose reference word is late uses stale data.** If the reference
+12. **A setup word whose reference word is late uses stale data.** If the reference
     word misses its 1 ms timeout, core 1 decodes the setup word itself as the
     reference.
-14. **There is no framing.** Tags and values, and operation and extra words, are told
+13. **There is no framing.** Tags and values, and operation and extra words, are told
     apart only by order, so one lost or extra word desyncs everything after it.
-15. **Uptime counts 1.2 s ticks**, not seconds.
+14. **Uptime counts 1.2 s ticks**, not seconds.
 
 ---
 

@@ -70,6 +70,61 @@ void decode_hwrf(uint32_t rf,hwel *decop) {
 
 static hwel_sources *hwel_source_table = NULL;
 
+// ── Pausing core 1 for flash writes ──
+// A handshake through shared RAM, not the inter-core FIFO: the FIFO carries the
+// protocol's words (PROTOCOL.md, Part 3), and the SDK's multicore lockout would
+// consume them.
+static volatile bool core1_running = false;
+static volatile bool park_request = false;
+static volatile bool parked = false;
+
+// Runs from RAM with interrupts off, so nothing on core 1 touches flash until
+// core 0 clears park_request.
+static void __no_inline_not_in_flash_func(core1_park)(void) {
+    uint32_t ints = save_and_disable_interrupts();
+    parked = true;
+    __dmb();
+    while (park_request) {
+        __wfe();
+    }
+    parked = false;
+    __dmb();
+    restore_interrupts(ints);
+}
+
+bool core1_pause(void) {
+    if (!core1_running) return true;
+    park_request = true;
+    __dmb();
+    absolute_time_t until = make_timeout_time_ms(1000);
+    while (!parked) {
+        if (time_reached(until)) {
+            park_request = false;
+            __dmb();
+            __sev();
+            return false;
+        }
+    }
+    return true;
+}
+
+void core1_resume(void) {
+    park_request = false;
+    __dmb();
+    __sev();
+    while (parked) tight_loop_contents();
+}
+
+// Push a word to core 0. While core 0's FIFO is full, keep answering a park
+// request: core 0 may be waiting for core 1 to park, and is not draining its FIFO
+// meanwhile.
+static void push_to_core0(uint32_t word) {
+    while (!multicore_fifo_wready()) {
+        if (park_request) core1_park();
+    }
+    multicore_fifo_push_blocking(word);
+}
+
 void add_packet(hwel el) {
     // First check if one with the same ID already exists
     hwel_sources *existing = NULL;
@@ -139,11 +194,17 @@ void core1_worker() {
     uint64_t next_uptime_timeout = 5;
     uint64_t next_coretm_timeout = 6;
 
+    core1_running = true;
+    __dmb();
+
     while(1) {
+        // A safe point: core 1 holds no locks here.
+        if (park_request) core1_park();
+
         int64_t up_time_elapsed = absolute_time_diff_us(start, get_absolute_time())/1200000;
         if (up_time_elapsed >= next_uptime_timeout) {
-            multicore_fifo_push_blocking(FIFO_TAG_UPTIME);
-            multicore_fifo_push_blocking((uint32_t)up_time_elapsed);
+            push_to_core0(FIFO_TAG_UPTIME);
+            push_to_core0((uint32_t)up_time_elapsed);
             next_uptime_timeout = up_time_elapsed + 5;
         }
 
@@ -246,8 +307,8 @@ void core1_worker() {
                         switch (el.control_type) {
                         case MSG_HW_LED:
                             printf("switch LED, value:%i\n",decop.value);
-                            multicore_fifo_push_blocking(FIFO_TAG_LED);
-                            multicore_fifo_push_blocking(decop.value);
+                            push_to_core0(FIFO_TAG_LED);
+                            push_to_core0(decop.value);
                             break;
                         
                         case MSG_HW_GPO:
@@ -280,10 +341,10 @@ void core1_worker() {
         int64_t core_time_elapsed = absolute_time_diff_us(start, get_absolute_time())/1200000;
         if (core_time_elapsed >= next_coretm_timeout) {
             float temperature = read_internal_temperature();
-            multicore_fifo_push_blocking(FIFO_TAG_TEMPERATURE);
+            push_to_core0(FIFO_TAG_TEMPERATURE);
             uint32_t data;
             memcpy(&data, &temperature, sizeof(float));
-            multicore_fifo_push_blocking(data);
+            push_to_core0(data);
             next_coretm_timeout = core_time_elapsed + 5;
         }
     }

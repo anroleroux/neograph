@@ -9,6 +9,7 @@
 #include "pico/multicore.h"
 #include "hardware/flash.h"
 #include "config.h"
+#include "hwman.h"
 #include "config/config_iterator.h"
 
 #define PREFIX "neoGraph-"
@@ -64,7 +65,10 @@ static uint16_t stored_length(const uint8_t header[3], size_t region_size) {
 
 // Erase a flash region and program a packet into it. Flash is programmed in whole
 // pages, so the packet is padded with 0xFF to a page boundary. A packet bigger than
-// the region is refused and nothing is erased. Call with interrupts disabled.
+// the region is refused and nothing is erased. Core 1 is paused for the write: it
+// executes from flash and would crash while flash is erased. Core 0's interrupts
+// are off only for the erase and program, so core 1 can finish what it is doing
+// (e.g. a printf over USB, serviced by a core 0 interrupt) before it parks.
 static bool program_region(uint32_t offset, size_t region_size, const uint8_t *data, size_t length) {
     static uint8_t page_buf[FLASH_SIZE];
     if (length > region_size || length > sizeof(page_buf)) {
@@ -75,23 +79,26 @@ static bool program_region(uint32_t offset, size_t region_size, const uint8_t *d
     memcpy(page_buf, data, length);
     memset(page_buf + length, 0xFF, padded - length);
 
+    if (!core1_pause()) {
+        printf("core 1 did not pause, flash not written\n");
+        return false;
+    }
+    uint32_t ints = save_and_disable_interrupts();
     flash_range_erase(offset, region_size);
     flash_range_program(offset, page_buf, padded);
+    restore_interrupts(ints);
+    core1_resume();
     return true;
 }
 
 void write_secrets(const uint8_t* data, size_t length) {
     printf("storing secrets to rom\n");
-    uint32_t ints = save_and_disable_interrupts();
     program_region(SECURE_FLASH_TARGET_OFFSET, SECURE_FLASH_SIZE, data, length);
-    restore_interrupts(ints);
 }
 
 void write_config(const uint8_t* data, size_t length) {
     printf("storing config to rom\n");
-    uint32_t ints = save_and_disable_interrupts();
     program_region(FLASH_TARGET_OFFSET, FLASH_SIZE, data, length);
-    restore_interrupts(ints);
 }
 
 void update_secrets(const uint8_t* new_buf, size_t new_len) {
@@ -113,8 +120,6 @@ void update_secrets(const uint8_t* new_buf, size_t new_len) {
     }
     printf("\n");
 
-    uint32_t ints = save_and_disable_interrupts();
-
     uint8_t header_buffer[3];
     read_secrets(header_buffer,3);
     uint16_t data_length = stored_length(header_buffer, SECURE_FLASH_SIZE);
@@ -130,8 +135,6 @@ void update_secrets(const uint8_t* new_buf, size_t new_len) {
     } else {
         printf("no matching secret stored, or it would not fit; nothing written\n");
     }
-
-    restore_interrupts(ints);
 
     uint8_t config_test2_buffer[SECURE_FLASH_SIZE];
     size_t data_test2_length = 70;
@@ -152,8 +155,6 @@ void update_config(const uint8_t* new_buf, size_t new_len) {
     static uint8_t config_buffer[FLASH_SIZE];
     static uint8_t assem_buf[FLASH_SIZE];
 
-    uint32_t ints = save_and_disable_interrupts();
-
     uint8_t header_buffer[3];
     read_config(header_buffer,3);
     uint16_t data_length = stored_length(header_buffer, FLASH_SIZE);
@@ -168,7 +169,6 @@ void update_config(const uint8_t* new_buf, size_t new_len) {
         printf("no matching field stored, or it would not fit; nothing written\n");
     }
 
-    restore_interrupts(ints);
     printf("done updating config\n");
 }
 
