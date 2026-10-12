@@ -1,4 +1,5 @@
 let socket, gfig;
+let offlineConfig = null; //offline
 
 function networkingTemplate(state) {
     const editableField = (obj, type, field, label, nindex=-1, secret=false, dindex=-1) => {
@@ -132,8 +133,9 @@ function toggleWebSocket(n,d) {
         dv.connected = true;
         connectWebSocket(networks[n].devices[d]); //online
         //offline-start
-        // No controller to talk to: feed in a canned config as if the device sent it.
-        const data = new Uint8Array([
+        // No controller to talk to: feed in the last saved config, or a canned
+        // first-boot config, as if the device sent it.
+        const data = offlineConfig || new Uint8Array([
             PKT_CONFIG, 0, 58,
             0xB0, 0, 0, 0, 9, 0, 189, 252, 234, 193, 78, 30, 121, 77,
             0xB1, 0, 0, 0, 5, 1, 76, 56, 83, 71,
@@ -185,7 +187,7 @@ function unmarshalConfigs(binary) {
         configs[elm.type].push(elm);
     }
 
-    applyLabels(configs[MSG_STRING] || []);
+    restoreGraph(configMessages(binary));
 
     for (const device of configs[MSG_DEVICE]) {
         const did = networks[0].devices[0].did;

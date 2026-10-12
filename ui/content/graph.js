@@ -16,22 +16,35 @@ let wireMode = false;
 
 const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FIELD];
 
-function saveGraph() {
+// The node classes a config can restore, by control message type.
+const NODE_CLASSES = {
+    [MSG_UI_BUTTON]: uiButton,
+    [MSG_HW_LED]: uiLED,
+    [MSG_HW_GPO]: uiGPO,
+};
+
+// Rebuild the Command view from the graph's UI inputs.
+function buildCommandInterface() {
     commandInterface = document.getElementById('command');
     commandInterface.innerHTML = '';
+    Object.values(elements).forEach(elm => elm.buildUI(commandInterface));
+}
+
+function saveGraph() {
+    buildCommandInterface();
 
     const output = [];
 
-    // Keep the device's networking messages. Controls and labels saved before are
+    // Keep the device's networking messages. Graph messages saved before are
     // dropped: the current graph replaces them.
     configMessages(gfig)
         .filter(m => NETWORK_TYPES.includes(m.type))
         .forEach(m => output.push(...m.bytes));
 
-    Object.entries(elements).forEach(([key,elm]) => {
-        elm.buildUI(commandInterface);
+    Object.values(elements).forEach(elm => {
         output.push(...elm.marshal());
         output.push(...elm.marshalLabel());
+        output.push(...elm.marshalLayout());
     })
 
     const binary = Uint8Array.from(output);
@@ -43,18 +56,62 @@ function saveGraph() {
 
     console.log(wsConfigMsg) //debug
     socket.send(wsConfigMsg); //online
+    offlineConfig = wsConfigMsg; //offline
 }
 
-// Put the labels saved in a config (MSG_STRING messages, keyed by node ID) back
-// onto the graph's nodes. Labels for nodes that don't exist are ignored.
-function applyLabels(strings) {
+// Replace the graph with the one saved in a config's messages (see PROTOCOL.md,
+// "The graph"). A config without control messages leaves the graph as it is.
+function restoreGraph(msgs) {
+    // The last message for an ID wins: configs saved by older UIs repeat controls.
+    const controls = new Map();
+    const labels = new Map();
+    const layouts = new Map();
+    for (const m of msgs) {
+        if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
+        else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
+        else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
+    }
+    if (controls.size === 0) return;
+
+    nodes.innerHTML = '';
+    elements = {};
+    gEdges = [];
+    idEdgeCounter = 1;
+    selected = null;
+
+    // Nodes saved without a position are stacked: inputs left, outputs right.
+    const stacked = { inputs: 0, outputs: 0 };
     const decoder = new TextDecoder();
-    strings.forEach(s => {
-        const elm = elements['n' + s.id];
-        if (!elm) return;
-        elm.setLabel(decoder.decode(s.pay));
-        if (elm === selected) elm.createSettings();
-    });
+    const int16 = (hi, lo) => ((hi << 8 | lo) << 16) >> 16;
+
+    for (const [id, m] of controls) {
+        idCounter = id;   // the constructor takes the next ID
+        const elm = new NODE_CLASSES[m.type]();
+
+        const layout = layouts.get(id);
+        if (layout) {
+            elm.x = int16(layout.pay[0], layout.pay[1]);
+            elm.y = int16(layout.pay[2], layout.pay[3]);
+        } else {
+            const side = elm.actDir === 'outputs' ? 'inputs' : 'outputs';
+            elm.x = side === 'inputs' ? -200 : 150;
+            elm.y = -100 + 100 * stacked[side]++;
+        }
+        elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
+
+        if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
+        if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
+    }
+    idCounter = Math.max(...controls.keys()) + 1;
+
+    // Wires: each output's source reference.
+    for (const [id, m] of controls) {
+        if (m.type !== MSG_HW_LED && m.type !== MSG_HW_GPO) continue;
+        const source = m.len >= 2 ? (m.pay[0] << 8 | m.pay[1]) : 0;
+        if (source && elements['n' + source]) createEdge('n' + source, 'n' + id);
+    }
+
+    buildCommandInterface();
 }
 
 function toggleConnectMode() {

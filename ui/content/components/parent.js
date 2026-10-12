@@ -159,6 +159,16 @@ class uiComponents {
         return [MSG_STRING, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, text.length, ...text];
     }
 
+    // The position as a MSG_LAYOUT message keyed by this node's ID: x and y as
+    // signed 16-bit big-endian SVG units (see PROTOCOL.md).
+    marshalLayout() {
+        const int16 = (v) => {
+            const n = Math.max(-32768, Math.min(32767, Math.round(v))) & 0xFFFF;
+            return [(n >> 8) & 0xFF, n & 0xFF];
+        };
+        return [MSG_LAYOUT, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 4, ...int16(this.x), ...int16(this.y)];
+    }
+
     clearSettings() {
         const settings = document.getElementById('settings');
         settings.innerHTML = "<h3>Settings</h3><p>No node selected</p>";
