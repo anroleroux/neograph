@@ -2,7 +2,7 @@ name: Deploy dev UI to GitHub Pages
 
 on:
   push:
-    branches: [main, "claude/**"]
+    branches: [main, "claude/**", "ccr-*"]
   workflow_dispatch:
 
 permissions:
