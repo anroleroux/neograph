@@ -188,6 +188,9 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     assert_message(&it, MSG_LAYOUT, 2, 4);
     TEST_ASSERT_EQUAL_INT16(100, (int16_t)(it.pay[0] << 8 | it.pay[1]));
     TEST_ASSERT_EQUAL_INT16(40, (int16_t)(it.pay[2] << 8 | it.pay[3]));
+    assert_message(&it, MSG_WIRE, 2, 4);                          /* wire n1 -> n2 */
+    TEST_ASSERT_EQUAL_HEX16(0xF562, it.pay[0] << 8 | it.pay[1]);
+    TEST_ASSERT_EQUAL_HEX16(0x7562, it.pay[2] << 8 | it.pay[3]);
 
     assert_message(&it, MSG_HW_GPO, 3, 3);
     TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
@@ -197,13 +200,17 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     assert_message(&it, MSG_LAYOUT, 3, 4);
     TEST_ASSERT_EQUAL_INT16(200, (int16_t)(it.pay[0] << 8 | it.pay[1]));
     TEST_ASSERT_EQUAL_INT16(0, (int16_t)(it.pay[2] << 8 | it.pay[3]));
+    assert_message(&it, MSG_WIRE, 3, 4);                          /* wire n1 -> n3 */
+    TEST_ASSERT_EQUAL_HEX16(0xFBF0, it.pay[0] << 8 | it.pay[1]);
+    TEST_ASSERT_EQUAL_HEX16(0x7BF0, it.pay[2] << 8 | it.pay[3]);
 
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
-/* Every label and position in a config example describes a control element in the
- * same config, and a position is exactly 4 bytes. */
-void test_labels_and_positions_belong_to_controls(void)
+/* Every label, position and wire in a config example describes a control element in
+ * the same config. Positions and wires are exactly 4 bytes, and a wire belongs to an
+ * output with a source. */
+void test_graph_messages_belong_to_controls(void)
 {
     for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
         const struct protocol_example *ex = &protocol_examples[i];
@@ -212,14 +219,20 @@ void test_labels_and_positions_belong_to_controls(void)
         config_element_iterator labels, controls;
         messages(&labels, ex);
         while (labels.next(&labels)) {
-            if (labels.type != MSG_STRING && labels.type != MSG_LAYOUT) continue;
+            if (labels.type != MSG_STRING && labels.type != MSG_LAYOUT && labels.type != MSG_WIRE) continue;
             if (labels.type == MSG_STRING) TEST_ASSERT_TRUE_MESSAGE(labels.len > 0, ex->name);
-            if (labels.type == MSG_LAYOUT) TEST_ASSERT_EQUAL_UINT8_MESSAGE(4, labels.len, ex->name);
+            if (labels.type != MSG_STRING) TEST_ASSERT_EQUAL_UINT8_MESSAGE(4, labels.len, ex->name);
 
             bool found = false;
             messages(&controls, ex);
-            while (controls.next(&controls))
-                if (controls.type <= 0x3F && controls.id == labels.id) found = true;
+            while (controls.next(&controls)) {
+                if (controls.type > 0x3F || controls.id != labels.id) continue;
+                if (labels.type == MSG_WIRE)
+                    found = (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO)
+                        && (controls.pay[0] << 8 | controls.pay[1]) != 0;
+                else
+                    found = true;
+            }
             TEST_ASSERT_TRUE_MESSAGE(found, ex->name);
         }
     }
@@ -300,7 +313,7 @@ int main(void)
     RUN_TEST(test_update_examples);
     RUN_TEST(test_default_config);
     RUN_TEST(test_save_config_keeps_device_config_then_appends_graph);
-    RUN_TEST(test_labels_and_positions_belong_to_controls);
+    RUN_TEST(test_graph_messages_belong_to_controls);
     RUN_TEST(test_element_type_bits);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);

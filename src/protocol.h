@@ -50,6 +50,7 @@
 /* Supporting and networking element types. */
 #define MSG_STRING              0xA0    /* a node's label, keyed by node ID */
 #define MSG_LAYOUT              0xA1    /* a node's position, keyed by node ID */
+#define MSG_WIRE                0xA2    /* the shape of an output's wire, keyed by output ID */
 #define MSG_DEVICE              0xB0
 #define MSG_DEVICE_FIELD        0xB1
 #define MSG_NETWORK             0xB2

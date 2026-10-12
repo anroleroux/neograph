@@ -45,6 +45,7 @@ function saveGraph() {
         output.push(...elm.marshal());
         output.push(...elm.marshalLabel());
         output.push(...elm.marshalLayout());
+        output.push(...elm.marshalWire());
     })
 
     const binary = Uint8Array.from(output);
@@ -66,10 +67,12 @@ function restoreGraph(msgs) {
     const controls = new Map();
     const labels = new Map();
     const layouts = new Map();
+    const wires = new Map();
     for (const m of msgs) {
         if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
         else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
         else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
+        else if (m.type === MSG_WIRE && m.len === 4) wires.set(m.id, m);
     }
     if (controls.size === 0) return;
 
@@ -104,11 +107,22 @@ function restoreGraph(msgs) {
     }
     idCounter = Math.max(...controls.keys()) + 1;
 
-    // Wires: each output's source reference.
+    // Wires: each output's source reference, shaped by its MSG_WIRE message if
+    // there is one (otherwise drawn straight between the nodes).
+    const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
     for (const [id, m] of controls) {
         if (m.type !== MSG_HW_LED && m.type !== MSG_HW_GPO) continue;
         const source = m.len >= 2 ? (m.pay[0] << 8 | m.pay[1]) : 0;
-        if (source && elements['n' + source]) createEdge('n' + source, 'n' + id);
+        if (!source || !elements['n' + source]) continue;
+
+        const edge = createEdge('n' + source, 'n' + id);
+        const wire = wires.get(id);
+        if (wire) {
+            edge.start.angle = angle(wire.pay[0], wire.pay[1]);
+            edge.end.angle = angle(wire.pay[2], wire.pay[3]);
+            edge.moveStart();
+            edge.moveEnd();
+        }
     }
 
     buildCommandInterface();
@@ -172,7 +186,7 @@ function createEdge(id1,id2) {
     let el1 = elements[id1];
     let el2 = elements[id2];
 
-    new gEdge(el1, el2);
+    return new gEdge(el1, el2);
 }
 
 // render nodes from elements

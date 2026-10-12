@@ -169,6 +169,19 @@ class uiComponents {
         return [MSG_LAYOUT, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 4, ...int16(this.x), ...int16(this.y)];
     }
 
+    // The shape of the wire into this node, as a MSG_WIRE message keyed by this
+    // node's ID: the handle angle at the source end, then at this end, each in
+    // 1/65536 of a turn (see PROTOCOL.md). Nothing if no wire comes in.
+    marshalWire() {
+        const conn = this.inputs[0]?.conn;
+        if (!conn) return [];
+        const turn = (angle) => {
+            const n = Math.round(angle / (2 * Math.PI) * 65536) & 0xFFFF;
+            return [(n >> 8) & 0xFF, n & 0xFF];
+        };
+        return [MSG_WIRE, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 4, ...turn(conn.start.angle), ...turn(conn.end.angle)];
+    }
+
     clearSettings() {
         const settings = document.getElementById('settings');
         settings.innerHTML = "<h3>Settings</h3><p>No node selected</p>";

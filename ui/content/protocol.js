@@ -38,6 +38,7 @@ const MSG_HW_ADC             = 0x32;  // reserved
 // Supporting and networking element types.
 const MSG_STRING             = 0xA0;  // a node's label, keyed by node ID
 const MSG_LAYOUT             = 0xA1;  // a node's position, keyed by node ID
+const MSG_WIRE               = 0xA2;  // the shape of an output's wire, keyed by output ID
 const MSG_DEVICE             = 0xB0;
 const MSG_DEVICE_FIELD       = 0xB1;
 const MSG_NETWORK            = 0xB2;

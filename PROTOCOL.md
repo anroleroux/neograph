@@ -220,8 +220,8 @@ Every packet payload except `0D` is a sequence of messages:
   each page load. In the graph a node shows its ID as `n<ID>`.
 - **Networking elements** (`B0`–`B3`) have their own IDs. The device and network
   created on first boot both have ID 0.
-- **Labels and layouts** (`A0`, `A1`) take the ID of the control element they
-  describe (see [Labels and positions](#labels-and-positions)).
+- **Labels, positions and wires** (`A0`–`A2`) take the ID of the control element
+  they describe (see [Labels, positions and wires](#labels-positions-and-wires)).
 - IDs are unique within each of those groups, not across them.
 - **ID 0 in a source reference means "not connected"**, so a control element never
   has ID 0.
@@ -259,6 +259,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `32` | `MSG_HW_ADC` | HW input: ADC | Reserved |
 | `A0` | `MSG_STRING` | String: a node's label | Implemented |
 | `A1` | `MSG_LAYOUT` | A node's position in the graph | Implemented |
+| `A2` | `MSG_WIRE` | The shape of the wire into an output | Implemented |
 | `B0` | `MSG_DEVICE` | Device | Implemented |
 | `B1` | `MSG_DEVICE_FIELD` | Device field | Implemented |
 | `B2` | `MSG_NETWORK` | Network | Implemented |
@@ -272,8 +273,8 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
 | `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
 
-A node's label and position are separate messages (see
-[Labels and positions](#labels-and-positions)).
+A node's label, position and incoming wire shape are separate messages (see
+[Labels, positions and wires](#labels-positions-and-wires)).
 
 ### The graph
 
@@ -288,7 +289,8 @@ When the user saves, the UI sends a `0A` config whose payload is:
 1. the networking messages (`B0`–`B3`) of the last config the device sent, byte
    for byte, then
 2. for each graph node, in the order the nodes were created: its control message,
-   its label (`A0`) and its position (`A1`).
+   its label (`A0`), its position (`A1`) and, if a wire comes into it, the wire's
+   shape (`A2`).
 
 Graph messages in the device's previous config are dropped, so a save replaces the
 stored graph rather than adding to it.
@@ -297,7 +299,7 @@ Example: the demo graph with button `n1` wired to LED `n2` and to GPO `n3` on pi
 with `n1` and `n2` renamed, saved against the first-boot config below.
 
 ```hex example=save-config
-0A 00 8C                                        # Config, 140 bytes
+0A 00 9E                                        # Config, 158 bytes
 # networking, kept from the device's config
 B0 00 00 00 09  00 BD FC EA C1 4E 1E 79 4D      # device 0: DID
 B1 00 00 00 05  01 4C 38 53 47                  # device 0: name "L8SG"
@@ -312,9 +314,11 @@ A1 00 00 01 04  FF 38 FF D8                     #   at (-200, -40)
 20 00 00 02 02  00 01                           # LED n2 ← n1
 A0 00 00 02 0C  50 6F 6D 70 65 20 C3 A0 20 65 61 75   #   label "Pompe à eau"
 A1 00 00 02 04  00 64 00 28                     #   at (100, 40)
+A2 00 00 02 04  F5 62 75 62                     #   wire from n1: 345.1° at n1, 165.1° at n2
 21 00 00 03 03  00 01 01                        # GPO n3 ← n1, pin 1
 A0 00 00 03 03  47 50 4F                        #   label "GPO"
 A1 00 00 03 04  00 C8 00 00                     #   at (200, 0)
+A2 00 00 03 04  FB F0 7B F0                     #   wire from n1: 354.3° at n1, 174.3° at n3
 ```
 
 ### Restoring the graph
@@ -330,24 +334,29 @@ When a config arrives, the UI rebuilds the graph from it:
   at x = −200, outputs at x = 150, 100 apart from y = −100.
 - **Pin and label:** a GPO takes its pin from the message (an invalid pin keeps the
   default 1), and a node takes the label from its `A0` message.
-- **Wires:** one for each LED or GPO whose source ID is a restored node.
+- **Wires:** one for each LED or GPO whose source ID is a restored node, shaped by
+  the output's `A2` message. Without one, the wire is drawn straight between the
+  nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
   get IDs above the highest restored one.
 
-### Labels and positions
+### Labels, positions and wires
 
-A node's label and position are each a message whose element ID is the ID of the
-node it describes. The device stores them with the rest of the config and sends them
+A node's label, position and incoming wire are each a message whose element ID is
+the ID of the node it describes. The device stores them with the rest of the config and sends them
 back on connect. It sends nothing to core 1 for them.
 
 | Message | Payload |
 |---|---|
 | `A0` label | 1–255 bytes of UTF-8 text, not null-terminated |
 | `A1` position | 4 bytes: x then y, each a signed 16-bit big-endian number in graph (SVG) units, rounded |
+| `A2` wire | 4 bytes: the handle angle at the source end, then at the output end, each an unsigned 16-bit big-endian fraction of a full turn (1/65536), counter-clockwise on screen from pointing right |
 
-- The UI saves both for every node, including unchanged defaults.
+- The UI saves a label and a position for every node, including unchanged defaults,
+  and a wire shape for every output with a wire. An output has at most one incoming
+  wire, so the output's ID identifies it.
 - The Settings view rejects a label longer than 255 bytes.
-- Each node adds about 15 bytes plus its label to the config. See known issue 1
+- Each node adds about 15 bytes plus its label to the config, and each wire 9 more. See known issue 1
   for the current size limit of about 1 KB.
 
 ### Networking
@@ -517,9 +526,8 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 **Config and graph**
 
-6. **Some of the graph is not saved.** Wire shapes are not stored, so a restored wire
-   is redrawn from its nodes' positions and loses any bend dragged into it. Control
-   types the UI doesn't know are skipped on restore and dropped on the next save.
+6. **Unknown control types are lost.** Control types the UI doesn't know are skipped
+   on restore and dropped on the next save.
 7. **The button config payload is empty.** The earlier reference described a 7-byte
    payload (label ID, X, Y, style) that was never implemented.
 8. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
