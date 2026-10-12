@@ -18,6 +18,9 @@ class uiComponents {
 
         elements[this.name] = this;
 
+        const stored = this.loadSettings();
+        if (stored.label !== undefined) this.label = stored.label;
+
         this.clearSettings();
     }
 
@@ -98,7 +101,27 @@ class uiComponents {
         `;
         document.getElementById('label-input').addEventListener('change', (e) => {
             this.label = e.target.value;
+            this.storeSetting('label', this.label);
         });
+    }
+
+    // Node settings are kept in localStorage under 'neograph.nodes',
+    // keyed by node name, e.g. {"n1": {"label": "Pump"}}.
+    loadSettings() {
+        try {
+            const all = JSON.parse(localStorage.getItem('neograph.nodes')) || {};
+            return all[this.name] || {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    storeSetting(field, value) {
+        try {
+            const all = JSON.parse(localStorage.getItem('neograph.nodes')) || {};
+            all[this.name] = { ...all[this.name], [field]: value };
+            localStorage.setItem('neograph.nodes', JSON.stringify(all));
+        } catch (e) {}
     }
 
     addEdge(e) {
