@@ -11,6 +11,8 @@ const PKT_UPDATE_CONFIG      = 0x0B;  // UI -> HW
 const PKT_UPDATE_SECRET      = 0x0C;  // UI -> HW
 const PKT_DEVICE_ID          = 0x0D;  // HW -> UI
 
+const PKT_CONFIG_MAX         = 4096;  // largest 0A packet, header included: the flash config region
+
 // ── Messages (the body of a packet)
 const MSG_HEADER_LEN         = 5;     // type (1), reserved (1), element ID (2, BE), payload length (1)
 

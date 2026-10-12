@@ -89,3 +89,36 @@ void config_element_iterator_init(
     it->next     = cei_next;
     it->reset    = cei_reset;
 }
+
+size_t config_replace_field(
+    const uint8_t *packet, size_t packet_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t *out, size_t out_size
+) {
+    /* msg: a message header and at least the field ID */
+    if (packet_len < 3 || msg_len < 6 || msg[4] == 0 || (size_t)5 + msg[4] > msg_len)
+        return 0;
+    size_t new_len = 5 + msg[4];
+    uint16_t id = (uint16_t)msg[2] << 8 | msg[3];
+
+    config_element_iterator it;
+    config_element_iterator_init(&it, packet + 3, packet_len - 3);
+    while (it.next(&it)) {
+        if (it.type != msg[0] || it.id != id || it.len == 0 || it.pay[0] != msg[5])
+            continue;
+
+        size_t end = 3 + it.pos;                 /* it.pos is just past the match */
+        size_t start = end - (5 + it.len);
+        size_t total = start + new_len + (packet_len - end);
+        if (total > out_size || total - 3 > 0xFFFF)
+            return 0;
+
+        memcpy(out, packet, start);
+        memcpy(out + start, msg, new_len);
+        memcpy(out + start + new_len, packet + end, packet_len - end);
+        out[1] = ((total - 3) >> 8) & 0xFF;
+        out[2] = (total - 3) & 0xFF;
+        return total;
+    }
+    return 0;
+}

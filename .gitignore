@@ -5,4 +5,5 @@ src/ui_dist_index_html_gz.h
 pico_sdk_import.cmake
 test_runner
 test_protocol
+test_ws_frame
 tests/protocol_examples.h

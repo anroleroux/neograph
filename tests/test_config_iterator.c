@@ -77,6 +77,66 @@ void test_config_iterator_reset(void)
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
+/* A stored config: network 0 name "AB", SSID "XY". */
+static const uint8_t stored[] = {
+    0x0A, 0x00, 0x16,
+    0xB3, 0x00, 0x00, 0x00, 0x03, 0x01, 'A', 'B',
+    0xB3, 0x00, 0x00, 0x00, 0x03, 0x02, 'X', 'Y',
+    0xB2, 0x00, 0x00, 0x00, 0x01, 0x00,
+};
+
+void test_replace_field_same_length(void)
+{
+    const uint8_t msg[] = {0xB3, 0x00, 0x00, 0x00, 0x03, 0x02, 'Q', 'R'};
+    uint8_t out[64];
+    size_t n = config_replace_field(stored, sizeof stored, msg, sizeof msg, out, sizeof out);
+    TEST_ASSERT_EQUAL_UINT(sizeof stored, n);
+    const uint8_t want[] = {
+        0x0A, 0x00, 0x16,
+        0xB3, 0x00, 0x00, 0x00, 0x03, 0x01, 'A', 'B',
+        0xB3, 0x00, 0x00, 0x00, 0x03, 0x02, 'Q', 'R',
+        0xB2, 0x00, 0x00, 0x00, 0x01, 0x00,
+    };
+    TEST_ASSERT_EQUAL_MEMORY(want, out, sizeof want);
+}
+
+void test_replace_field_longer_and_shorter(void)
+{
+    uint8_t out[64];
+
+    const uint8_t longer[] = {0xB3, 0x00, 0x00, 0x00, 0x05, 0x01, 'L', 'O', 'N', 'G'};
+    size_t n = config_replace_field(stored, sizeof stored, longer, sizeof longer, out, sizeof out);
+    TEST_ASSERT_EQUAL_UINT(sizeof stored + 2, n);
+    TEST_ASSERT_EQUAL_HEX8(0x18, out[2]);                         /* length header updated */
+    TEST_ASSERT_EQUAL_MEMORY(longer, out + 3, sizeof longer);     /* in place of the name */
+    TEST_ASSERT_EQUAL_MEMORY(stored + 11, out + 13, 14);          /* the rest follows */
+
+    const uint8_t shorter[] = {0xB2, 0x00, 0x00, 0x00, 0x01, 0x00};
+    n = config_replace_field(stored, sizeof stored, shorter, sizeof shorter, out, sizeof out);
+    TEST_ASSERT_EQUAL_UINT(sizeof stored, n);                     /* last message, same size */
+}
+
+void test_replace_field_rejects(void)
+{
+    uint8_t out[64];
+
+    /* no stored message with that field */
+    const uint8_t password[] = {0xB3, 0x00, 0x00, 0x00, 0x03, 0x03, 'p', 'w'};
+    TEST_ASSERT_EQUAL_UINT(0, config_replace_field(stored, sizeof stored, password, sizeof password, out, sizeof out));
+
+    /* other element ID */
+    const uint8_t other[] = {0xB3, 0x00, 0x00, 0x01, 0x03, 0x01, 'A', 'B'};
+    TEST_ASSERT_EQUAL_UINT(0, config_replace_field(stored, sizeof stored, other, sizeof other, out, sizeof out));
+
+    /* message length says more than was sent */
+    const uint8_t cut[] = {0xB3, 0x00, 0x00, 0x00, 0x09, 0x01, 'A'};
+    TEST_ASSERT_EQUAL_UINT(0, config_replace_field(stored, sizeof stored, cut, sizeof cut, out, sizeof out));
+
+    /* result does not fit the output */
+    const uint8_t longer[] = {0xB3, 0x00, 0x00, 0x00, 0x05, 0x01, 'L', 'O', 'N', 'G'};
+    TEST_ASSERT_EQUAL_UINT(0, config_replace_field(stored, sizeof stored, longer, sizeof longer, out, sizeof stored + 1));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -85,6 +145,9 @@ int main(void)
     RUN_TEST(test_config_iterator_detects_message);
     RUN_TEST(test_config_iterator_multi_message);
     RUN_TEST(test_config_iterator_reset);
+    RUN_TEST(test_replace_field_same_length);
+    RUN_TEST(test_replace_field_longer_and_shorter);
+    RUN_TEST(test_replace_field_rejects);
 
     return UNITY_END();
 }

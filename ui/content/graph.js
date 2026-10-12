@@ -49,6 +49,11 @@ function saveGraph() {
     })
 
     const binary = Uint8Array.from(output);
+    if (PKT_HEADER_LEN + binary.length > PKT_CONFIG_MAX) {
+        alert(`The graph is too large to save: ${PKT_HEADER_LEN + binary.length} bytes, `
+            + `and the device holds at most ${PKT_CONFIG_MAX}. Remove some nodes or shorten labels.`);
+        return;
+    }
     const wsConfigMsg = new Uint8Array(3 + binary.length);
     wsConfigMsg[0] = PKT_CONFIG;
     wsConfigMsg[1] = (binary.length >> 8) & 0xFF;

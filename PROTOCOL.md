@@ -157,8 +157,9 @@ The device looks through the stored messages for one with the **same type, eleme
 ID and field ID** (first payload byte), and replaces that message with the new one.
 `0B` edits the config store; `0C` edits the secrets store.
 
-- If no stored message matches, nothing changes, and nothing is reported. These
-  packets can change a field but cannot add one.
+- If no stored message matches, or the result would not fit its flash region,
+  nothing changes, and nothing is reported. These packets can change a field but
+  cannot add one.
 - The change is only written to flash. Networking reads it at the next boot.
 
 ```hex example=update-ssid
@@ -192,9 +193,9 @@ The UI receives these but currently ignores them.
 
 | Limit | Value | Where |
 |---|---|---|
-| Received frame | 1024 bytes including the WebSocket header; one frame per TCP segment | `handle_websocket_msg` |
-| Sent frame | 1024 bytes including the WebSocket header | `send_websocket_binary` |
-| Stored config | 4096 bytes | `FLASH_SIZE` |
+| Config packet | 4096 bytes including the packet header (`PKT_CONFIG_MAX`). The UI refuses to save a bigger graph, and the device refuses to store one. | `PKT_CONFIG_MAX`, `FLASH_SIZE` |
+| Received frame | 4110 bytes including the WebSocket header (`WS_RX_BUF`: one frame carrying the largest packet). A frame may span TCP segments, and a segment may hold several frames; a bigger frame closes the connection. Fragmented messages (continuation frames) are not supported. | `handle_websocket_msg` |
+| Sent frame | 65535 bytes, and no more than lwIP's free send buffer (`TCP_SND_BUF`, 17520 bytes) | `send_websocket_frame` |
 | Stored secrets | 256 bytes | `SECURE_FLASH_SIZE` |
 | Clients | The most recent connection only receives telemetry | `tcp_server_accept` |
 
@@ -356,8 +357,9 @@ back on connect. It sends nothing to core 1 for them.
   and a wire shape for every output with a wire. An output has at most one incoming
   wire, so the output's ID identifies it.
 - The Settings view rejects a label longer than 255 bytes.
-- Each node adds about 15 bytes plus its label to the config, and each wire 9 more. See known issue 1
-  for the current size limit of about 1 KB.
+- Each node adds about 15 bytes plus its label to the config, and each wire 9 more.
+  A config is at most 4096 bytes (see [Limits](#limits)): about 100 wired nodes with
+  short labels, fewer with long ones.
 
 ### Networking
 
@@ -512,37 +514,39 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 **Transport**
 
-1. **A config above about 1 KB overflows the send buffer.** `send_websocket_binary`
-   copies up to 4096 bytes into a 1024-byte frame buffer.
-2. **Received frames are not checked.** A frame must arrive in one TCP segment and fit
-   in 1024 bytes. The packet's length field is not checked against the frame length.
-3. **Only the latest connection is tracked.** Every new TCP connection takes
+1. **Page requests leak a buffer.** For a plain HTTP request, `tcp_server_recv` sends
+   the page but neither frees the request's pbuf nor acknowledges it with
+   `tcp_recved`.
+2. **Only the latest connection is tracked.** Every new TCP connection takes
    `clients[0]`, so only the most recent client receives telemetry.
-4. **`0B`/`0C` fail silently** when no stored message matches, and the UI has no way
+3. **`0B`/`0C` fail silently** when no stored message matches, and the UI has no way
    to tell.
-5. **The UI's command packet has the wrong length.** `button.js` sets the payload
+4. **The UI's command packet has the wrong length.** `button.js` sets the payload
    length to 7 for a 6-byte payload. The device's message iterator stops at the last
    complete message, so the extra byte is ignored.
 
 **Config and graph**
 
-6. **Unknown control types are lost.** Control types the UI doesn't know are skipped
+5. **Unknown control types are lost.** Control types the UI doesn't know are skipped
    on restore and dropped on the next save.
-7. **The button config payload is empty.** The earlier reference described a 7-byte
+6. **The button config payload is empty.** The earlier reference described a 7-byte
    payload (label ID, X, Y, style) that was never implemented.
-8. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
+7. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
    instead of `|` to combine the ID bytes.
-9. **Field values are copied without a length check.** The device copies names, SSIDs
+8. **Field values are copied without a length check.** The device copies names, SSIDs
    and passwords into 32-byte buffers using the message's length.
-10. **The first-boot defaults are hardcoded:** SSID `LRX`, a fixed password, and
+9. **The first-boot defaults are hardcoded:** SSID `LRX`, a fixed password, and
     options = join, so a fresh board tries to join that network rather than start
     its own access point.
 
 **Flash**
 
-11. **Flash is written while core 1 is running.** `write_config` and
+10. **Flash is written while core 1 is running.** `write_config` and
     `update_config` disable interrupts on core 0 only. If core 1 executes from flash
     during the erase, it can crash. The Pico SDK's `flash_safe_execute` handles this.
+11. **The secrets region is not sector aligned.** `flash_range_erase` works on whole
+    4096-byte sectors at aligned offsets, but the secrets region is 256 bytes at
+    4352 bytes from the end of flash, so erasing it is outside the SDK's contract.
 
 **Inter-core FIFO**
 

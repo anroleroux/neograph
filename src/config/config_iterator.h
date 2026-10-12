@@ -32,4 +32,17 @@ void config_element_iterator_init(
 );
 // bool next_config_element(config_element_iterator *elms);
 
+/*
+ * Replace one field message in a stored packet (header included). The first message
+ * with the same type, element ID and field ID (first payload byte) as msg is
+ * replaced by msg's first message, and the result is written to out with its length
+ * header updated. Returns the new packet length, or 0 if nothing matched, msg is not
+ * a field message, or the result would not fit out_size.
+ */
+size_t config_replace_field(
+    const uint8_t *packet, size_t packet_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t *out, size_t out_size
+);
+
 #endif

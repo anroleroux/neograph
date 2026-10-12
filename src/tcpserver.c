@@ -62,6 +62,7 @@ err_t tcp_client_close(void *arg) {
         }
         clientstate->client_pcb = NULL;
     }
+    free(clientstate->rx);
     free(clientstate);
 
     printf("client closed\n");
@@ -149,9 +150,9 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     if (p->tot_len > 0) {
         if (!clientstate->upgraded) {
             printf("tcp_server_recv %d bytes, err %d\n", p->tot_len, err);
-            char buffer[1024];
-            pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
-            buffer[p->tot_len] = '\0';  // Ensure null termination
+            static char buffer[1024];
+            uint16_t copied = pbuf_copy_partial(p, buffer, sizeof(buffer) - 1, 0);
+            buffer[copied] = '\0';  // Ensure null termination
 
             if (header_contains(buffer, "Upgrade", "websocket")
                 && header_contains(buffer, "Connection", "Upgrade")) {

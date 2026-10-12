@@ -22,6 +22,8 @@
 #define PKT_UPDATE_SECRET       0x0C    /* UI -> HW */
 #define PKT_DEVICE_ID           0x0D    /* HW -> UI */
 
+#define PKT_CONFIG_MAX          4096    /* largest 0A packet, header included: the flash config region */
+
 /* ── Messages (the body of a packet) ──────────────────────────────────── */
 
 #define MSG_HEADER_LEN          5       /* type (1), reserved (1), element ID (2, BE), payload length (1) */
