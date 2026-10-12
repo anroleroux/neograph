@@ -13,6 +13,8 @@ class uiGPO extends uiComponents {
         this.actDir = "inputs";
         this.actNum = 0;
 
+        this.pin = 1;
+
         this.buildGraphElement();
     }
 
@@ -33,6 +35,22 @@ class uiGPO extends uiComponents {
         this.gElmHighlight = g.children[3];
     }
 
+    createSettings() {
+        super.createSettings();
+        const settings = document.getElementById('settings');
+        settings.insertAdjacentHTML('beforeend', `
+            <label>GPIO pin: <input type="number" id="pin-input" min="0" max="28" value="${this.pin}"></label>
+        `);
+        document.getElementById('pin-input').addEventListener('change', (e) => {
+            const pin = parseInt(e.target.value, 10);
+            if (pin >= 0 && pin <= 28) {
+                this.pin = pin;
+            } else {
+                e.target.value = this.pin;
+            }
+        });
+    }
+
     buildUI(commandInterface) {}
 
     marshal() {
@@ -48,7 +66,7 @@ class uiGPO extends uiComponents {
         buffer.push((this.id >> 8) & 0xFF, this.id & 0xFF);
         buffer.push(0x03);
         buffer.push((sourceID >> 8) & 0xFF, sourceID & 0xFF);
-        buffer.push(0x01);
+        buffer.push(this.pin);
 
         return buffer;
     }
