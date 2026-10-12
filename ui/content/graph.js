@@ -33,10 +33,8 @@ function saveGraph() {
     wsConfigMsg.set(gfig, 3);
     wsConfigMsg.set(binary, 3 + gfig.length);
 
-    console.log(wsConfigMsg) //testing
-    if (!testing) { //testing
-    socket.send(wsConfigMsg);
-    } //testing
+    console.log(wsConfigMsg) //debug
+    socket.send(wsConfigMsg); //online
 }
 
 function toggleConnectMode() {

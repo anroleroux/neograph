@@ -50,33 +50,38 @@ make flash
 
 ## 🧪 Development and Testing
 
+### Build targets
+
+| Target | What it builds |
+|---|---|
+| `make uidev` | Browser-only UI in `ui/dist/index.html`, with canned controller data. This is the GitHub Pages demo. |
+| `make hwdev` | Firmware with the debug UI (console logging kept). |
+| `make build` | Release firmware. |
+| `make test` | Builds and runs the C unit tests. |
+
+The UI source is shared; the targets differ only in which marked code they strip from the JS:
+
+| Marker | Wraps | Stripped by |
+|---|---|---|
+| `//online-start … //online-end`, `//online` | Talking to the controller (WebSocket) | `uidev` |
+| `//offline-start … //offline-end`, `//offline` | Stand-ins for the controller (canned data) | `hwdev`, `build` |
+| `//debug` | Console logging | `build` |
+
+Markers must end their line: a block marker sits on its own line, and a single-line marker is a trailing comment.
+
 ### Test Web Interface Locally
 
 You can test the web interface in your browser without flashing:
 
 ```bash
-make test
+make uidev
 ```
 
-This builds a standalone version for local testing.
-
-If you have a hot reload server you can use `entr` to update all file if you made an update and get that reloaded.
+If you have a hot reload server you can use `entr` to rebuild whenever a file changes and get that reloaded.
 
 ```bash
 ls ui/content/*.* ui/content/components/* ui/layout.* | entr make uidev
 ```
-
----
-
-### Development Build (No Compression)
-
-For faster iteration when testing on hardware:
-
-```bash
-make dev
-```
-
-This builds a version suitable for flashing, but skips HTML/JS compression.
 
 ---
 

@@ -103,11 +103,7 @@ const networks = mount(document.getElementById("network"), [
 
 // function updateNetworkOptions(netID) {
 //     const data = new Uint8Array([0x0B, 0, 7, 0xB2, 0, (netID >> 8) & 0xFF, netID & 0xFF, 2, 0, networks[netID].options]);
-//     if (!testing) {  //testing
 //     socket.send(data);
-//     } else { //testing
-//         console.log(data); //testing
-//     } //testing
 // }
 
 function updateNetworkFields(pt,type,netID,field) {
@@ -123,38 +119,33 @@ function updateNetworkFields(pt,type,netID,field) {
     const pcktlen = 5 + 1 + value.length;
 
     const data = new Uint8Array([pt, 0, pcktlen, type, 0, (netID >> 8) & 0xFF, netID & 0xFF, value.length + 1, networks[netID].fields[field], ...value]);
-    if (!testing) {  //testing
-    socket.send(data);
-    } else { //testing
-        console.log(data); //testing
-    } //testing
+    console.log(data); //debug
+    socket.send(data); //online
 }
 
 function toggleWebSocket(n,d) {
     const dv = networks[n].devices[d];
     if (dv.connected) {
         dv.connected = false;
-        if (!testing) { //testing
-        disconnectWebSocket(networks[n].devices[d]);
-        } //testing
+        disconnectWebSocket(networks[n].devices[d]); //online
     } else {
         dv.connected = true;
-        if (!testing) {  //testing
-        connectWebSocket(networks[n].devices[d]);
-        } else { //testing
-            const data = new Uint8Array([ //testing
-                0xA0, 0, 60, //testing
-                0xB0, 0, 0, 0, 9, 0, 189, 252, 234, 193, 78, 30, 121, 77, //testing
-                0xB1, 0, 0, 0, 5, 1, 76, 56, 83, 71, //testing
-                0xB1, 0, 0, 0, 3, 2, 0, 0, //testing
-                0xB2, 0, 0, 0, 2, 0, 1, //testing
-                0xB3, 0, 0, 0, 5, 1, 76, 56, 83, 71, //testing
-                0xB3, 0, 0, 0, 4, 2, 76, 82, 88, //testing
-            ]); //testing
-            networks[0].devices[0].did = data.slice(9,17); //testing
-            gfig = data.slice(3); //testing
-            unmarshalConfigs(gfig); //testing
-        } //testing
+        connectWebSocket(networks[n].devices[d]); //online
+        //offline-start
+        // No controller to talk to: feed in a canned config as if the device sent it.
+        const data = new Uint8Array([
+            0xA0, 0, 60,
+            0xB0, 0, 0, 0, 9, 0, 189, 252, 234, 193, 78, 30, 121, 77,
+            0xB1, 0, 0, 0, 5, 1, 76, 56, 83, 71,
+            0xB1, 0, 0, 0, 3, 2, 0, 0,
+            0xB2, 0, 0, 0, 2, 0, 1,
+            0xB3, 0, 0, 0, 5, 1, 76, 56, 83, 71,
+            0xB3, 0, 0, 0, 4, 2, 76, 82, 88,
+        ]);
+        networks[0].devices[0].did = data.slice(9,17);
+        gfig = data.slice(3);
+        unmarshalConfigs(gfig);
+        //offline-end
     }
 }
 
@@ -265,6 +256,7 @@ function areByteArraysEqual(arr1, arr2) {
   return arr1.length === arr2.length && arr1.every((value, index) => value === arr2[index]);
 }
 
+//online-start
 function connectWebSocket(device) {
     // const socket = device.socket;
 
@@ -338,3 +330,4 @@ function disconnectWebSocket(device) {
         // clearControlInterface();
     }
 }
+//online-end

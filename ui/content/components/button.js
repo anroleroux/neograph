@@ -71,9 +71,7 @@ class uiButton extends uiComponents {
         cmdPkt[7] = 1;
         cmdPkt[8] = this.value;
 
-        console.log(cmdPkt) //testing
-        if (!testing) { //testing
-        socket.send(cmdPkt);
-        } //testing
+        console.log(cmdPkt) //debug
+        socket.send(cmdPkt); //online
     }
 }

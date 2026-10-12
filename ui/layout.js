@@ -1,6 +1,3 @@
-const testing = true; //testing
-const debug = false; //testing
-
 const container = document.getElementById('container');
 const bcSelect = document.getElementById('bcselect');
 function toNetwork() {
