@@ -145,9 +145,6 @@ the first payload byte. The remaining payload bytes, if any, follow as extra wor
 10 00 00 01 01  01          # button n1 → value 1
 ```
 
-The UI currently sends `07` in the length field of this packet (see
-[Known issues](#known-issues)); the device handles it the same way.
-
 #### `0B` Update config field, `0C` Update secret field
 
 Change one field of a networking element without resending the whole config. The
@@ -519,49 +516,46 @@ Current behaviour that is probably not intended. Each one is a candidate for its
    `clients[0]`, so only the most recent client receives telemetry.
 2. **`0B`/`0C` fail silently** when no stored message matches, and the UI has no way
    to tell.
-3. **The UI's command packet has the wrong length.** `button.js` sets the payload
-   length to 7 for a 6-byte payload. The device's message iterator stops at the last
-   complete message, so the extra byte is ignored.
 
 **Config and graph**
 
-4. **Unknown control types are lost.** Control types the UI doesn't know are skipped
+3. **Unknown control types are lost.** Control types the UI doesn't know are skipped
    on restore and dropped on the next save.
-5. **The button config payload is empty.** The earlier reference described a 7-byte
+4. **The button config payload is empty.** The earlier reference described a 7-byte
    payload (label ID, X, Y, style) that was never implemented.
-6. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
+5. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
    instead of `|` to combine the ID bytes.
-7. **Field values are copied without a length check.** The device copies names, SSIDs
+6. **Field values are copied without a length check.** The device copies names, SSIDs
    and passwords into 32-byte buffers using the message's length.
-8. **The first-boot defaults are hardcoded:** SSID `LRX`, a fixed password, and
+7. **The first-boot defaults are hardcoded:** SSID `LRX`, a fixed password, and
     options = join, so a fresh board tries to join that network rather than start
     its own access point.
 
 **Flash**
 
-9. **Flash is written while core 1 is running.** `write_config` and
+8. **Flash is written while core 1 is running.** `write_config` and
     `update_config` disable interrupts on core 0 only. If core 1 executes from flash
     during the erase, it can crash. The Pico SDK's `flash_safe_execute` handles this.
-10. **The secrets region is not sector aligned.** `flash_range_erase` works on whole
+9. **The secrets region is not sector aligned.** `flash_range_erase` works on whole
     4096-byte sectors at aligned offsets, but the secrets region is 256 bytes at
     4352 bytes from the end of flash, so erasing it is outside the SDK's contract.
 
 **Inter-core FIFO**
 
-11. **Controls are set up again on every connect.** `retrieve_store` sends setup
+10. **Controls are set up again on every connect.** `retrieve_store` sends setup
     words each time a client connects, and `0A` sends them again. Nothing sends clean
     setup (`op` 3), so core 1's table gains duplicates each time.
-12. **Clean setup falls through into the action handler** (missing `break`).
-13. **Extra action words are never read.** Core 0 sends one word per further 4
+11. **Clean setup falls through into the action handler** (missing `break`).
+12. **Extra action words are never read.** Core 0 sends one word per further 4
     payload bytes, but core 1 doesn't read them, so it would treat them as operation
     words. It also reads past the payload when the length isn't 1 + 4n. Buttons are
     unaffected (length 1).
-14. **A setup word whose reference word is late uses stale data.** If the reference
+13. **A setup word whose reference word is late uses stale data.** If the reference
     word misses its 1 ms timeout, core 1 decodes the setup word itself as the
     reference.
-15. **There is no framing.** Tags and values, and operation and extra words, are told
+14. **There is no framing.** Tags and values, and operation and extra words, are told
     apart only by order, so one lost or extra word desyncs everything after it.
-16. **Uptime counts 1.2 s ticks**, not seconds.
+15. **Uptime counts 1.2 s ticks**, not seconds.
 
 ---
 

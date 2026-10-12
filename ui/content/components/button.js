@@ -63,7 +63,7 @@ class uiButton extends uiComponents {
         const cmdPkt = new Uint8Array(9);
         cmdPkt[0] = PKT_COMMAND;
         cmdPkt[1] = 0;
-        cmdPkt[2] = 7;
+        cmdPkt[2] = cmdPkt.length - PKT_HEADER_LEN;
         cmdPkt[3] = this.tc;
         cmdPkt[4] = 0;
         cmdPkt[5] = (this.id >> 8) & 0xFF;
