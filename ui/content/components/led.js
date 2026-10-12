@@ -1,6 +1,7 @@
 class uiLED extends uiComponents {
     constructor(x = 0, y = 0) {
         super("led",x,y);
+        this.label = "Onboard LED";
 
         this.tc = 0x20;
 
