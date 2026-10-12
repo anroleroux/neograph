@@ -202,7 +202,7 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
     pico_get_unique_board_id(&board_id);
 
     uint8_t did_packet[3+PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
-    did_packet[0] = 0x0D; did_packet[1] = 0x00; did_packet[2] = PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
+    did_packet[0] = PKT_DEVICE_ID; did_packet[1] = 0x00; did_packet[2] = PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
     memcpy(did_packet+3, board_id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
     send_websocket_binary(clientstate, did_packet, 3+PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
 
@@ -211,7 +211,7 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
     uint16_t config_length = retrieve_store(config);
     // uint8_t config_msg[config_length+7];
     // snprintf(config_msg,config_length+7,"config:")
-    if (config[0] == 10) {
+    if (config[0] == PKT_CONFIG) {
         printf("config exist, sending to client\n");
         send_websocket_binary(clientstate, config, config_length+3);
         // print_buf(config,config_length+3);
@@ -262,23 +262,19 @@ err_t handle_websocket_msg(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
         uint16_t data_length = (payload[1] << 8) | payload[2];
         // printf("length: %i, Data: %X\n", data_length,*payload);
 
-        if (*payload == 0x0A) {
+        if (*payload == PKT_CONFIG) {
             apply_config(payload,data_length+3);
-        } else if (*payload == 0x0B) {
+        } else if (*payload == PKT_UPDATE_CONFIG) {
             update_config(payload+3,data_length);
-        } else if (*payload == 0x0C) {
+        } else if (*payload == PKT_UPDATE_SECRET) {
             update_secrets(payload+3,data_length);
-        } else if (*payload == 0x01) {
+        } else if (*payload == PKT_COMMAND) {
             config_element_iterator itr;
             config_element_iterator_init(&itr, payload+3, data_length);
             
             while (itr.next(&itr)) {
                 // printf("value %i [%X %X %X %X]\n", iValue, *(payload+(7+iValue*4)), *(payload+(8+iValue*4)), *(payload+(9+iValue*4)), *(payload+(10+iValue*4)));
-                uint32_t hwop_buf = CONFIG_OPERATION_CONTROL_ACTION << 30
-                    | (itr.type & 0x1F) << 24
-                    | (itr.id>>8 & 0xFF) << 16
-                    | (itr.id>>0 & 0xFF) << 8
-                    | itr.pay[0];
+                uint32_t hwop_buf = fifo_op_word(FIFO_OP_CONTROL_ACTION, itr.type, itr.id, itr.pay[0]);
                 multicore_fifo_push_blocking(hwop_buf);
 
                 for (size_t i = 1; i < itr.len; i+=4) {

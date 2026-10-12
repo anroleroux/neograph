@@ -1,6 +1,8 @@
 build/
 ui/dist/
 ui/content/components.js
-src/*.h
+src/ui_dist_index_html_gz.h
 pico_sdk_import.cmake
 test_runner
+test_protocol
+tests/protocol_examples.h

@@ -2,7 +2,7 @@ class uiButton extends uiComponents {
     constructor(x = 0, y = 0) {
         super("button", x, y);
 
-        this.tc = 0x10;
+        this.tc = MSG_UI_BUTTON;
 
         this.outputs.push(
             {
@@ -61,7 +61,7 @@ class uiButton extends uiComponents {
         this.value = this.value?false:true;
 
         const cmdPkt = new Uint8Array(9);
-        cmdPkt[0] = 0x01;
+        cmdPkt[0] = PKT_COMMAND;
         cmdPkt[1] = 0;
         cmdPkt[2] = 7;
         cmdPkt[3] = this.tc;

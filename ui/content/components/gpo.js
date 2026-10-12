@@ -2,7 +2,7 @@ class uiGPO extends uiComponents {
     constructor(x = 0, y = 0) {
         super("gpo",x,y);
 
-        this.tc = 0x21;
+        this.tc = MSG_HW_GPO;
 
         this.inputs.push(
             {

@@ -56,16 +56,16 @@ typedef struct {
 hwel decode_hwel(uint32_t op) {
     hwel result;
 
-    result.operation    = (op >> 30) & 0x03;
-    result.control_type = ((op >> 24) & 0x1F) | 0x20;
-    result.id = (op >> 8)  & 0xFFFF;
-    result.value        = (op >> 0)  & 0xFF;
+    result.operation    = fifo_op(op);
+    result.control_type = fifo_op_type(op);
+    result.id           = fifo_op_id(op);
+    result.value        = fifo_op_value(op);
 
     return result;
 }
 
 void decode_hwrf(uint32_t rf,hwel *decop) {
-    decop->source_id = (rf >> 16)  & 0xFFFF;
+    decop->source_id = fifo_ref_source(rf);
 }
 
 static hwel_sources *hwel_source_table = NULL;
@@ -142,7 +142,7 @@ void core1_worker() {
     while(1) {
         int64_t up_time_elapsed = absolute_time_diff_us(start, get_absolute_time())/1200000;
         if (up_time_elapsed >= next_uptime_timeout) {
-            multicore_fifo_push_blocking(0);
+            multicore_fifo_push_blocking(FIFO_TAG_UPTIME);
             multicore_fifo_push_blocking((uint32_t)up_time_elapsed);
             next_uptime_timeout = up_time_elapsed + 5;
         }
@@ -153,14 +153,14 @@ void core1_worker() {
             // printf("hw opp %d type %d, io %d\n",decop.operation, decop.control_type, decop.io);
             
             switch (decop.operation) {
-            case CONFIG_OPERATION_TYPE_SETUP:
+            case FIFO_OP_SETUP:
                 switch (decop.control_type) {
-                case CONTROL_TYPE_LED:
+                case MSG_HW_LED:
                     multicore_fifo_pop_timeout_us(1000, &op);
                     decode_hwrf(op,&decop);
                     break;
 
-                case CONTROL_TYPE_GPO:
+                case MSG_HW_GPO:
                     multicore_fifo_pop_timeout_us(1000, &op);
                     decode_hwrf(op,&decop);
 
@@ -168,7 +168,7 @@ void core1_worker() {
                     gpio_set_dir(decop.io, GPIO_OUT);
                     break;
                 
-                // case CONTROL_TYPE_PWM:
+                // case MSG_HW_PWM:
                 //     gpio_set_function(decop.io, GPIO_FUNC_PWM);
                 //     uint slice_num = pwm_gpio_to_slice_num(decop.io);
                 //     uint channel = pwm_gpio_to_channel(decop.io);
@@ -212,7 +212,7 @@ void core1_worker() {
                 printf("hw man adding control type %02X on ID %i\n",decop.control_type,decop.id);
                 break;
 
-            case CONFIG_OPERATION_TYPE_CLEAN_SETUP:
+            case FIFO_OP_CLEAN_SETUP:
                 delete_all_packets();
                 for (uint gpio = 0; gpio < 30; gpio++) {
                     gpio_set_function(gpio, GPIO_FUNC_SIO);
@@ -225,7 +225,7 @@ void core1_worker() {
                     pwm_set_chan_level(slice_num, PWM_CHAN_A, 0);
                     pwm_set_chan_level(slice_num, PWM_CHAN_B, 0);
                 }
-            case CONFIG_OPERATION_CONTROL_ACTION:
+            case FIFO_OP_CONTROL_ACTION:
                 // msg = multicore_fifo_pop_blocking();
                 printf("hw man buffer %02X %02X %02X %02X\n",op>>24&0xFF,op>>16&0xFF,op>>8&0xFF,op&0xFF);
                 // hwop decop = decode_hwop(msg);
@@ -244,18 +244,18 @@ void core1_worker() {
     
                         printf("hw man found type %02X with ID %d\n",el.control_type,el.id);
                         switch (el.control_type) {
-                        case CONTROL_TYPE_LED:
+                        case MSG_HW_LED:
                             printf("switch LED, value:%i\n",decop.value);
-                            multicore_fifo_push_blocking(2);
+                            multicore_fifo_push_blocking(FIFO_TAG_LED);
                             multicore_fifo_push_blocking(decop.value);
                             break;
                         
-                        case CONTROL_TYPE_GPO:
+                        case MSG_HW_GPO:
                             printf("switch GPO %d, value:%i\n",el.io, decop.value);
                             gpio_put(el.io,decop.value);
                             break;
                         
-                        // case CONTROL_TYPE_PWM:
+                        // case MSG_HW_PWM:
                         //     // printf("control PWM, value:%i\n",values[0]);
                         //     if (values[0] < pkt->val0) {values[0] = pkt->val0;}
                         //     if (values[0] > pkt->val1) {values[0] = pkt->val1;}
@@ -280,7 +280,7 @@ void core1_worker() {
         int64_t core_time_elapsed = absolute_time_diff_us(start, get_absolute_time())/1200000;
         if (core_time_elapsed >= next_coretm_timeout) {
             float temperature = read_internal_temperature();
-            multicore_fifo_push_blocking(1);
+            multicore_fifo_push_blocking(FIFO_TAG_TEMPERATURE);
             uint32_t data;
             memcpy(&data, &temperature, sizeof(float));
             multicore_fifo_push_blocking(data);

@@ -1,3 +1,4 @@
+{{protocol-js}}:ui/content/protocol.js
 {{network-js}}:ui/content/network.js
 {{command-js}}:ui/content/command.js
 {{graph-js}}:ui/content/graph.js

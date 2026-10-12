@@ -27,7 +27,7 @@ function saveGraph() {
 
     const binary = Uint8Array.from(output);
     const wsConfigMsg = new Uint8Array(3 + gfig.length + binary.length);
-    wsConfigMsg[0] = 0x0A;
+    wsConfigMsg[0] = PKT_CONFIG;
     wsConfigMsg[1] = (gfig.length + binary.length >> 8) & 0xFF;
     wsConfigMsg[2] = gfig.length + binary.length & 0xFF;
     wsConfigMsg.set(gfig, 3);

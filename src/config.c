@@ -30,7 +30,7 @@ bool next_config_element(config_element_iterator *elms) {
     if (elms->pos >= elms->size) return false;
 
     if (elms->pos == 0 && elms->pay == NULL) {
-        if (elms->type == 0x0A) {
+        if (elms->type == PKT_CONFIG) {
             elms->pos = 3;
         }
     } else {
@@ -229,12 +229,12 @@ size_t build_secrets(uint8_t *buf, const char name[5]) {
     uint8_t *p = buf;
 
     // --- 0xB3 block #2 ---
-    *p++ = 0xB3;
+    *p++ = MSG_NETWORK_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x09; // elm Len
-    *p++ = 0x03; // field 0x03=pass
+    *p++ = FIELD_NETWORK_PASSWORD;
     memcpy(p, "47353749", 8);
     // memcpy(p, "neoGraph", 8);
     p += 8;
@@ -252,62 +252,62 @@ size_t build_config(uint8_t *buf, const char name[5]) {
     pico_get_unique_board_id(&board_id);
 
     // --- 0xB0 block ---
-    *p++ = 0xB0;
+    *p++ = MSG_DEVICE;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = PICO_UNIQUE_BOARD_ID_SIZE_BYTES+1; // elm Len
-    *p++ = 0x00; // field 0x00=deviceID
+    *p++ = FIELD_DEVICE_DID;
     memcpy(p, board_id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
     p += PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
 
     // --- 0xB1 block #1 ---
-    *p++ = 0xB1;
+    *p++ = MSG_DEVICE_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x05; // elm Len
-    *p++ = 0x01; // field 0x01=name
+    *p++ = FIELD_DEVICE_NAME;
     memcpy(p, name, NAME_LEN);
     p += NAME_LEN;
 
     // --- 0xB1 block #2 ---
-    *p++ = 0xB1;
+    *p++ = MSG_DEVICE_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x03; // elm Len
-    *p++ = 0x02; // field 0x02=network
+    *p++ = FIELD_DEVICE_NETWORK;
     *p++ = 0x00; // ref network elm ID H
     *p++ = 0x00; // ref network elm ID L
 
     // --- 0xB2 block ---
-    *p++ = 0xB2;
+    *p++ = MSG_NETWORK;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x02; // elm Len
-    *p++ = 0x00; // field 0x00=options
-    *p++ = 0x01; // options
+    *p++ = FIELD_NETWORK_OPTIONS;
+    *p++ = NET_OPT_JOIN;
 
     // --- 0xB3 block #1 ---
-    *p++ = 0xB3;
+    *p++ = MSG_NETWORK_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     *p++ = 0x05; // elm Len
-    *p++ = 0x01; // field 0x01=name
+    *p++ = FIELD_NETWORK_NAME;
     memcpy(p, name, NAME_LEN);
     p += NAME_LEN;
 
     // --- 0xB3 block #2 ---
-    *p++ = 0xB3;
+    *p++ = MSG_NETWORK_FIELD;
     *p++ = 0x00; // reserved
     *p++ = 0x00; // elm ID H
     *p++ = 0x00; // elm ID L
     // *p++ = 0x0E; // elm Len
     *p++ = 0x04; // elm Len
-    *p++ = 0x02; // field 0x02=ssid
+    *p++ = FIELD_NETWORK_SSID;
     // memcpy(p, PREFIX, PREFIX_LEN);
     // p += PREFIX_LEN;
     // memcpy(p, name, NAME_LEN);
@@ -323,7 +323,7 @@ size_t wrap_secrets(uint8_t *out, const char name[5]) {
 
     uint8_t *p = out;
 
-    *p++ = 0x0A;
+    *p++ = PKT_CONFIG;
     *p++ = (inner_len >> 8) & 0xFF;
     *p++ = inner_len & 0xFF;
     memcpy(p, inner, inner_len);
@@ -338,7 +338,7 @@ size_t wrap_config(uint8_t *out, const char name[5]) {
 
     uint8_t *p = out;
 
-    *p++ = 0x0A;
+    *p++ = PKT_CONFIG;
     *p++ = (inner_len >> 8) & 0xFF;
     *p++ = inner_len & 0xFF;
     memcpy(p, inner, inner_len);
@@ -375,35 +375,28 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
         uint32_t control_setup_msg;
 
         switch (itr.type) {
-        case CONTROL_TYPE_LED:
+        case MSG_HW_LED:
             if (itr.len != 2) break;
 
-            control_setup_msg = (CONFIG_OPERATION_TYPE_SETUP << 30)
-                | ((CONTROL_TYPE_LED & 0x1F) << 24)
-                | (itr.id>>8 & 0xFF) << 16
-                | (itr.id>>0 & 0xFF) << 8;
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_LED, itr.id, 0);
 
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw LED setup %X\n",control_setup_msg);
             
-            control_setup_msg =  (itr.pay[0]<<24 | itr.pay[1]<<16);
+            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw LED setup %X\n",control_setup_msg);
             break;
         
-        case CONTROL_TYPE_GPO:
+        case MSG_HW_GPO:
             if (itr.len != 3) break;
 
-            control_setup_msg = (CONFIG_OPERATION_TYPE_SETUP << 30)
-                | ((CONTROL_TYPE_GPO & 0x1F) << 24)
-                | (itr.id>>8 & 0xFF) << 16
-                | (itr.id>>0 & 0xFF) << 8
-                | itr.pay[2];
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPO, itr.id, itr.pay[2]);
 
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw GPO setup %X\n",control_setup_msg);
 
-            control_setup_msg = (itr.pay[0]<<24 | itr.pay[1]<<16);
+            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
 
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw GPO setup %X\n",control_setup_msg);
@@ -542,7 +535,7 @@ int unmarshal_network_config(
     // };
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB0) {
+        if (itr.type == MSG_DEVICE) {
             // printf("got B0\n");
             if (memcmp(itr.pay+1, target_did, PICO_UNIQUE_BOARD_ID_SIZE_BYTES) == 0) {
                 // printf("match DID\n");
@@ -556,18 +549,18 @@ int unmarshal_network_config(
     itr.reset(&itr);
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB1) {
+        if (itr.type == MSG_DEVICE_FIELD) {
             // printf("got B1\n");
             if (itr.id != out->device.id) continue;
             uint8_t field_number = itr.pay[0];
-            if (field_number == 0x01) {
+            if (field_number == FIELD_DEVICE_NAME) {
                 // printf("match device name\n");
                 memcpy(out->device.name, itr.pay+1, itr.len-1);
                 // printf("debug name:%s\n", out->device.name);
                 continue;
             }
 
-            if (field_number == 0x02) {
+            if (field_number == FIELD_DEVICE_NETWORK) {
                 // printf("match device network\n");
                 out->network.id = itr.pay[1]<<8 | itr.pay[2];
                 continue;
@@ -578,12 +571,12 @@ int unmarshal_network_config(
     itr.reset(&itr);
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB2) {
+        if (itr.type == MSG_NETWORK) {
             // printf("got B2\n");
             if (itr.id != out->network.id) continue;
             uint8_t field_number = itr.pay[0];
 
-            if (field_number == 0x00) {
+            if (field_number == FIELD_NETWORK_OPTIONS) {
                 // printf("match network opts\n");
                 out->network.opts = itr.pay[1];
                 // printf("debug opts:%d\n", out->network.opts);
@@ -595,26 +588,26 @@ int unmarshal_network_config(
     itr.reset(&itr);
 
     while (itr.next(&itr)) {
-        if (itr.type == 0xB3) {
+        if (itr.type == MSG_NETWORK_FIELD) {
             // printf("got B3\n");
             if (itr.id != out->network.id) continue;
             uint8_t field_number = itr.pay[0];
 
-            if (field_number == 0x01) {
+            if (field_number == FIELD_NETWORK_NAME) {
                 // printf("match network name\n");
                 memcpy(out->network.name, itr.pay+1, itr.len-1);
                 // printf("debug name:%s\n", out->network.name);
                 continue;
             }
 
-            if (field_number == 0x02) {
+            if (field_number == FIELD_NETWORK_SSID) {
                 // printf("match network ssid\n");
                 memcpy(out->network.ssid, itr.pay+1, itr.len-1);
                 // printf("debug ssid:%s\n", out->network.ssid);
                 continue;
             }
 
-            if (field_number == 0x03) {
+            if (field_number == FIELD_NETWORK_PASSWORD) {
                 // printf("match network password\n");
                 memcpy(out->network.pass, itr.pay+1, itr.len-1);
                 // printf("debug pass:%s\n", out->network.pass);
@@ -632,7 +625,7 @@ void retrieve_networking_config(network_setup *out) {
 
     uint8_t header_buffer[3];
     read_config(header_buffer,3);
-    if (header_buffer[0] != 10) {
+    if (header_buffer[0] != PKT_CONFIG) {
         printf("no networking config found, creating default config\n");
 
         char name[NAME_LEN+1];
@@ -696,7 +689,7 @@ uint16_t retrieve_store(uint8_t* data_buffer) {
 
     uint8_t header_buffer[3];
     read_config(header_buffer,3);
-    if (header_buffer[0] != 10) {
+    if (header_buffer[0] != PKT_CONFIG) {
         restore_interrupts(ints);
         printf("retrieved %d %d %d, no config stored\n", header_buffer[0], header_buffer[1], header_buffer[2]);
         return 0;

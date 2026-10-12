@@ -3,7 +3,7 @@ class uiLED extends uiComponents {
         super("led",x,y);
         this.label = "Onboard LED";
 
-        this.tc = 0x20;
+        this.tc = MSG_HW_LED;
 
         this.inputs.push(
             {

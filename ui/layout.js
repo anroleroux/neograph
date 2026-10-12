@@ -66,6 +66,8 @@ function mount(root, state, template) {
     return r;
 }
 
+/* {{protocol-js}} */
+
 /* {{network-js}} */
 
 /* {{command-js}} */
