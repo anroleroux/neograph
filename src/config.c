@@ -339,6 +339,11 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
     config_element_iterator itr;
     config_element_iterator_init(&itr, data, length);
 
+    // Core 1 adds each setup to what it already has, so clear its table first:
+    // the config replaces the controls rather than adding to them.
+    multicore_fifo_push_blocking(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0));
+    printf("send hw clean setup\n");
+
     // size_t offset = 0;
     // size_t capacity = 4;
 

@@ -89,7 +89,7 @@
 /* Core 0 -> core 1: operation word, bits 31-30. */
 #define FIFO_OP_CONTROL_ACTION  1
 #define FIFO_OP_SETUP           2
-#define FIFO_OP_CLEAN_SETUP     3       /* handled by core 1, never sent */
+#define FIFO_OP_CLEAN_SETUP     3       /* sent first for every config, clears core 1's controls */
 
 /* Core 1 -> core 0: tag word, followed by one value word. */
 #define FIFO_TAG_UPTIME         0       /* value: uptime in 1.2 s ticks */

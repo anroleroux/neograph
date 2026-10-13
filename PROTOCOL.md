@@ -561,7 +561,7 @@ Every exchange starts with an **operation word**:
 |---|---|---|---|
 | 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per message | One word per further 4 payload bytes (none for a button) |
 | 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM message | One reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word |
-| 3 | `FIFO_OP_CLEAN_SETUP` | Nothing | — |
+| 3 | `FIFO_OP_CLEAN_SETUP` | `0A` config and on each connect, once, before the setup words | Nothing |
 
 Only the low 5 bits of the element type travel. Core 1 sets bit 5 on decode, so it
 always sees a hardware type: LED `20` and GPO `21` survive, but a button `10`
@@ -604,11 +604,13 @@ Frequency word
 `fifo_op_word`, `fifo_ref_word`, `fifo_pwm_word`, `fifo_duty_word`, `fifo_freq_word`
 and the matching decoders in `src/protocol.h` build and read these words.
 
-The setup words for the [save-config example](#the-graph). The button and slider are skipped,
-and each LED/GPO/PWM message becomes an operation word plus a reference word, then
-the PWM's four further words:
+The words for the [save-config example](#the-graph). A clean setup comes first, so the
+config replaces the controls core 1 has rather than adding to them. The button and
+slider are skipped, and each LED/GPO/PWM message becomes an operation word plus a
+reference word, then the PWM's four further words:
 
 ```fifo example=save-config
+C0000000                    # clean setup
 80000200 00010000           # setup LED n2, source n1
 81000301 00010000           # setup GPO n3 on pin 1, source n1
 82000402 00050000           # setup PWM n4 on pin 2, duty source n5
@@ -650,8 +652,8 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   `VALUE_FULL`, or for a logarithmic frequency min × (max / min)^(value / `VALUE_FULL`),
   rounded; a constant one ignores it. An LED is passed
   back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0.
-- **Clean setup** (`op` 3): clears the table and the PWM states, resets all GPIO pins and PWM slices,
-  then carries on as if it were an action word.
+- **Clean setup** (`op` 3): clears the table and the PWM states, and resets all GPIO
+  pins and PWM slices.
 
 ### Pausing core 1 for flash writes
 
@@ -730,21 +732,17 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 **Inter-core FIFO**
 
-9. **Controls are set up again on every connect.** `retrieve_store` sends setup
-    words each time a client connects, and `0A` sends them again. Nothing sends clean
-    setup (`op` 3), so core 1's table gains duplicates each time.
-10. **Clean setup falls through into the action handler** (missing `break`).
-11. **Extra action words are never read.** Core 0 sends one word per further 4
+9. **Extra action words are never read.** Core 0 sends one word per further 4
     payload bytes, but core 1 doesn't read them, so it would treat them as operation
     words. It also reads past the payload when the length isn't 1 + 4n. Buttons are
     unaffected (length 1).
-12. **A setup word whose reference word is late uses stale data.** If the reference
+10. **A setup word whose reference word is late uses stale data.** If the reference
     word misses its 1 ms timeout, core 1 decodes the setup word itself as the
     reference.
-13. **There is no framing.** Tags and values, and operation and extra words, are told
+11. **There is no framing.** Tags and values, and operation and extra words, are told
     apart only by order, so one lost or extra word desyncs everything after it.
-14. **Uptime counts 1.2 s ticks**, not seconds.
-15. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
+12. **Uptime counts 1.2 s ticks**, not seconds.
+13. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
     at one frequency. Two PWM outputs on the same slice both run at the frequency of
     the one set up last; the UI doesn't warn about it.
 

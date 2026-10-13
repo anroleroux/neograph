@@ -332,14 +332,18 @@ void test_element_type_bits(void)
 
 /* ── FIFO words ───────────────────────────────────────────────────────── */
 
-/* The setup words core 0 sends for a config payload (unmarshal_controls in src/config.c). */
+/* The words core 0 sends for a config payload (unmarshal_controls in src/config.c): a clean
+ * setup, then the setup words. */
 void test_fifo_setup_words_match_save_config(void)
 {
     const struct fifo_example *words = fifo_example("save-config");
     config_element_iterator it;
     messages(&it, example("save-config"));
 
-    size_t n = 0;
+    TEST_ASSERT_TRUE(words->len >= 1);
+    TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0), words->words[0]);
+
+    size_t n = 1;
     while (it.next(&it)) {
         uint8_t pin;
         switch (it.type) {

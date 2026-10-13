@@ -369,6 +369,9 @@ void core1_worker() {
                     pwm_set_chan_level(slice_num, PWM_CHAN_A, 0);
                     pwm_set_chan_level(slice_num, PWM_CHAN_B, 0);
                 }
+                printf("hw man cleared controls\n");
+                break;
+
             case FIFO_OP_CONTROL_ACTION:
                 // msg = multicore_fifo_pop_blocking();
                 printf("hw man buffer %02X %02X %02X %02X\n",op>>24&0xFF,op>>16&0xFF,op>>8&0xFF,op&0xFF);
@@ -414,6 +417,7 @@ void core1_worker() {
                 } else {
                     printf("hw sources with ID %d not found\n",decop.id);
                 }
+                break;
             }
         }
 
