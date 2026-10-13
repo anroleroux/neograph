@@ -1,5 +1,5 @@
 # Check that src/protocol.h and ui/content/protocol.js define the same PKT_, MSG_,
-# FIELD_, NET_OPT_, PWM_, SLIDER_, VALUE_ and PIN_ constants with the same values.
+# FIELD_, NET_OPT_, PWM_, SLIDER_, VALUE_, PIN_ and ADC_ constants with the same values.
 #
 #   awk -f make/check-constants.awk src/protocol.h ui/content/protocol.js
 
@@ -15,9 +15,9 @@ function num(s,    i, c, v) {
 
 FNR == 1 { file++ }
 
-file == 1 && /^#define (PKT|MSG|FIELD|NET_OPT|PWM|SLIDER|VALUE|PIN)_[A-Z0-9_]+[ \t]/ { c[$2] = num($3) }
+file == 1 && /^#define (PKT|MSG|FIELD|NET_OPT|PWM|SLIDER|VALUE|PIN|ADC)_[A-Z0-9_]+[ \t]/ { c[$2] = num($3) }
 
-file == 2 && /^const (PKT|MSG|FIELD|NET_OPT|PWM|SLIDER|VALUE|PIN)_[A-Z0-9_]+[ \t]*=/ {
+file == 2 && /^const (PKT|MSG|FIELD|NET_OPT|PWM|SLIDER|VALUE|PIN|ADC)_[A-Z0-9_]+[ \t]*=/ {
     line = $0
     sub(/^const /, "", line); sub(/;.*/, "", line)
     split(line, kv, /[ \t]*=[ \t]*/)

@@ -78,37 +78,40 @@ int main() {
         // printf("Current IP: %s\n", ip4addr_ntoa(&ip));
 
         cyw43_arch_poll();
-        cyw43_arch_wait_for_work_until(make_timeout_time_ms(100));
-        
-        uint32_t value;
-        if (multicore_fifo_pop_timeout_us(1000, &value)) {
-            switch (value) {
+        // Not longer than 10 ms: core 1 waits while its FIFO to core 0 is full,
+        // and the ADC inputs report several times a second.
+        cyw43_arch_wait_for_work_until(make_timeout_time_ms(10));
+
+        // Each message from core 1 is a tag and a value (PROTOCOL.md, "Core 1 →
+        // core 0"). Take all that are waiting.
+        while (multicore_fifo_rvalid()) {
+            uint32_t tag = multicore_fifo_pop_blocking();
+            uint32_t value = multicore_fifo_pop_blocking();
+
+            char text[32] = "";
+            switch (tag) {
             case FIFO_TAG_UPTIME:
-                value = multicore_fifo_pop_blocking();
-                for (int i = 0; i < 10; i++) {
-                    if ((state->clients[i] != NULL) && (state->clients[i]->upgraded)) {
-                        uint8_t buffer[124];
-                        snprintf(buffer,124,"uptime %d", value);
-                        send_websocket_message(state->clients[i], buffer);
-                    }
-                }
+                snprintf(text, sizeof text, "uptime %u", (unsigned)value);
                 break;
-            case FIFO_TAG_TEMPERATURE:
-                value = multicore_fifo_pop_blocking();
+            case FIFO_TAG_TEMPERATURE: {
                 float temperature;
                 memcpy(&temperature, &value, sizeof(float));
-                for (int i = 0; i < 10; i++) {
-                    if ((state->clients[i] != NULL) && (state->clients[i]->upgraded)) {
-                        uint8_t buffer[124];
-                        snprintf(buffer,124,"core %.2f", temperature);
-                        send_websocket_message(state->clients[i], buffer);
-                    }
-                }
+                snprintf(text, sizeof text, "core %.2f", temperature);
+                break;
+            }
+            case FIFO_TAG_ADC:
+                snprintf(text, sizeof text, "adc %u %u", (unsigned)fifo_adc_channel(value), (unsigned)fifo_adc_raw(value));
                 break;
             case FIFO_TAG_LED:
-                value = multicore_fifo_pop_blocking();
                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, value);
                 break;
+            }
+            if (!text[0]) continue;
+
+            for (int i = 0; i < 10; i++) {
+                if ((state->clients[i] != NULL) && (state->clients[i]->upgraded)) {
+                    send_websocket_message(state->clients[i], text);
+                }
             }
         }
     }

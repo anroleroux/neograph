@@ -310,8 +310,11 @@ void test_wires_join_matching_types(void)
                 if (src) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_BUTTON, element_type(ex, src), ex->name);
             } else if (it.type == MSG_HW_PWM) {
                 uint16_t duty = it.pay[0] << 8 | it.pay[1], freq = it.pay[9] << 8 | it.pay[10];
-                if (duty) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_SLIDER, element_type(ex, duty), ex->name);
-                if (freq) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_SLIDER, element_type(ex, freq), ex->name);
+                /* A floating source the device has: a slider or an ADC. */
+                if (duty) TEST_ASSERT_TRUE_MESSAGE(element_type(ex, duty) == MSG_UI_SLIDER
+                                                   || element_type(ex, duty) == MSG_HW_ADC, ex->name);
+                if (freq) TEST_ASSERT_TRUE_MESSAGE(element_type(ex, freq) == MSG_UI_SLIDER
+                                                   || element_type(ex, freq) == MSG_HW_ADC, ex->name);
             }
         }
     }
@@ -327,6 +330,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_GPO & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
 
@@ -343,11 +347,11 @@ void test_pin_usable(void)
 
 /* The words core 0 sends for a config payload (unmarshal_controls in src/config.c): a clean
  * setup, then the setup words. */
-void test_fifo_setup_words_match_save_config(void)
+static void assert_setup_words(const char *name)
 {
-    const struct fifo_example *words = fifo_example("save-config");
+    const struct fifo_example *words = fifo_example(name);
     config_element_iterator it;
-    messages(&it, example("save-config"));
+    messages(&it, example(name));
 
     TEST_ASSERT_TRUE(words->len >= 1);
     TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0), words->words[0]);
@@ -359,6 +363,11 @@ void test_fifo_setup_words_match_save_config(void)
         case MSG_HW_LED: pin = 0; break;
         case MSG_HW_GPO: pin = it.pay[2]; break;
         case MSG_HW_PWM: pin = it.pay[2]; break;
+        case MSG_HW_ADC:
+            /* The channel, and no reference word: an ADC is a source. */
+            TEST_ASSERT_TRUE(n + 1 <= words->len);
+            TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, it.pay[0]), words->words[n++]);
+            continue;
         default: continue;
         }
         TEST_ASSERT_TRUE(n + 2 <= words->len);
@@ -376,6 +385,9 @@ void test_fifo_setup_words_match_save_config(void)
     }
     TEST_ASSERT_EQUAL_UINT(words->len, n);
 }
+
+void test_fifo_setup_words_match_save_config(void) { assert_setup_words("save-config"); }
+void test_fifo_setup_words_match_adc_config(void) { assert_setup_words("adc-config"); }
 
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c). */
 static void assert_action_word(const char *name)
@@ -414,6 +426,10 @@ void test_fifo_words_decode(void)
     uint32_t freq = fifo_freq_word(PWM_FREQ_MIN, 65535);
     TEST_ASSERT_EQUAL_UINT16(PWM_FREQ_MIN, fifo_freq_min(freq));
     TEST_ASSERT_EQUAL_UINT16(65535, fifo_freq_max(freq));
+
+    uint32_t adc = fifo_adc_word(ADC_CHANNELS - 1, ADC_RAW_FULL);
+    TEST_ASSERT_EQUAL_UINT8(ADC_CHANNELS - 1, fifo_adc_channel(adc));
+    TEST_ASSERT_EQUAL_UINT16(ADC_RAW_FULL, fifo_adc_raw(adc));
 }
 
 /* Current behaviour (PROTOCOL.md, Part 3): only 5 type bits travel and core 1 forces bit 5. */
@@ -439,6 +455,7 @@ int main(void)
     RUN_TEST(test_element_type_bits);
     RUN_TEST(test_pin_usable);
     RUN_TEST(test_fifo_setup_words_match_save_config);
+    RUN_TEST(test_fifo_setup_words_match_adc_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_words_decode);

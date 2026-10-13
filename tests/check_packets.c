@@ -45,13 +45,18 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
 }
 
 /* A source reference must name a source the output takes (PROTOCOL.md, "Wire
-   types"): a button for an LED or GPO, a slider for a PWM, a slider or the core
-   temperature for a plot. `also` is a second type it may be, or 0. */
-static void check_source(const uint8_t *p, size_t len, uint16_t src, uint8_t want, uint8_t also, const char *what) {
+   types"): a button for an LED or GPO, a slider or an ADC for a PWM, and those or
+   the core temperature for a plot. `types` lists the types it may be, ending in 0. */
+static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, 0 };
+static const uint8_t FLOATING_HW[] = { MSG_UI_SLIDER, MSG_HW_ADC, 0 };
+static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_HW_ADC, MSG_HW_CORE, 0 };
+
+static void check_source(const uint8_t *p, size_t len, uint16_t src, const uint8_t *types, const char *what) {
     if (src == 0) return;
     uint8_t type = control_type(p, len, src);
-    if (type == 0) fail("a source reference names no element in the config");
-    else if (type != want && (also == 0 || type != also)) fail(what);
+    if (type == 0) { fail("a source reference names no element in the config"); return; }
+    for (; *types; types++) if (type == *types) return;
+    fail(what);
 }
 
 static void check_config(const uint8_t *p, size_t len) {
@@ -72,21 +77,25 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_UI_GRAPH:
             if (it.len != 3) fail("plot message is not 3 bytes");
             else if (it.pay[2] == 0) fail("plot window is 0 seconds");
-            else check_source(p, len, it.pay[0] << 8 | it.pay[1], MSG_UI_SLIDER, MSG_HW_CORE,
-                              "a plot is wired from something other than a slider or the core temperature");
+            else check_source(p, len, it.pay[0] << 8 | it.pay[1], FLOATING,
+                              "a plot is wired from something other than a slider, an ADC or the core temperature");
             break;
         case MSG_HW_CORE:
             if (it.len != 0) fail("core temperature message is not empty");
             break;
+        case MSG_HW_ADC:
+            if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
+            else if (it.pay[0] >= ADC_CHANNELS) fail("ADC channel is not below ADC_CHANNELS");
+            break;
         /* unmarshal_controls only sets up outputs with exactly these lengths */
         case MSG_HW_LED:
             if (it.len != 2) fail("LED message is not 2 bytes; the device would skip it");
-            else check_source(p, len, it.pay[0] << 8 | it.pay[1], MSG_UI_BUTTON, 0, "an LED is wired from something other than a button");
+            else check_source(p, len, it.pay[0] << 8 | it.pay[1], BOOLEAN, "an LED is wired from something other than a button");
             break;
         case MSG_HW_GPO:
             if (it.len != 3) fail("GPO message is not 3 bytes; the device would skip it");
             else if (!pin_usable(it.pay[2])) fail("GPO pin is not in PIN_USABLE_MASK");
-            else check_source(p, len, it.pay[0] << 8 | it.pay[1], MSG_UI_BUTTON, 0, "a GPO is wired from something other than a button");
+            else check_source(p, len, it.pay[0] << 8 | it.pay[1], BOOLEAN, "a GPO is wired from something other than a button");
             break;
         case MSG_HW_PWM:
             if (it.len != 15) fail("PWM message is not 15 bytes; the device would skip it");
@@ -102,8 +111,8 @@ static void check_config(const uint8_t *p, size_t len) {
             else if ((it.pay[9] | it.pay[10]) && !(it.pay[5] & PWM_FREQ_INPUT))
                 fail("a PWM has a frequency source but a constant frequency");
             else {
-                check_source(p, len, it.pay[0] << 8 | it.pay[1], MSG_UI_SLIDER, 0, "a PWM's duty is wired from something other than a slider");
-                check_source(p, len, it.pay[9] << 8 | it.pay[10], MSG_UI_SLIDER, 0, "a PWM's frequency is wired from something other than a slider");
+                check_source(p, len, it.pay[0] << 8 | it.pay[1], FLOATING_HW, "a PWM's duty is wired from something other than a slider or an ADC");
+                check_source(p, len, it.pay[9] << 8 | it.pay[10], FLOATING_HW, "a PWM's frequency is wired from something other than a slider or an ADC");
             }
             break;
         case MSG_STRING:

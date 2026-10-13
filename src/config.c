@@ -406,6 +406,14 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             printf("send hw PWM setup %X\n",control_setup_msg);
             break;
 
+        case MSG_HW_ADC:
+            if (itr.len != 1 || itr.pay[0] >= ADC_CHANNELS) break;
+
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_ADC, itr.id, itr.pay[0]);
+            multicore_fifo_push_blocking(control_setup_msg);
+            printf("send hw ADC setup %X\n",control_setup_msg);
+            break;
+
         default:
             printf("skipping control type %02X\n",itr.type);
             break;
