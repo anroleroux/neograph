@@ -16,8 +16,8 @@
     box-shadow: rgba(0, 0, 0, 0.1) 0px 4px 12px;
 }
 
-/* Buttons and sliders share a face: the name, the state below it in small
-   capitals, and a light in the corner that turns green while the control is on. */
+/* Buttons and sliders share a face: the name, with the state below it in small
+   capitals. A button also has a light in the corner, green while it is on. */
 #command > .control-btn,
 #command > .control-slider {
     display: flex;
@@ -65,8 +65,7 @@
     transition: background-color 0.15s, box-shadow 0.15s;
 }
 
-#command > .control-btn[aria-pressed="true"] > .light,
-#command > .control-slider.on > .light {
+#command > .control-btn[aria-pressed="true"] > .light {
     background-color: #4BAC4F;
     box-shadow: 0 0 0.5em #4BAC4F;
 }
@@ -91,6 +90,7 @@
    the track running up. */
 #command > .control-slider {
     grid-column: span 2;
+    padding: 0.6em 0.5em;
 }
 
 #command > .control-slider:not(.vertical) > .name {

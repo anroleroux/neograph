@@ -59,13 +59,12 @@ class uiSlider extends uiComponents {
     }
 
     // In the Command view: a tile like a button's, with the label, the value
-    // from 0 to 1 below it, a light that is green while the value is above 0,
-    // and the slider. Only a change of the value's byte is sent, so a drag sends
+    // from 0 to 1 below it, and the slider. Only a change of the value's byte is sent, so a drag sends
     // at most one command per step.
     buildUI(commandInterface) {
         const control = document.createElement('div');
         control.className = 'control-slider' + (this.vertical ? ' vertical' : '');
-        control.innerHTML = `<span class="light"></span><span class="name"></span><span class="state"></span>`
+        control.innerHTML = `<span class="name"></span><span class="state"></span>`
             + `<input type="range" min="0" max="${VALUE_FULL}" step="1">`;
         control.querySelector('.name').textContent = this.label;
         control.title = this.label;
@@ -75,7 +74,6 @@ class uiSlider extends uiComponents {
 
         const show = (value) => {
             control.querySelector('.state').textContent = value.toFixed(2);
-            control.classList.toggle('on', value > 0);
         };
         show(this.value);
 
