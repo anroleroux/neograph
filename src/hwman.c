@@ -42,12 +42,7 @@ typedef struct {
         uint8_t value;
     };
     uint16_t source_id;
-    // PWM: the options (PWM_DUTY_INPUT), and the counter levels for the
-    // constant duty and for the duty at input 0 (min) and 1 (max).
-    uint8_t options;
-    uint16_t level;
-    uint16_t level_min;
-    uint16_t level_max;
+    uint8_t drives;     // PWM: the parameter this source drives, PWM_DRIVES_DUTY or _FREQ
 } hwel;
 
 typedef struct {
@@ -66,10 +61,7 @@ hwel decode_hwel(uint32_t op) {
     result.control_type = fifo_op_type(op);
     result.id           = fifo_op_id(op);
     result.value        = fifo_op_value(op);
-    result.options      = 0;
-    result.level        = 0;
-    result.level_min    = 0;
-    result.level_max    = 0;
+    result.drives       = 0;
 
     return result;
 }
@@ -80,12 +72,37 @@ void decode_hwrf(uint32_t rf,hwel *decop) {
 
 static hwel_sources *hwel_source_table = NULL;
 
-// Run a pin as PWM at freq Hz, held low until its source drives it, and return the
-// counter steps in one period. The clock divider is the smallest integer that
-// lets one period fit the 16-bit counter: an integer divider keeps the period free
-// of jitter, and the smallest one gives the finest duty steps. The pin's slice is
-// shared with one other pin, which gets the same frequency.
-static uint32_t pwm_setup(uint pin, uint16_t freq) {
+// ── PWM outputs ──
+// A PWM's duty cycle and frequency are each constant or follow an input (its
+// PWM_DUTY_INPUT and PWM_FREQ_INPUT options), so a PWM is in the source table
+// up to twice: under its duty source and under its frequency source, each
+// entry with the parameter it drives. The state they share is kept by pin.
+#define PWM_DRIVES_DUTY 0
+#define PWM_DRIVES_FREQ 1
+#define PWM_PINS 30
+
+typedef struct {
+    uint8_t options;
+    uint8_t duty, duty_min, duty_max;       // percent
+    uint16_t freq, freq_min, freq_max;      // Hz
+    uint8_t duty_in, freq_in;               // the inputs' last values, 0 to VALUE_FULL
+    uint16_t freq_now;                      // the frequency the slice runs at
+    uint32_t top;                           // counter steps in one period
+} pwm_out;
+
+static pwm_out pwm_outs[PWM_PINS];
+
+// From a at value 0 to b at VALUE_FULL, linearly. b may be below a.
+static uint32_t pwm_lerp(uint32_t a, uint32_t b, uint8_t value) {
+    return (uint32_t)((int32_t)a + ((int32_t)b - (int32_t)a) * value / VALUE_FULL);
+}
+
+// Run a pin's PWM slice at freq Hz and return the counter steps in one period.
+// The clock divider is the smallest integer that lets one period fit the 16-bit
+// counter: an integer divider keeps the period free of jitter, and the smallest
+// one gives the finest duty steps. The slice is shared with one other pin,
+// which gets the same frequency.
+static uint32_t pwm_set_freq(uint pin, uint16_t freq) {
     if (freq < PWM_FREQ_MIN) freq = PWM_FREQ_MIN;
 
     uint32_t steps = clock_get_hz(clk_sys) / freq;    // counter steps per period, undivided
@@ -98,18 +115,30 @@ static uint32_t pwm_setup(uint pin, uint16_t freq) {
     uint slice = pwm_gpio_to_slice_num(pin);
     pwm_set_clkdiv(slice, (float)div);
     pwm_set_wrap(slice, top - 1);
-    pwm_set_gpio_level(pin, 0);
     gpio_set_function(pin, GPIO_FUNC_PWM);
     pwm_set_enabled(slice, true);
-
-    printf("PWM on GPIO %d: %d Hz (div %d, top %d)\n", pin, freq, div, top);
     return top;
 }
 
-// The counter level for a duty cycle in percent, over a period of top steps.
-static uint16_t pwm_level(uint32_t top, uint8_t duty) {
-    if (duty > PWM_DUTY_MAX) duty = PWM_DUTY_MAX;
-    return (uint16_t)(top * duty / PWM_DUTY_MAX);
+// Drive a PWM pin from its state: the frequency and duty cycle, each constant
+// or from its input's last value. The slice is reprogrammed only when the
+// frequency changes.
+static void pwm_apply(uint pin) {
+    pwm_out *p = &pwm_outs[pin];
+
+    uint16_t freq = (p->options & PWM_FREQ_INPUT)
+        ? pwm_lerp(p->freq_min, p->freq_max, p->freq_in) : p->freq;
+    if (freq != p->freq_now) {
+        p->top = pwm_set_freq(pin, freq);
+        p->freq_now = freq;
+    }
+
+    // The duty in percent × VALUE_FULL, to keep the input's resolution.
+    uint32_t duty = (p->options & PWM_DUTY_INPUT)
+        ? pwm_lerp(p->duty_min * VALUE_FULL, p->duty_max * VALUE_FULL, p->duty_in)
+        : p->duty * VALUE_FULL;
+    if (duty > PWM_DUTY_MAX * VALUE_FULL) duty = PWM_DUTY_MAX * VALUE_FULL;
+    pwm_set_gpio_level(pin, p->top * duty / (PWM_DUTY_MAX * VALUE_FULL));
 }
 
 // ── Pausing core 1 for flash writes ──
@@ -272,22 +301,36 @@ void core1_worker() {
                     break;
                 
                 case MSG_HW_PWM: {
-                    multicore_fifo_pop_timeout_us(1000, &op);
-                    decode_hwrf(op,&decop);
+                    // Reference (duty source), PWM, duty, reference (frequency
+                    // source) and frequency words follow.
+                    uint32_t w[5] = {0};
+                    for (int i = 0; i < 5; i++) multicore_fifo_pop_timeout_us(1000, &w[i]);
+                    decode_hwrf(w[0], &decop);
 
-                    uint32_t pwm_word = 0, duty_word = 0;
-                    multicore_fifo_pop_timeout_us(1000, &pwm_word);
-                    multicore_fifo_pop_timeout_us(1000, &duty_word);
+                    uint pin = decop.io;
+                    if (pin >= PWM_PINS) break;
+                    pwm_out *p = &pwm_outs[pin];
+                    *p = (pwm_out){
+                        .options  = fifo_pwm_options(w[1]),
+                        .freq     = fifo_pwm_freq(w[1]),
+                        .duty     = fifo_duty_const(w[2]),
+                        .duty_min = fifo_duty_min(w[2]),
+                        .duty_max = fifo_duty_max(w[2]),
+                        .freq_min = fifo_freq_min(w[4]),
+                        .freq_max = fifo_freq_max(w[4]),
+                    };
+                    // Until its inputs send values they read 0: each parameter
+                    // from an input starts at its min.
+                    pwm_apply(pin);
+                    printf("PWM on GPIO %d: options %02X, %d Hz\n", pin, p->options, p->freq_now);
 
-                    uint32_t top = pwm_setup(decop.io, fifo_pwm_freq(pwm_word));
-                    decop.options   = fifo_pwm_options(pwm_word);
-                    decop.level     = pwm_level(top, fifo_duty_const(duty_word));
-                    decop.level_min = pwm_level(top, fifo_duty_min(duty_word));
-                    decop.level_max = pwm_level(top, fifo_duty_max(duty_word));
-
-                    // Until its source sends a value, the input reads 0: a duty from
-                    // the input starts at min, a constant duty starts off.
-                    if (decop.options & PWM_DUTY_INPUT) pwm_set_gpio_level(decop.io, decop.level_min);
+                    // Filed under the duty source below, as every output; and
+                    // under the frequency source here.
+                    decop.drives = PWM_DRIVES_DUTY;
+                    hwel freq_el = decop;
+                    freq_el.drives = PWM_DRIVES_FREQ;
+                    freq_el.source_id = fifo_ref_source(w[3]);
+                    if (freq_el.source_id) add_packet(freq_el);
                     break;
                 }
 
@@ -301,6 +344,7 @@ void core1_worker() {
 
             case FIFO_OP_CLEAN_SETUP:
                 delete_all_packets();
+                memset(pwm_outs, 0, sizeof pwm_outs);
                 for (uint gpio = 0; gpio < 30; gpio++) {
                     gpio_set_function(gpio, GPIO_FUNC_SIO);
                     gpio_set_dir(gpio, GPIO_IN);
@@ -344,15 +388,10 @@ void core1_worker() {
                         
                         case MSG_HW_PWM:
                             printf("switch PWM %d, value:%i\n",el.io, decop.value);
-                            if (el.options & PWM_DUTY_INPUT) {
-                                // Duty from the input: 0 runs at min, 1 at max, linearly
-                                // between. Min may be above max, which inverts the input.
-                                int32_t span = (int32_t)el.level_max - el.level_min;
-                                pwm_set_gpio_level(el.io, el.level_min + span * decop.value / VALUE_FULL);
-                            } else {
-                                // Constant duty, switched on and off like a GPO.
-                                pwm_set_gpio_level(el.io, decop.value >= VALUE_HALF ? el.level : 0);
-                            }
+                            if (el.io >= PWM_PINS) break;
+                            if (el.drives == PWM_DRIVES_FREQ) pwm_outs[el.io].freq_in = decop.value;
+                            else pwm_outs[el.io].duty_in = decop.value;
+                            pwm_apply(el.io);
                             break;
 
                         default:

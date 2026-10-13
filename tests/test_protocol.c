@@ -216,29 +216,33 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_EQUAL_HEX16(0xFBF0, it.pay[0] << 8 | it.pay[1]);
     TEST_ASSERT_EQUAL_HEX16(0x7BF0, it.pay[2] << 8 | it.pay[3]);
 
-    assert_message(&it, MSG_HW_PWM, 4, 9);
-    TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
+    assert_message(&it, MSG_HW_PWM, 4, 15);
+    TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* duty source n1 */
     TEST_ASSERT_EQUAL_UINT8(2, it.pay[2]);                         /* pin 2 */
     TEST_ASSERT_EQUAL_UINT16(1000, it.pay[3] << 8 | it.pay[4]);    /* 1000 Hz */
-    TEST_ASSERT_EQUAL_HEX8(0, it.pay[5] & PWM_DUTY_INPUT);         /* constant duty */
-    TEST_ASSERT_EQUAL_UINT8(50, it.pay[6]);                        /* 50 % */
-    TEST_ASSERT_EQUAL_UINT8(0, it.pay[7]);                         /* min 0 % */
-    TEST_ASSERT_EQUAL_UINT8(100, it.pay[8]);                       /* max 100 % */
+    TEST_ASSERT_EQUAL_HEX8(PWM_DUTY_INPUT, it.pay[5]);             /* duty from input, constant frequency */
+    TEST_ASSERT_EQUAL_UINT8(50, it.pay[6]);                        /* constant duty 50 % */
+    TEST_ASSERT_EQUAL_UINT8(0, it.pay[7]);                         /* duty at 0: 0 % */
+    TEST_ASSERT_EQUAL_UINT8(50, it.pay[8]);                        /* duty at 1: 50 % */
+    TEST_ASSERT_EQUAL_UINT16(0, it.pay[9] << 8 | it.pay[10]);      /* no frequency source */
+    TEST_ASSERT_EQUAL_UINT16(100, it.pay[11] << 8 | it.pay[12]);   /* frequency at 0 */
+    TEST_ASSERT_EQUAL_UINT16(10000, it.pay[13] << 8 | it.pay[14]); /* frequency at 1 */
     assert_message(&it, MSG_STRING, 4, 3);
     TEST_ASSERT_EQUAL_MEMORY("PWM", it.pay, 3);
     assert_message(&it, MSG_LAYOUT, 4, 4);
     TEST_ASSERT_EQUAL_INT16(200, (int16_t)(it.pay[0] << 8 | it.pay[1]));
     TEST_ASSERT_EQUAL_INT16(120, (int16_t)(it.pay[2] << 8 | it.pay[3]));
-    assert_message(&it, MSG_WIRE, 4, 4);                          /* wire n1 -> n4 */
+    assert_message(&it, MSG_WIRE, 4, 6);                          /* wire n1 -> n4, with its source */
     TEST_ASSERT_EQUAL_HEX16(0xF07F, it.pay[0] << 8 | it.pay[1]);
     TEST_ASSERT_EQUAL_HEX16(0x707F, it.pay[2] << 8 | it.pay[3]);
+    TEST_ASSERT_EQUAL_UINT16(1, it.pay[4] << 8 | it.pay[5]);
 
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
 /* Every label, position and wire in a config example describes a control element in
- * the same config. Positions and wires are exactly 4 bytes, and a wire belongs to an
- * output with a source. */
+ * the same config. Positions are exactly 4 bytes. A wire belongs to an output with a
+ * source: 4 bytes into an LED or GPO, 6 into a PWM, ending with one of its sources. */
 void test_graph_messages_belong_to_controls(void)
 {
     for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
@@ -250,17 +254,22 @@ void test_graph_messages_belong_to_controls(void)
         while (labels.next(&labels)) {
             if (labels.type != MSG_STRING && labels.type != MSG_LAYOUT && labels.type != MSG_WIRE) continue;
             if (labels.type == MSG_STRING) TEST_ASSERT_TRUE_MESSAGE(labels.len > 0, ex->name);
-            if (labels.type != MSG_STRING) TEST_ASSERT_EQUAL_UINT8_MESSAGE(4, labels.len, ex->name);
+            if (labels.type == MSG_LAYOUT) TEST_ASSERT_EQUAL_UINT8_MESSAGE(4, labels.len, ex->name);
 
             bool found = false;
             messages(&controls, ex);
             while (controls.next(&controls)) {
                 if (controls.type > 0x3F || controls.id != labels.id) continue;
-                if (labels.type == MSG_WIRE)
-                    found = (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO || controls.type == MSG_HW_PWM)
-                        && (controls.pay[0] << 8 | controls.pay[1]) != 0;
-                else
+                uint16_t src = controls.pay[0] << 8 | controls.pay[1];
+                if (labels.type != MSG_WIRE)
                     found = true;
+                else if (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO)
+                    found = labels.len == 4 && src != 0;
+                else if (controls.type == MSG_HW_PWM) {
+                    uint16_t wired = labels.pay[4] << 8 | labels.pay[5];
+                    found = labels.len == 6 && wired != 0
+                        && (wired == src || wired == (controls.pay[9] << 8 | controls.pay[10]));
+                }
             }
             TEST_ASSERT_TRUE_MESSAGE(found, ex->name);
         }
@@ -302,9 +311,13 @@ void test_fifo_setup_words_match_save_config(void)
         TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, pin), words->words[n++]);
         TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(it.pay[0] << 8 | it.pay[1]), words->words[n++]);
         if (it.type == MSG_HW_PWM) {
-            TEST_ASSERT_TRUE(n + 2 <= words->len);
+            TEST_ASSERT_TRUE(n + 1 <= words->len);
             TEST_ASSERT_EQUAL_HEX32(fifo_pwm_word(it.pay[3] << 8 | it.pay[4], it.pay[5]), words->words[n++]);
+            TEST_ASSERT_TRUE(n + 3 <= words->len);
             TEST_ASSERT_EQUAL_HEX32(fifo_duty_word(it.pay[6], it.pay[7], it.pay[8]), words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(it.pay[9] << 8 | it.pay[10]), words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_freq_word(it.pay[11] << 8 | it.pay[12], it.pay[13] << 8 | it.pay[14]),
+                                    words->words[n++]);
         }
     }
     TEST_ASSERT_EQUAL_UINT(words->len, n);
@@ -343,6 +356,10 @@ void test_fifo_words_decode(void)
     TEST_ASSERT_EQUAL_UINT8(50, fifo_duty_const(duty));
     TEST_ASSERT_EQUAL_UINT8(80, fifo_duty_min(duty));
     TEST_ASSERT_EQUAL_UINT8(20, fifo_duty_max(duty));
+
+    uint32_t freq = fifo_freq_word(PWM_FREQ_MIN, 65535);
+    TEST_ASSERT_EQUAL_UINT16(PWM_FREQ_MIN, fifo_freq_min(freq));
+    TEST_ASSERT_EQUAL_UINT16(65535, fifo_freq_max(freq));
 }
 
 /* Current behaviour (PROTOCOL.md, Part 3): only 5 type bits travel and core 1 forces bit 5. */

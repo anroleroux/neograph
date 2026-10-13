@@ -137,14 +137,19 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Add a PWM output from the add menu, set it up and wire the button to it.
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
-    const dutyRows = () => page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).filter(t => t.startsWith('Duty')).join('|'));
-    expect(await dutyRows() === 'Duty cycle:|Duty cycle (%):', 'a new PWM does not show a constant duty: ' + await dutyRows());
-    await page.locator('#settings .choice button', { hasText: 'From input' }).dispatchEvent('click');
-    expect(await dutyRows() === 'Duty cycle:|Duty at 0 (%):|Duty at 1 (%):', 'duty from the input does not show min and max: ' + await dutyRows());
+    const rows = () => page.$$eval('#settings .editable .label', ls => ls.slice(2).map(l => l.textContent).join('|'));
+    const choice = (label, option) => page.locator('#settings .choice', { has: page.locator(`.label:text-is("${label}:")`) })
+        .locator('button', { hasText: option }).dispatchEvent('click');
+    expect(await rows() === 'Frequency:|Frequency (Hz):|Duty cycle:|Duty cycle (%):',
+        'a new PWM does not show a constant frequency and duty: ' + await rows());
+    await choice('Duty cycle', 'From input');
+    expect(await rows() === 'Frequency:|Frequency (Hz):|Duty cycle:|Input:|Duty cycle at 0 (%):|Duty cycle at 1 (%):',
+        'duty from the input does not show its input, min and max: ' + await rows());
     await page.evaluate(() => {
         const pwm = elements.n4;
         if (pwm.setFreq('5') !== false || pwm.setDuty('101') !== false || pwm.setPin('29') !== false
-            || pwm.setDutyMin('101') !== false || pwm.setDutyMax('-1') !== false) {
+            || pwm.setDutyMin('101') !== false || pwm.setDutyMax('-1') !== false
+            || pwm.setFreqMin('9') !== false || pwm.setFreqMax('65536') !== false) {
             throw new Error('PWM settings out of range were accepted');
         }
         pwm.setPin('15');
@@ -160,8 +165,19 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await page.evaluate(() => elements.n5.vertical), 'the orientation choice did not make the slider vertical');
     await page.evaluate(() => {
         elements.n5.setLabel('Speed');
-        createEdge('n5', 'n4');
+        createEdge('n5', 'n4');     // a wire into the PWM drives its duty, which has no input yet
     });
+    expect(await page.evaluate(() => elements.n4.dutySource?.name) === 'n5', 'the wire into the PWM does not drive its duty');
+
+    // Add a second slider, and pick it in the PWM's settings to drive its frequency.
+    await page.locator('#add [title="Add a slider"]').dispatchEvent('click');
+    await page.evaluate(() => { elements.n6.setLabel('Pitch'); selectById(4); });
+    await choice('Frequency', 'From input');
+    await page.locator('#settings .editable.select select').first().selectOption('n6');
+    await page.evaluate(() => { elements.n4.setFreqMin('200'); elements.n4.setFreqMax('2000'); });
+    const freqWire = await page.evaluate(() => [elements.n4.freqSource?.name,
+        elements.n4.inConns().map(c => c.start.node.name).join()].join('|'));
+    expect(freqWire === 'n6|n5,n6', 'picking the frequency input did not wire it: ' + freqWire);
     await page.locator('#graph .write svg').dispatchEvent('click');
     const saves = await sent(page);
     expect(saves.length === 1 && saves[0][0] === 0x0A, 'saving did not send one config packet');
@@ -184,18 +200,18 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     packets.push(...commands);
 
     // ── Move the slider: 0.75, the same again (no command), then 0 ──
-    const slider = page.locator('#command .control-slider input');
+    const slider = page.locator('#command .control-slider input').first();
     expect(await page.locator('#command .control-slider.vertical').count() === 1, 'the Command view has no vertical slider');
     const move = (v) => slider.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('input')); }, v);
     await move('191');
-    expect(await page.locator('#command .control-slider .state').textContent() === '0.75',
+    expect(await page.locator('#command .control-slider .state').first().textContent() === '0.75',
         'the slider does not show 0.75');
     await move('191');
     await move('0');
     const moves = await sent(page);
     expect(moves.length === 2 && hex(moves[0]) === '010006' + '1200000501bf' && moves[1][8] === 0x00,
         'moving the slider did not send 0.75 then 0: ' + moves.map(hex));
-    expect(await page.locator('#command .control-slider .state').textContent() === '0.00', 'the slider does not show its value');
+    expect(await page.locator('#command .control-slider .state').first().textContent() === '0.00', 'the slider does not show its value');
     packets.push(...moves);
 
     // ── Network fields: both options, then name, SSID and password ──
@@ -218,7 +234,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const replaced = await page.evaluate(() => {
         createEdge('n5', 'n2');
         return {
-            led: elements.n2.inputs[0].conn.start.node.name,
+            led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
@@ -235,14 +251,16 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         labels: Object.values(elements).map(e => e.label),
         pin: elements.n3.pin,
         pwm: [elements.n4.pin, elements.n4.freq, elements.n4.dutyFromInput, elements.n4.duty,
-            elements.n4.dutyMin, elements.n4.dutyMax].join(),
+            elements.n4.dutyMin, elements.n4.dutyMax, elements.n4.freqFromInput,
+            elements.n4.freqMin, elements.n4.freqMax].join(),
         vertical: elements.n5.vertical,
         wires: gEdges.length,
-        pwmSource: elements.n4.inputs[0].conn?.start.node.name,
+        pwmSources: [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join(),
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80' && restored.vertical && restored.wires === 3 && restored.pwmSource === 'n5'
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000' && restored.vertical && restored.wires === 4
+        && restored.pwmSources === 'n5,n6'
         && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));
 

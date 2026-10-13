@@ -89,6 +89,25 @@ function choiceSetting(label, options, get, set) {
     return row;
 }
 
+// A settings field that picks one of a list: `options` is a list of
+// [value, text] pairs; `set` stores the picked value.
+function selectSetting(label, options, get, set) {
+    const row = document.createElement('div');
+    row.className = 'editable select';
+
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'label';
+    labelSpan.textContent = label + ':';
+
+    const select = document.createElement('select');
+    options.forEach(([value, text]) => select.add(new Option(text, value)));
+    select.value = get();
+    select.addEventListener('change', () => set(select.value));
+
+    row.append(labelSpan, select);
+    return row;
+}
+
 class uiComponents {
     constructor(type,x, y) {
         this.type = type;
@@ -114,11 +133,23 @@ class uiComponents {
 
     // Whether a wire can join this node and `other`: one must be a source (an
     // input such as a button, which feeds any number of outputs) and the other
-    // an output, which takes one wire and has none yet.
+    // an output with room for another wire (most take one, a PWM two), not
+    // already wired from that source.
     canTakeConn(other) {
         if (other === this || other.actDir === this.actDir) return false;
-        const output = this.actDir === 'inputs' ? this : other;
-        return !output.inputs[output.actNum].conn;
+        const [output, source] = this.actDir === 'inputs' ? [this, other] : [other, this];
+        const input = output.inputs[output.actNum];
+        return input.conns.length < input.max && !input.conns.some(c => c.start.node === source);
+    }
+
+    // The wires into this node.
+    inConns() {
+        return this.inputs.flatMap(input => input.conns);
+    }
+
+    // The ID of the node wired into this one, 0 if none (an output's single source).
+    sourceID() {
+        return this.inConns()[0]?.start.node.id ?? 0;
     }
 
     setCoords(x = 0, y = 0) {
@@ -155,11 +186,7 @@ class uiComponents {
                         conn.start.handleDisplay(true);
                     });
                 });
-                this.inputs.forEach(input => {
-                    if (input.conn) {
-                        input.conn.end.handleDisplay(true);
-                    }
-                });
+                this.inConns().forEach(conn => conn.end.handleDisplay(true));
                 break;
 
             case 'mark':
@@ -177,11 +204,7 @@ class uiComponents {
                         conn.start.handleDisplay(false);
                     });
                 });
-                this.inputs.forEach(input => {
-                    if (input.conn) {
-                        input.conn.end.handleDisplay(false);
-                    }
-                });
+                this.inConns().forEach(conn => conn.end.handleDisplay(false));
                 break;
         }
     }
@@ -215,17 +238,24 @@ class uiComponents {
         return [MSG_LAYOUT, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 4, ...int16(this.x), ...int16(this.y)];
     }
 
-    // The shape of the wire into this node, as a MSG_WIRE message keyed by this
+    // The shape of each wire into this node, as a MSG_WIRE message keyed by this
     // node's ID: the handle angle at the source end, then at this end, each in
-    // 1/65536 of a turn (see PROTOCOL.md). Nothing if no wire comes in.
+    // 1/65536 of a turn (see PROTOCOL.md). A node that takes more than one wire
+    // adds the source's ID, to tell its wires apart. Nothing if no wire comes in.
     marshalWire() {
-        const conn = this.inputs[0]?.conn;
-        if (!conn) return [];
         const turn = (angle) => {
             const n = Math.round(angle / (2 * Math.PI) * 65536) & 0xFFFF;
             return [(n >> 8) & 0xFF, n & 0xFF];
         };
-        return [MSG_WIRE, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 4, ...turn(conn.start.angle), ...turn(conn.end.angle)];
+        const several = this.inputs.some(input => input.max > 1);
+        return this.inConns().flatMap(conn => {
+            const shape = [...turn(conn.start.angle), ...turn(conn.end.angle)];
+            if (several) {
+                const src = conn.start.node.id;
+                shape.push((src >> 8) & 0xFF, src & 0xFF);
+            }
+            return [MSG_WIRE, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, shape.length, ...shape];
+        });
     }
 
     clearSettings() {
@@ -242,18 +272,17 @@ class uiComponents {
     // Take the node out of the graph, with every wire to or from it.
     remove() {
         this.outputs.forEach(output => [...output.conns].forEach(conn => conn.remove()));
-        this.inputs.forEach(input => input.conn?.remove());
+        this.inConns().forEach(conn => conn.remove());
         this.gElm.remove();
         delete elements[this.name];
     }
 
     addEdge(e) {
-        if (this.actDir === 'outputs') {
-            this[this.actDir][this.actNum].conns.push(e);
-        } else {
-            this[this.actDir][this.actNum].conn = e;
-        }
+        this[this.actDir][this.actNum].conns.push(e);
     }
+
+    // A wire into this node was taken out.
+    edgeRemoved(e) {}
 
     nodePointerDown(e) {
         e.stopPropagation();
@@ -281,11 +310,7 @@ class uiComponents {
                 conn.moveStart();
             });
         });
-        this.inputs.forEach(input => {
-            if (input.conn) {
-                input.conn.moveEnd();
-            }
-        });
+        this.inConns().forEach(conn => conn.moveEnd());
     }
 
     nodePointerUp(e) {

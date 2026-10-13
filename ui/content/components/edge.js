@@ -9,8 +9,10 @@ class gEdge {
             [n1,n2] = [n2,n1];
         }
 
-        // An output takes one wire: a new one replaces the old.
-        n2.inputs[n2.actNum].conn?.remove();
+        // An output with no room for another wire drops its oldest: on an output
+        // that takes one wire, a new one replaces the old.
+        const inp = n2.inputs[n2.actNum];
+        if (inp.conns.length >= inp.max) inp.conns[0].remove();
 
         this.start.node = n1;
         this.start.mvfunc = () => this.moveStart();
@@ -104,9 +106,10 @@ class gEdge {
         const out = this.start.node.outputs[this.start.node.actNum];
         out.conns = out.conns.filter(c => c !== this);
         const inp = this.end.node.inputs[this.end.node.actNum];
-        if (inp.conn === this) inp.conn = null;
+        inp.conns = inp.conns.filter(c => c !== this);
         gEdges = gEdges.filter(e => e !== this);
         this.elm.remove();
+        this.end.node.edgeRemoved(this);
     }
 
     setPath(d) {

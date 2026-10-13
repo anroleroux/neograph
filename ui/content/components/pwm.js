@@ -1,3 +1,6 @@
+// A PWM output. Its duty cycle and its frequency are each constant, or from an
+// input: a source node, picked in the settings, whose value 0 gives the
+// parameter's min and 1 its max. The PWM's wires are those sources.
 class uiPWM extends uiComponents {
     constructor(x = 0, y = 0) {
         super("pwm",x,y);
@@ -7,20 +10,26 @@ class uiPWM extends uiComponents {
         this.inputs.push(
             {
                 type:"number",
-                conn:null
+                conns:[],
+                max:2
             }
         );
         this.actDir = "inputs";
         this.actNum = 0;
 
         this.pin = 2;
-        this.freq = 1000;
-        // The duty cycle is constant (switched on and off by the input), or
-        // from the input: 0 runs at dutyMin, 1 at dutyMax.
+
         this.dutyFromInput = false;
         this.duty = 50;
         this.dutyMin = 0;
         this.dutyMax = 100;
+        this.dutySource = null;
+
+        this.freqFromInput = false;
+        this.freq = 1000;
+        this.freqMin = 100;
+        this.freqMax = 10000;
+        this.freqSource = null;
 
         this.buildGraphElement();
     }
@@ -50,40 +59,65 @@ class uiPWM extends uiComponents {
         this.pin = Number(pin);
     }
 
-    setFreq(freq) {
-        freq = String(freq).trim();
-        if (!/^\d+$/.test(freq) || Number(freq) < PWM_FREQ_MIN || Number(freq) > 0xFFFF) return false;
-        this.freq = Number(freq);
+    // A whole number from min to max; null if it isn't one.
+    static parse(v, min, max) {
+        v = String(v).trim();
+        if (!/^\d+$/.test(v) || Number(v) < min || Number(v) > max) return null;
+        return Number(v);
     }
 
-    // A duty cycle in percent, from 0 to PWM_DUTY_MAX; null if it isn't one.
-    static parseDuty(duty) {
-        duty = String(duty).trim();
-        if (!/^\d+$/.test(duty) || Number(duty) > PWM_DUTY_MAX) return null;
-        return Number(duty);
-    }
+    setDuty(d)    { d = uiPWM.parse(d, 0, PWM_DUTY_MAX); if (d === null) return false; this.duty = d; }
+    setDutyMin(d) { d = uiPWM.parse(d, 0, PWM_DUTY_MAX); if (d === null) return false; this.dutyMin = d; }
+    setDutyMax(d) { d = uiPWM.parse(d, 0, PWM_DUTY_MAX); if (d === null) return false; this.dutyMax = d; }
+    setFreq(f)    { f = uiPWM.parse(f, PWM_FREQ_MIN, 0xFFFF); if (f === null) return false; this.freq = f; }
+    setFreqMin(f) { f = uiPWM.parse(f, PWM_FREQ_MIN, 0xFFFF); if (f === null) return false; this.freqMin = f; }
+    setFreqMax(f) { f = uiPWM.parse(f, PWM_FREQ_MIN, 0xFFFF); if (f === null) return false; this.freqMax = f; }
 
-    setDuty(duty) {
-        duty = uiPWM.parseDuty(duty);
-        if (duty === null) return false;
-        this.duty = duty;
-    }
-
-    setDutyMin(duty) {
-        duty = uiPWM.parseDuty(duty);
-        if (duty === null) return false;
-        this.dutyMin = duty;
-    }
-
-    setDutyMax(duty) {
-        duty = uiPWM.parseDuty(duty);
-        if (duty === null) return false;
-        this.dutyMax = duty;
-    }
-
-    setDutyMode(mode) {
+    // Make a parameter ('duty' or 'freq') constant or from an input. A constant
+    // parameter has no source.
+    setMode(param, mode) {
         if (mode !== 'constant' && mode !== 'input') return false;
-        this.dutyFromInput = mode === 'input';
+        this[param + 'FromInput'] = mode === 'input';
+        if (mode === 'constant') this.setSource(param, null);
+    }
+
+    // Drive a parameter from a source node, or from none, and redraw the wires.
+    setSource(param, node) {
+        this[param + 'Source'] = node;
+        this.syncWires();
+    }
+
+    // The sources the parameters use.
+    sources() {
+        return [...new Set([this.dutySource, this.freqSource].filter(Boolean))];
+    }
+
+    // Make the wires into this PWM match its sources: one from each.
+    syncWires() {
+        const sources = this.sources();
+        this.inConns().filter(c => !sources.includes(c.start.node)).forEach(c => c.remove());
+        sources.filter(n => !this.inConns().some(c => c.start.node === n))
+            .forEach(n => new gEdge(n, this));
+    }
+
+    // A wire drawn into the PWM drives the duty cycle if that has no source
+    // yet, otherwise the frequency; the parameter it drives is from the input.
+    addEdge(e) {
+        super.addEdge(e);
+        const src = e.start.node;
+        if (this.sources().includes(src)) return;
+        const param = this.dutySource ? 'freq' : 'duty';
+        this[param + 'FromInput'] = true;
+        this[param + 'Source'] = src;
+        if (selected === this) this.createSettings();
+    }
+
+    // A wire taken out of the PWM takes its source off the parameters.
+    edgeRemoved(e) {
+        const src = e.start.node;
+        if (this.dutySource === src) this.dutySource = null;
+        if (this.freqSource === src) this.freqSource = null;
+        if (selected === this) this.createSettings();
     }
 
     createSettings() {
@@ -91,41 +125,50 @@ class uiPWM extends uiComponents {
         const settings = document.getElementById('settings');
         settings.appendChild(editableSetting('GPIO pin', () => this.pin, (pin) => this.setPin(pin),
             {type: 'number', min: 0, max: 28, step: 1}));
-        settings.appendChild(editableSetting('Frequency (Hz)', () => this.freq, (freq) => this.setFreq(freq),
-            {type: 'number', min: PWM_FREQ_MIN, max: 0xFFFF, step: 1}));
-        // Changing the mode shows the duty fields for that mode.
-        settings.appendChild(choiceSetting('Duty cycle', {constant: 'Constant', input: 'From input'},
-            () => this.dutyFromInput ? 'input' : 'constant',
-            (mode) => { this.setDutyMode(mode); this.createSettings(); }));
-        const percent = {type: 'number', min: 0, max: PWM_DUTY_MAX, step: 1};
-        if (this.dutyFromInput) {
-            settings.appendChild(editableSetting('Duty at 0 (%)', () => this.dutyMin, (d) => this.setDutyMin(d), percent));
-            settings.appendChild(editableSetting('Duty at 1 (%)', () => this.dutyMax, (d) => this.setDutyMax(d), percent));
-        } else {
-            settings.appendChild(editableSetting('Duty cycle (%)', () => this.duty, (d) => this.setDuty(d), percent));
+        this.paramSettings(settings, 'freq', 'Frequency', 'Hz', {type: 'number', min: PWM_FREQ_MIN, max: 0xFFFF, step: 1});
+        this.paramSettings(settings, 'duty', 'Duty cycle', '%', {type: 'number', min: 0, max: PWM_DUTY_MAX, step: 1});
+    }
+
+    // The settings of one parameter: constant or from an input, then its value,
+    // or the input with the values at 0 and at 1. Changing the mode or the
+    // input shows the fields for it.
+    paramSettings(settings, param, label, unit, attrs) {
+        const cap = param[0].toUpperCase() + param.slice(1);
+        settings.appendChild(choiceSetting(label, {constant: 'Constant', input: 'From input'},
+            () => this[param + 'FromInput'] ? 'input' : 'constant',
+            (mode) => { this.setMode(param, mode); this.createSettings(); }));
+
+        if (!this[param + 'FromInput']) {
+            settings.appendChild(editableSetting(`${label} (${unit})`, () => this[param],
+                (v) => this['set' + cap](v), attrs));
+            return;
         }
+        // Any input node can be picked; picking one draws its wire.
+        const choices = Object.values(elements).filter(n => n.actDir === 'outputs')
+            .map(n => [n.name, `${n.label} (${n.name})`]);
+        settings.appendChild(selectSetting('Input', [['', 'None'], ...choices],
+            () => this[param + 'Source']?.name ?? '',
+            (name) => { this.setSource(param, elements[name] ?? null); this.createSettings(); }));
+        settings.appendChild(editableSetting(`${label} at 0 (${unit})`, () => this[param + 'Min'],
+            (v) => this['set' + cap + 'Min'](v), attrs));
+        settings.appendChild(editableSetting(`${label} at 1 (${unit})`, () => this[param + 'Max'],
+            (v) => this['set' + cap + 'Max'](v), attrs));
     }
 
     buildUI(commandInterface) {}
 
     marshal() {
-        const buffer = [];
-        let sourceID = 0;
-
-        if (this.inputs[0].conn) {
-            sourceID = this.inputs[0].conn.start.node.id;
-        }
-
-        buffer.push(this.tc);
-        buffer.push(0x00);
-        buffer.push((this.id >> 8) & 0xFF, this.id & 0xFF);
-        buffer.push(0x09);
-        buffer.push((sourceID >> 8) & 0xFF, sourceID & 0xFF);
-        buffer.push(this.pin);
-        buffer.push((this.freq >> 8) & 0xFF, this.freq & 0xFF);
-        buffer.push(this.dutyFromInput ? PWM_DUTY_INPUT : 0x00);
-        buffer.push(this.duty, this.dutyMin, this.dutyMax);
-
-        return buffer;
+        const id16 = (v) => [(v >> 8) & 0xFF, v & 0xFF];
+        const options = (this.dutyFromInput ? PWM_DUTY_INPUT : 0) | (this.freqFromInput ? PWM_FREQ_INPUT : 0);
+        return [
+            this.tc, 0x00, ...id16(this.id), 15,
+            ...id16(this.dutySource?.id ?? 0),
+            this.pin,
+            ...id16(this.freq),
+            options,
+            this.duty, this.dutyMin, this.dutyMax,
+            ...id16(this.freqSource?.id ?? 0),
+            ...id16(this.freqMin), ...id16(this.freqMax),
+        ];
     }
 }

@@ -119,6 +119,19 @@ input {
     border-color: var(--clr-face);
 }
 
+/* A select field: the label, then the list. */
+.editable.select > select {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: var(--clr-face);
+    background: var(--clr-pane);
+    border: 1px solid var(--clr-face-fade);
+    border-radius: 0.35em;
+    padding: var(--step--5) var(--step--3);
+    cursor: pointer;
+}
+
 #container {
     display: flex;
     width: 400vw;

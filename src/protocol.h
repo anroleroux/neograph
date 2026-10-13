@@ -80,7 +80,8 @@
 /* PWM output (MSG_HW_PWM) payload limits and options. */
 #define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
 #define PWM_DUTY_MAX            100     /* duty cycle in percent */
-#define PWM_DUTY_INPUT          0x01    /* options bit 0: 0 = constant duty, 1 = duty from the input, min to max */
+#define PWM_DUTY_INPUT          0x01    /* options bit 0: 0 = constant duty, 1 = duty from its input, min to max */
+#define PWM_FREQ_INPUT          0x02    /* options bit 1: 0 = constant frequency, 1 = frequency from its input, min to max */
 
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
@@ -127,5 +128,10 @@ static inline uint32_t fifo_duty_word(uint8_t duty, uint8_t min, uint8_t max) {
 static inline uint8_t fifo_duty_const(uint32_t word) { return (word >> 24) & 0xFF; }
 static inline uint8_t fifo_duty_min(uint32_t word) { return (word >> 16) & 0xFF; }
 static inline uint8_t fifo_duty_max(uint32_t word) { return (word >> 8) & 0xFF; }
+
+/* Frequency word, sent after the frequency's reference word: [31:16] min Hz · [15:0] max Hz. */
+static inline uint32_t fifo_freq_word(uint16_t min, uint16_t max) { return (uint32_t)min << 16 | max; }
+static inline uint16_t fifo_freq_min(uint32_t word) { return (word >> 16) & 0xFFFF; }
+static inline uint16_t fifo_freq_max(uint32_t word) { return word & 0xFFFF; }
 
 #endif

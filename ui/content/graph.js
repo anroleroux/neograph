@@ -80,7 +80,9 @@ function restoreGraph(msgs) {
         if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
         else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
         else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
+        // A wire into an output that takes several carries its source's ID.
         else if (m.type === MSG_WIRE && m.len === 4) wires.set(m.id, m);
+        else if (m.type === MSG_WIRE && m.len === 6) wires.set(m.id + ':' + (m.pay[4] << 8 | m.pay[5]), m);
     }
     if (controls.size === 0) return;
 
@@ -115,29 +117,44 @@ function restoreGraph(msgs) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
-        if (m.type === MSG_HW_PWM && m.len >= 9) {
+        if (m.type === MSG_HW_PWM && m.len >= 15) {
+            const u16 = (i) => m.pay[i] << 8 | m.pay[i + 1];
             elm.setPin(m.pay[2]);
-            elm.setFreq(m.pay[3] << 8 | m.pay[4]);
-            elm.setDutyMode(m.pay[5] & PWM_DUTY_INPUT ? 'input' : 'constant');
+            elm.setFreq(u16(3));
+            elm.dutyFromInput = !!(m.pay[5] & PWM_DUTY_INPUT);
+            elm.freqFromInput = !!(m.pay[5] & PWM_FREQ_INPUT);
             elm.setDuty(m.pay[6]);
             elm.setDutyMin(m.pay[7]);
             elm.setDutyMax(m.pay[8]);
+            elm.setFreqMin(u16(11));
+            elm.setFreqMax(u16(13));
         }
         if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
     }
     idCounter = Math.max(...controls.keys()) + 1;
 
-    // Wires: each output's source reference, shaped by its MSG_WIRE message if
-    // there is one (otherwise drawn straight between the nodes).
+    // Wires: each output's source references (a PWM's duty and frequency
+    // sources, another output's one source), shaped by their MSG_WIRE messages
+    // if there are any (otherwise drawn straight between the nodes).
     const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
     for (const [id, m] of controls) {
-        if (elements['n' + id].actDir !== 'inputs') continue;
-        const source = m.len >= 2 ? (m.pay[0] << 8 | m.pay[1]) : 0;
-        if (!source || !elements['n' + source]) continue;
+        const elm = elements['n' + id];
+        if (elm.actDir !== 'inputs') continue;
+        const ref = (i) => elements['n' + (m.len >= i + 2 ? (m.pay[i] << 8 | m.pay[i + 1]) : 0)] ?? null;
 
-        const edge = createEdge('n' + source, 'n' + id);
-        const wire = wires.get(id);
-        if (wire) {
+        if (m.type === MSG_HW_PWM) {
+            if (m.len < 15) continue;
+            // A source only drives a parameter that is from the input.
+            elm.dutySource = elm.dutyFromInput ? ref(0) : null;
+            elm.freqSource = elm.freqFromInput ? ref(9) : null;
+            elm.syncWires();
+        } else if (ref(0)) {
+            createEdge(ref(0).name, elm.name);
+        }
+
+        for (const edge of elm.inConns()) {
+            const wire = wires.get(id + ':' + edge.start.node.id) ?? wires.get(id);
+            if (!wire) continue;
             edge.start.angle = angle(wire.pay[0], wire.pay[1]);
             edge.end.angle = angle(wire.pay[2], wire.pay[3]);
             edge.moveStart();

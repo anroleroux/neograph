@@ -8,7 +8,8 @@ class uiLED extends uiComponents {
         this.inputs.push(
             {
                 type:"bool",
-                conn:null
+                conns:[],
+                max:1
             }
         );
         this.actDir = "inputs";
@@ -39,11 +40,7 @@ class uiLED extends uiComponents {
 
     marshal() {
         const buffer = [];
-        let sourceID = 0;
-
-        if (this.inputs[0].conn) {
-            sourceID = this.inputs[0].conn.start.node.id;
-        }
+        const sourceID = this.sourceID();
 
         buffer.push(this.tc);
         buffer.push(0x00);
