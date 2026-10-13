@@ -106,6 +106,8 @@ input {
 .view {
     width: 100vw;
     height: 100vh;
+    /* the visible height, without a mobile browser's address bar */
+    height: 100dvh;
     padding: 0 var(--step-0);
 }
 

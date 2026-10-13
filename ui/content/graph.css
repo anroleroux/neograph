@@ -9,7 +9,8 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    padding: var(--step-1) 0;
+    /* the same margin at the bottom as at the sides */
+    padding: var(--step-1) 0 var(--step-0);
 }
 
 #graph {
