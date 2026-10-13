@@ -401,10 +401,8 @@ When a config arrives, the UI rebuilds the graph from it:
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `20` LED, `21` GPO, `22` PWM) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
-- **Position:** from the node's `A1` message. Without one, a node goes where a node
-  added in the editor would: in the first free slot of its column, the GUI inputs
-  (button, slider) at x = −200 and the hardware outputs (LED, GPO, PWM) at x = 150,
-  in slots 100 apart from y = −100.
+- **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
+  at x = −200, outputs at x = 150, 100 apart from y = −100.
 - **Settings and label:** a slider takes its orientation, a GPO its pin, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
