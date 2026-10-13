@@ -36,14 +36,26 @@ class uiButton extends uiComponents {
         this.gElmHighlight = g.children[3];
     }
 
+    // In the Command view: a tile with the label, the state below it, and a
+    // light that is green while the button is on.
     buildUI(commandInterface) {
-        const controlButton = document.createElement('div');
-        controlButton.className = 'control-btn';
-        controlButton.addEventListener('click', (event) => {
-            this.handleClick(event);
+        const control = document.createElement('button');
+        control.type = 'button';
+        control.className = 'control-btn';
+        control.innerHTML = `<span class="light"></span><span class="name"></span><span class="state"></span>`;
+        control.querySelector('.name').textContent = this.label;
+        control.title = this.label;
+
+        const show = () => {
+            control.setAttribute('aria-pressed', String(this.value));
+            control.querySelector('.state').textContent = this.value ? 'On' : 'Off';
+        };
+        show();
+        control.addEventListener('click', () => {
+            this.handleClick();
+            show();
         });
-        controlButton.innerHTML = `<div></div><button>${this.label}</button>`;
-        commandInterface.appendChild(controlButton);
+        commandInterface.appendChild(control);
     }
 
     marshal() {

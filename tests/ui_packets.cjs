@@ -162,8 +162,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     packets.push(...saves);
 
     // ── Press the button in the Command view, twice ──
-    await page.locator('#command .control-btn').first().dispatchEvent('click');
-    await page.locator('#command .control-btn').first().dispatchEvent('click');
+    const button = page.locator('#command .control-btn').first();
+    // Read once the light's colour transition has finished.
+    const state = () => page.waitForTimeout(300).then(() => button.evaluate(b => b.getAttribute('aria-pressed') + ' ' + b.querySelector('.state').textContent
+        + ' ' + getComputedStyle(b.querySelector('.light')).backgroundColor));
+    expect(await state() === 'false Off rgb(0, 0, 0)', 'the button does not start off: ' + await state());
+    await button.dispatchEvent('click');
+    expect(await state() === 'true On rgb(75, 172, 79)', 'the button does not show on, with a green light: ' + await state());
+    await button.dispatchEvent('click');
+    expect(await state() === 'false Off rgb(0, 0, 0)', 'the button does not show off again: ' + await state());
     const commands = await sent(page);
     expect(commands.length === 2 && commands.every(p => p[0] === 0x01), 'pressing the button did not send two commands');
     expect(commands[0][8] === 0xFF && commands[1][8] === 0x00, 'the button did not send 1 then 0');

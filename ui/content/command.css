@@ -5,7 +5,8 @@
     column-gap: var(--step-0);
 }
 
-#command > div {
+/* A control's tile. */
+#command > * {
     position: relative;
     background-color: var(--clr-face);
     border: 1px solid var(--clr-face);
@@ -15,31 +16,66 @@
     box-shadow: rgba(0, 0, 0, 0.1) 0px 4px 12px;
 }
 
-#command > div > button {
-    background: none;
-    border: none;
+/* A button: its name, with its state below and a light in the corner that
+   turns green while it is on. A long name wraps to two lines. */
+#command > .control-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25em;
+    padding: 1.1em 0.5em 0.6em;     /* the top clears the light */
+    font: inherit;
     color: #20202b;
-    font-size: 2.2em;
-    font-weight: bold;
+    text-align: center;
     cursor: pointer;
-    padding: 0;
-    border-radius: 0.35em;
-    height: 100%;
-    width: 100%;
+    transition: box-shadow 0.15s;
 }
 
-#command > div > div {
-    height: 0.7em;
-    width: 0.7em;
+#command > .control-btn:active {
+    transform: translateY(1px);
+}
+
+#command > .control-btn:focus-visible {
+    outline: 2px solid var(--clr-face);
+    outline-offset: 2px;
+}
+
+#command > .control-btn > .name {
+    font-size: 1.15em;
+    font-weight: bold;
+    line-height: 1.2;
+    overflow-wrap: break-word;
+    hyphens: auto;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+}
+
+#command > .control-btn > .state {
+    font-size: 0.75em;
+    font-weight: bold;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.6;
+}
+
+#command > .control-btn > .light {
     position: absolute;
+    top: 0.5em;
+    right: 0.5em;
+    width: 0.7em;
+    height: 0.7em;
+    border-radius: 50%;
     background-color: #000;
-    padding: 0;
-    margin: 0;
-    top: 0.35em;
-    right: 0.35em;
-    border-radius: 0.35em;
-    /* border: 1px solid #444; */
-    box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px;
+    box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 6px;
+    transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+#command > .control-btn[aria-pressed="true"] > .light {
+    background-color: #4BAC4F;
+    box-shadow: 0 0 0.5em #4BAC4F;
 }
 
 /* A slider: its name and value above, the track below. A horizontal slider
@@ -87,10 +123,6 @@
     direction: rtl;
     width: auto;
     height: 100%;
-}
-
-#command > div.enabled > div {
-    background-color: #4BAC4F;
 }
 
 @media (max-width: 3399px) {#command {grid-template-columns: repeat(8, 1fr)}}
