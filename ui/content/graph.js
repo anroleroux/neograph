@@ -123,6 +123,7 @@ function restoreGraph(msgs) {
             elm.setFreq(u16(3));
             elm.dutyFromInput = !!(m.pay[5] & PWM_DUTY_INPUT);
             elm.freqFromInput = !!(m.pay[5] & PWM_FREQ_INPUT);
+            elm.freqLog = !!(m.pay[5] & PWM_FREQ_LOG);
             elm.setDuty(m.pay[6]);
             elm.setDutyMin(m.pay[7]);
             elm.setDutyMax(m.pay[8]);

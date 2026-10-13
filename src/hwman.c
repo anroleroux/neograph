@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "uthash.h"
@@ -97,6 +98,14 @@ static uint32_t pwm_lerp(uint32_t a, uint32_t b, uint8_t value) {
     return (uint32_t)((int32_t)a + ((int32_t)b - (int32_t)a) * value / VALUE_FULL);
 }
 
+// From a at value 0 to b at VALUE_FULL, logarithmically: each step multiplies by
+// the same factor, so a sweep spends as long on 100-1000 Hz as on 1-10 kHz. a and
+// b are at least PWM_FREQ_MIN, so neither is 0; b may be below a.
+static uint32_t pwm_lerp_log(uint32_t a, uint32_t b, uint8_t value) {
+    float f = a * powf((float)b / a, (float)value / VALUE_FULL) + 0.5f;
+    return f > 0xFFFF ? 0xFFFF : (uint32_t)f;
+}
+
 // Run a pin's PWM slice at freq Hz and return the counter steps in one period.
 // The clock divider is the smallest integer that lets one period fit the 16-bit
 // counter: an integer divider keeps the period free of jitter, and the smallest
@@ -126,8 +135,12 @@ static uint32_t pwm_set_freq(uint pin, uint16_t freq) {
 static void pwm_apply(uint pin) {
     pwm_out *p = &pwm_outs[pin];
 
-    uint16_t freq = (p->options & PWM_FREQ_INPUT)
-        ? pwm_lerp(p->freq_min, p->freq_max, p->freq_in) : p->freq;
+    uint16_t freq = p->freq;
+    if (p->options & PWM_FREQ_INPUT) {
+        uint16_t lo = p->freq_min < PWM_FREQ_MIN ? PWM_FREQ_MIN : p->freq_min;
+        uint16_t hi = p->freq_max < PWM_FREQ_MIN ? PWM_FREQ_MIN : p->freq_max;
+        freq = (p->options & PWM_FREQ_LOG) ? pwm_lerp_log(lo, hi, p->freq_in) : pwm_lerp(lo, hi, p->freq_in);
+    }
     if (freq != p->freq_now) {
         p->top = pwm_set_freq(pin, freq);
         p->freq_now = freq;

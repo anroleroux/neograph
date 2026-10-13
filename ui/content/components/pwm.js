@@ -29,6 +29,7 @@ class uiPWM extends uiComponents {
         this.freq = 1000;
         this.freqMin = 100;
         this.freqMax = 10000;
+        this.freqLog = false;      // from the input: min to max logarithmically, not linearly
         this.freqSource = null;
 
         this.buildGraphElement();
@@ -75,6 +76,11 @@ class uiPWM extends uiComponents {
 
     // Make a parameter ('duty' or 'freq') constant or from an input. A constant
     // parameter has no source.
+    setFreqScale(scale) {
+        if (scale !== 'linear' && scale !== 'log') return false;
+        this.freqLog = scale === 'log';
+    }
+
     setMode(param, mode) {
         if (mode !== 'constant' && mode !== 'input') return false;
         this[param + 'FromInput'] = mode === 'input';
@@ -153,13 +159,20 @@ class uiPWM extends uiComponents {
             (v) => this['set' + cap + 'Min'](v), attrs));
         settings.appendChild(editableSetting(`${label} at 1 (${unit})`, () => this[param + 'Max'],
             (v) => this['set' + cap + 'Max'](v), attrs));
+        // A logarithmic frequency multiplies by the same factor for each step of
+        // the input, so every octave gets the same share of a slider.
+        if (param === 'freq') {
+            settings.appendChild(choiceSetting('Scale', {linear: 'Linear', log: 'Logarithmic'},
+                () => this.freqLog ? 'log' : 'linear', (scale) => this.setFreqScale(scale)));
+        }
     }
 
     buildUI(commandInterface) {}
 
     marshal() {
         const id16 = (v) => [(v >> 8) & 0xFF, v & 0xFF];
-        const options = (this.dutyFromInput ? PWM_DUTY_INPUT : 0) | (this.freqFromInput ? PWM_FREQ_INPUT : 0);
+        const options = (this.dutyFromInput ? PWM_DUTY_INPUT : 0) | (this.freqFromInput ? PWM_FREQ_INPUT : 0)
+            | (this.freqLog ? PWM_FREQ_LOG : 0);
         return [
             this.tc, 0x00, ...id16(this.id), 15,
             ...id16(this.dutySource?.id ?? 0),

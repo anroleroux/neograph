@@ -298,7 +298,7 @@ follows an input: a source element whose value maps linearly onto it, 0 → min 
 | 0–1 | Duty source element ID, 0 = none | |
 | 2 | GPIO pin | 0–28 (2) |
 | 3–4 | Constant frequency, Hz | `PWM_FREQ_MIN` (10)–65535 (1000) |
-| 5 | Options: bit 0 `PWM_DUTY_INPUT`, bit 1 `PWM_FREQ_INPUT`; other bits 0. A set bit makes that parameter follow its source. | (0) |
+| 5 | Options: bit 0 `PWM_DUTY_INPUT`, bit 1 `PWM_FREQ_INPUT`: a set bit makes that parameter follow its source. Bit 2 `PWM_FREQ_LOG`: a frequency that follows its source goes from min to max logarithmically, not linearly. Other bits 0. | (0) |
 | 6 | Constant duty, % | 0–`PWM_DUTY_MAX` (100) (50) |
 | 7 | Duty at input 0 (min), % | 0–100 (0) |
 | 8 | Duty at input 1 (max), % | 0–100 (100) |
@@ -309,6 +309,10 @@ follows an input: a source element whose value maps linearly onto it, 0 → min 
 - **A constant parameter is constant:** a PWM whose duty cycle and frequency are both
   constant runs from setup and ignores its inputs. To switch a PWM with a button, drive
   its duty cycle from the button, min 0 % and max the duty wanted.
+- **A logarithmic frequency** (`PWM_FREQ_LOG`) is min × (max / min)^value: each step
+  of the input multiplies it by the same factor, so a slider spends as long on
+  100–1000 Hz as on 1–10 kHz. With 100 and 10000 Hz, 0.5 gives 1 kHz (5050 Hz when
+  linear).
 - **One source may drive both** parameters; the PWM then has one wire.
 - **Until a source sends a value** it reads 0, so a parameter from an input starts at
   its min.
@@ -587,7 +591,8 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   wired to it with the value byte. A GPO is set high from `VALUE_HALF` up, low below
   it. A PWM stores the value as its duty or frequency input, whichever that source
   drives; a parameter that follows its input becomes min + (max − min) × value /
-  `VALUE_FULL`, and a constant one ignores it. An LED is passed
+  `VALUE_FULL`, or for a logarithmic frequency min × (max / min)^(value / `VALUE_FULL`),
+  rounded; a constant one ignores it. An LED is passed
   back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0.
 - **Clean setup** (`op` 3): clears the table and the PWM states, resets all GPIO pins and PWM slices,
   then carries on as if it were an action word.

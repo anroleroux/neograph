@@ -64,7 +64,7 @@ static void check_config(const uint8_t *p, size_t len) {
             else if ((it.pay[3] << 8 | it.pay[4]) < PWM_FREQ_MIN
                      || (it.pay[11] << 8 | it.pay[12]) < PWM_FREQ_MIN
                      || (it.pay[13] << 8 | it.pay[14]) < PWM_FREQ_MIN) fail("a PWM frequency is under PWM_FREQ_MIN");
-            else if (it.pay[5] & ~(PWM_DUTY_INPUT | PWM_FREQ_INPUT)) fail("PWM options have unknown bits");
+            else if (it.pay[5] & ~(PWM_DUTY_INPUT | PWM_FREQ_INPUT | PWM_FREQ_LOG)) fail("PWM options have unknown bits");
             else if (it.pay[6] > PWM_DUTY_MAX || it.pay[7] > PWM_DUTY_MAX || it.pay[8] > PWM_DUTY_MAX)
                 fail("a PWM duty cycle is over PWM_DUTY_MAX");
             else if ((it.pay[0] | it.pay[1]) && !(it.pay[5] & PWM_DUTY_INPUT))

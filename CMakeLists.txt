@@ -37,6 +37,7 @@ target_link_libraries(twitcher
     pico_mbedtls
     pico_multicore
     pico_cyw43_arch_lwip_poll
+    m
 )
 
 # Enable USB output, disable UART output

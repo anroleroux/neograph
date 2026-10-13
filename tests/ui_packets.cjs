@@ -175,6 +175,9 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await choice('Frequency', 'From input');
     await page.locator('#settings .editable.select select').first().selectOption('n6');
     await page.evaluate(() => { elements.n4.setFreqMin('200'); elements.n4.setFreqMax('2000'); });
+    expect(await page.evaluate(() => elements.n4.freqLog) === false, 'a frequency from an input does not start linear');
+    await choice('Scale', 'Logarithmic');
+    expect(await page.evaluate(() => elements.n4.freqLog), 'the Scale choice did not make the frequency logarithmic');
     const freqWire = await page.evaluate(() => [elements.n4.freqSource?.name,
         elements.n4.inConns().map(c => c.start.node.name).join()].join('|'));
     expect(freqWire === 'n6|n5,n6', 'picking the frequency input did not wire it: ' + freqWire);
@@ -252,14 +255,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         pin: elements.n3.pin,
         pwm: [elements.n4.pin, elements.n4.freq, elements.n4.dutyFromInput, elements.n4.duty,
             elements.n4.dutyMin, elements.n4.dutyMax, elements.n4.freqFromInput,
-            elements.n4.freqMin, elements.n4.freqMax].join(),
+            elements.n4.freqMin, elements.n4.freqMax, elements.n4.freqLog].join(),
         vertical: elements.n5.vertical,
         wires: gEdges.length,
         pwmSources: [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join(),
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
     expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000' && restored.vertical && restored.wires === 4
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 4
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));
