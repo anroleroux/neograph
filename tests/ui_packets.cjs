@@ -105,6 +105,23 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await page.evaluate(() => gEdges.map(e => e.start.node.name + '>' + e.end.node.name).join()) === 'n1>n2',
         'the demo graph does not wire n1 to n2');
 
+    // Wire mode marks only the nodes a wire can join: from a source, the outputs
+    // without a wire; from a free output, the sources.
+    const marks = await page.evaluate(() => {
+        const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
+        toggleConnectMode();
+        selectById(1);      // the button, already wired to the LED
+        const fromButton = marked();
+        clearSelection();
+        selectById(3);      // the GPO, without a wire
+        const fromGpo = marked();
+        clearSelection();
+        toggleConnectMode();
+        return { fromButton, fromGpo };
+    });
+    expect(marks.fromButton === 'n3', 'wire mode from the button marks ' + marks.fromButton);
+    expect(marks.fromGpo === 'n1', 'wire mode from the GPO marks ' + marks.fromGpo);
+
     await page.evaluate(() => {
         createEdge('n1', 'n3');      // n1 -> n2 is wired by default
         elements.n1.setLabel('Start');
@@ -179,6 +196,18 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(updates.filter(p => p[0] === 0x0B).length === 4 && updates.filter(p => p[0] === 0x0C).length === 1,
         'field updates are not 4 config and 1 secret');
     packets.push(...updates);
+
+    // A wire into an output that has one replaces it, on both nodes.
+    const replaced = await page.evaluate(() => {
+        createEdge('n5', 'n2');
+        return {
+            led: elements.n2.inputs[0].conn.start.node.name,
+            button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
+            wires: gEdges.filter(e => e.end.node === elements.n2).length,
+        };
+    });
+    expect(replaced.led === 'n5' && replaced.button === 'n3' && replaced.wires === 1,
+        'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
 

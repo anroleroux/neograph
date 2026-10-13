@@ -9,6 +9,9 @@ class gEdge {
             [n1,n2] = [n2,n1];
         }
 
+        // An output takes one wire: a new one replaces the old.
+        n2.inputs[n2.actNum].conn?.remove();
+
         this.start.node = n1;
         this.start.mvfunc = () => this.moveStart();
         this.start.handleDisplay = (display) => this.sHandle.classList.toggle('hide', !display);

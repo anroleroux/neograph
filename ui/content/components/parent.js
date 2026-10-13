@@ -112,8 +112,13 @@ class uiComponents {
         this.clearSettings();
     }
 
-    canTakeConn(connType){
-        return true;
+    // Whether a wire can join this node and `other`: one must be a source (an
+    // input such as a button, which feeds any number of outputs) and the other
+    // an output, which takes one wire and has none yet.
+    canTakeConn(other) {
+        if (other === this || other.actDir === this.actDir) return false;
+        const output = this.actDir === 'inputs' ? this : other;
+        return !output.inputs[output.actNum].conn;
     }
 
     setCoords(x = 0, y = 0) {

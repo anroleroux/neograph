@@ -251,33 +251,14 @@ function selectById(id) {
     highlightSelection();
 }
 
+// Highlight the selected node. In wire mode, also mark the nodes it can be
+// wired to: clicking a marked node adds the wire.
 function highlightSelection() {
-    let connect = false;
-    let connDir = 'inputs';
-    let connType = 'bool';
-
-    if (wireMode) {
-        let n = elements['n'+selected.id];
-
-        if (n.actDir === 'outputs') {
-            if (n.outputs[n.actNum].conns.length === 0) {
-                connect = true;
-                connType = n.outputs[n.actNum].type;
-            }
-        } else {
-            if (!n.inputs[n.actNum].conn) {
-                connect = true;
-                connType = n.inputs[n.actNum].type;
-                connDir = 'outputs';
-            }
-        }
-    }
-
     Object.entries(elements).forEach(([key,n]) => {
         if (key === selected.name) {
             n.highlight('select');
         } else {
-            if (connect && n.canTakeConn(connType)) {
+            if (wireMode && n.canTakeConn(selected)) {
                 n.highlight('mark');
             } else {
                 n.highlight('hide');
