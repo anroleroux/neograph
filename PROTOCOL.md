@@ -652,8 +652,9 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   `VALUE_FULL`, or for a logarithmic frequency min × (max / min)^(value / `VALUE_FULL`),
   rounded; a constant one ignores it. An LED is passed
   back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0.
-- **Clean setup** (`op` 3): clears the table and the PWM states, and resets all GPIO
-  pins and PWM slices.
+- **Clean setup** (`op` 3): clears the table and the PWM states, and turns off the
+  pins it set up as GPO or PWM outputs, making them inputs again. Other pins are left
+  alone: on the Pico 2 W, GPIO 23, 24, 25 and 29 drive the WiFi chip.
 
 ### Pausing core 1 for flash writes
 

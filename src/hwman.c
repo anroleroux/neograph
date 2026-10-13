@@ -32,8 +32,6 @@ float read_internal_temperature() {
     return temperature;
 }
 
-#define PWM_SLICE_NUM 12
-
 typedef struct {
     uint8_t operation;
     uint8_t control_type;
@@ -92,6 +90,11 @@ typedef struct {
 } pwm_out;
 
 static pwm_out pwm_outs[PWM_PINS];
+
+// The pins core 1 has set up as a GPO or PWM, one bit per GPIO. A clean setup
+// resets only these: other pins belong to someone else, such as GPIO 23, 24,
+// 25 and 29, which drive the WiFi chip on the Pico 2 W.
+static uint32_t used_pins = 0;
 
 // From a at value 0 to b at VALUE_FULL, linearly. b may be below a.
 static uint32_t pwm_lerp(uint32_t a, uint32_t b, uint8_t value) {
@@ -311,6 +314,7 @@ void core1_worker() {
 
                     gpio_init(decop.io);
                     gpio_set_dir(decop.io, GPIO_OUT);
+                    if (decop.io < PWM_PINS) used_pins |= 1u << decop.io;
                     break;
                 
                 case MSG_HW_PWM: {
@@ -322,6 +326,7 @@ void core1_worker() {
 
                     uint pin = decop.io;
                     if (pin >= PWM_PINS) break;
+                    used_pins |= 1u << pin;
                     pwm_out *p = &pwm_outs[pin];
                     *p = (pwm_out){
                         .options  = fifo_pwm_options(w[1]),
@@ -358,17 +363,17 @@ void core1_worker() {
             case FIFO_OP_CLEAN_SETUP:
                 delete_all_packets();
                 memset(pwm_outs, 0, sizeof pwm_outs);
-                for (uint gpio = 0; gpio < 30; gpio++) {
+                for (uint gpio = 0; gpio < PWM_PINS; gpio++) {
+                    if (!(used_pins & (1u << gpio))) continue;
+                    if (gpio_get_function(gpio) == GPIO_FUNC_PWM) {
+                        pwm_set_enabled(pwm_gpio_to_slice_num(gpio), false);
+                        pwm_set_gpio_level(gpio, 0);
+                    }
                     gpio_set_function(gpio, GPIO_FUNC_SIO);
                     gpio_set_dir(gpio, GPIO_IN);
                     gpio_disable_pulls(gpio);
                 }
-                for (uint slice_num = 0; slice_num < PWM_SLICE_NUM; slice_num++) {
-                    pwm_set_enabled(slice_num, false);
-                    pwm_set_wrap(slice_num, 0xFFFF);
-                    pwm_set_chan_level(slice_num, PWM_CHAN_A, 0);
-                    pwm_set_chan_level(slice_num, PWM_CHAN_B, 0);
-                }
+                used_pins = 0;
                 printf("hw man cleared controls\n");
                 break;
 
