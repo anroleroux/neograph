@@ -12,6 +12,7 @@ let gEdges = [];
 let idCounter = 1;
 let idEdgeCounter = 1;
 let selected = null;
+let selectedEdge = null;
 let wireMode = false;
 
 const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FIELD];
@@ -86,6 +87,7 @@ function restoreGraph(msgs) {
     gEdges = [];
     idEdgeCounter = 1;
     selected = null;
+    selectedEdge = null;
 
     // Nodes saved without a position are stacked: inputs left, outputs right.
     const stacked = { inputs: 0, outputs: 0 };
@@ -223,6 +225,10 @@ function selectById(id) {
     if (elements['n'+id].marked) {
         createEdge(selected.name, 'n'+id);
     }
+    if (selectedEdge) {
+        selectedEdge.highlight(false);
+        selectedEdge = null;
+    }
 
     selected = elements['n'+id];
     selected.id = id;
@@ -279,6 +285,43 @@ function highlightSelection() {
 //     orig: { x: 0, y: 0 }
 // };
 
+// Select a wire, and nothing else.
+function selectEdge(edge) {
+    clearSelection();
+    selectedEdge = edge;
+    edge.highlight(true);
+}
+
+function clearSelection() {
+    selected = null;
+    Object.values(elements).forEach(n => {
+        n.highlight('hide');
+        n.clearSettings();
+    });
+    if (selectedEdge) {
+        selectedEdge.highlight(false);
+        selectedEdge = null;
+    }
+}
+
+// Delete the selected wire.
+function deleteSelected() {
+    if (selectedEdge) {
+        selectedEdge.remove();
+        selectedEdge = null;
+    }
+}
+
+// Delete or Backspace deletes the selection while the graph is shown, unless
+// the key is for a text field.
+document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+    if (container.className !== 'graph') return;
+    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+    e.preventDefault();
+    deleteSelected();
+});
+
 // converts mouse coordinates from screen/browser coordinates
 // to SVG coordinate space.
 function svgPoint(evt) {
@@ -293,12 +336,7 @@ function svgPoint(evt) {
 // clicking blank deselects
 svg.addEventListener('pointerdown', function (e) {
     if (e.target === svg || e.target === document.getElementById('grid')) {
-        selected = null;
-
-        Object.entries(elements).forEach(([key,n]) => {
-            n.highlight('hide');
-            n.clearSettings();
-        });
+        clearSelection();
     }
 
     // pan start when space pressed or middle button
