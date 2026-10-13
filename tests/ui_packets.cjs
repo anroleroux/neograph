@@ -206,6 +206,30 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(plot.buttonToPlot, 'a button was wired to a plot');
     expect(plot.sliderToPlot, 'the slider was not wired to the plot');
 
+    // Add the core temperature and a second plot for it. Its values reach only
+    // the browser, so it drives a plot but no hardware output.
+    await page.locator('#add [title="Add the core temperature"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
+    const core = await page.evaluate(() => {
+        elements.n9.setLabel('Temperature');
+        clearSelection();
+        toggleConnectMode();
+        selectById(8);
+        const marked = Object.values(elements).filter(e => e.marked).map(e => e.name).join();
+        clearSelection();
+        toggleConnectMode();
+        return {
+            marked,
+            toPwm: createEdge('n8', 'n4') === null && elements.n4.setSource('freq', elements.n8) === false,
+            toLed: createEdge('n8', 'n3') === null,
+            toPlot: createEdge('n8', 'n9') !== null && elements.n9.sourceID() === 8,
+        };
+    });
+    expect(core.marked === 'n9', 'wire mode from the core temperature marks ' + core.marked);
+    expect(core.toPwm, 'the core temperature was wired to a PWM');
+    expect(core.toLed, 'the core temperature was wired to a GPO');
+    expect(core.toPlot, 'the core temperature was not wired to the plot');
+
     await page.locator('#graph .write svg').dispatchEvent('click');
     const saves = await sent(page);
     expect(saves.length === 1 && saves[0][0] === 0x0A, 'saving did not send one config packet');
@@ -245,9 +269,9 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // The plot took each value the slider sent, after the 0 it started from, and shows the latest.
     const trace = await page.evaluate(() => elements.n7.samples.map(([, v]) => v.toFixed(2)).join());
     expect(trace === '0.00,0.75,0.00', 'the plot did not follow the slider: ' + trace);
-    expect(await page.locator('#command .control-plot canvas').count() === 1, 'the Command view has no plot');
+    expect(await page.locator('#command .control-plot canvas').count() === 2, 'the Command view has no plot');
     await toCommandView(page);
-    expect(await page.locator('#command .control-plot .state').textContent() === '0', 'the plot does not show its value');
+    expect(await page.locator('#command .control-plot .state').first().textContent() === '0', 'the plot does not show its value');
 
     // A plot takes any number, not only 0 to 1, and its axis fits what it shows.
     const anyRange = await page.evaluate(() => {
@@ -266,6 +290,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(anyRange.wide === '-500 0 500 1000 1500', 'the axis for -250 to 1200.5 is ' + anyRange.wide);
     expect(anyRange.flat === '2.6 2.8 3.0 3.2 3.4', 'the axis for a flat 3 is ' + anyRange.flat);
     expect(anyRange.none === '0.0 0.5 1.0', 'the axis with no values is ' + anyRange.none);
+
+    // The device's temperature telemetry reaches the core node, its tile and its plot.
+    await page.evaluate(() => window.__ws.receive('core 31.27'));
+    const temperature = await page.evaluate(() => ({
+        tile: document.querySelector('#command .control-reading .state').textContent,
+        plot: elements.n9.samples.map(([, v]) => v).join(),
+    }));
+    expect(temperature.tile === '31.3 °C', 'the core temperature tile shows ' + temperature.tile);
+    expect(temperature.plot === ',31.27', 'the temperature plot holds ' + temperature.plot);
 
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {
@@ -286,15 +319,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
-        const pwm = new uiPWM(400, 300);      // n8, no wires yet
-        new uiButton(-400, 300);              // n9
+        const pwm = new uiPWM(400, 300);      // n10, no wires yet
+        new uiButton(-400, 300);              // n11
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
-        selectById(8);
+        selectById(10);
         const fromPwm = marked();
         clearSelection();
         toggleConnectMode();
-        selectById(8);
+        selectById(10);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
         const picks = [...document.querySelectorAll('#settings select option')].map(o => o.value).join();
@@ -302,7 +335,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
-            buttonToPwm: createEdge('n9', 'n8') === null && pwm.setSource('duty', elements.n9) === false
+            buttonToPwm: createEdge('n11', 'n10') === null && pwm.setSource('duty', elements.n11) === false
                 && pwm.inConns().length === 0,
         };
     });
@@ -313,14 +346,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n9', 'n2');
+        createEdge('n11', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n9' && replaced.button === 'n3' && replaced.wires === 1,
+    expect(replaced.led === 'n11' && replaced.button === 'n3' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
@@ -335,15 +368,16 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             elements.n4.dutyMin, elements.n4.dutyMax, elements.n4.freqFromInput,
             elements.n4.freqMin, elements.n4.freqMax, elements.n4.freqLog].join(),
         vertical: elements.n5.vertical,
-        plot: [elements.n7.window, elements.n7.sourceID()].join(),
+        plot: [elements.n7.window, elements.n7.sourceID(), elements.n9.sourceID()].join(),
         plots: document.querySelectorAll('#command .control-plot').length,
+        readings: document.querySelectorAll('#command .control-reading').length,
         wires: gEdges.length,
         pwmSources: [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join(),
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 5
-        && restored.plot === '20,5' && restored.plots === 1
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 6
+        && restored.plot === '20,5,8' && restored.plots === 2 && restored.readings === 1
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));

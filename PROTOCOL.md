@@ -199,7 +199,8 @@ connected client as WebSocket text frames:
 | `uptime N` | Uptime in 1.2 s ticks (integer) |
 | `core T` | Chip temperature in °C, two decimals |
 
-The UI receives these but currently ignores them.
+The UI hands `core T` to the [core temperature](#core-temperature) nodes and ignores
+`uptime N`.
 
 ### Limits
 
@@ -268,7 +269,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `20` | `MSG_HW_LED` | HW output: onboard LED | Implemented |
 | `21` | `MSG_HW_GPO` | HW output: GPIO pin | Implemented |
 | `22` | `MSG_HW_PWM` | HW output: PWM pin | Implemented |
-| `30` | `MSG_HW_CORE` | HW input: core telemetry | Reserved |
+| `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Reserved |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Reserved |
 | `A0` | `MSG_STRING` | String: a node's label | Implemented |
@@ -286,6 +287,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `10` Button | 0 | None. The device ignores button messages in a config. |
 | `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
 | `02` Plot | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10). The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
+| `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
 | `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
 | `22` PWM | 15 | See below |
@@ -341,9 +343,10 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button | `20` LED, `21` GPO | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider | `22` PWM, `02` plot | 0 to 1 (`00`–`FF`) |
+| Floating | `12` slider, `30` core temperature | `22` PWM, `02` plot | A slider 0 to 1 (`00`–`FF`); the core temperature in °C |
 
-The UI only draws wires between matching types, and drops mismatched source references
+The core temperature's values reach only the browser, so it drives a plot but not a
+PWM. The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
 
 When the user saves, the UI sends a `0A` config whose payload is:
@@ -400,7 +403,8 @@ When a config arrives, the UI rebuilds the graph from it:
 - **If the config has no control messages** (a first-boot config), the UI keeps the
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
-  (`10` button, `12` slider, `02` plot, `20` LED, `21` GPO, `22` PWM) becomes a node with the message's ID. If an ID
+  (`10` button, `12` slider, `02` plot, `20` LED, `21` GPO, `22` PWM, `30` core
+  temperature) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
@@ -408,7 +412,7 @@ When a config arrives, the UI rebuilds the graph from it:
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source ID of an output that is a restored node of the
-  output's [type](#wire-types): an LED's or GPO's button, a plot's slider, and the sliders of a PWM's
+  output's [type](#wire-types): an LED's or GPO's button, a plot's slider or core temperature, and the sliders of a PWM's
   parameters that follow an input. Each is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
@@ -425,13 +429,28 @@ that time.
   not finite leaves a gap.
 - **The values come from the source in the browser.** A source hands each new
   value to the plots wired to it (`emit` in `ui/content/components/parent.js`); a
-  slider does so when it sends its [command](#01-command). Nothing is sent for a
+  slider does so when it sends its [command](#01-command), and a
+  [core temperature](#core-temperature) when its telemetry arrives. Nothing is sent for a
   plot, and the device stores its message but sends nothing to core 1 for it.
 - **The plot holds each value until the next.** A slider sends a value only when it
   changes, so the trace is a step line. Wiring a plot starts it from the slider's
   current value; taking the wire out ends the trace.
 - **The history lives in the page.** It is lost on reload, and kept for the largest
   window (255 s), so a wider window shows what was already received.
+
+### Core temperature
+
+A core temperature node (`30`) is a floating source whose value is the chip's
+temperature in °C, from the `core T` [telemetry text frames](#telemetry-text-frames).
+The Command view shows it on a tile, and a plot wired to it draws it.
+
+- **Nothing new on the device.** Core 1 measures the temperature every 5 ticks (6 s)
+  whatever the graph, and core 0 sends it to the most recent client. The UI hands
+  each value to every core temperature node, which hands it to its plots.
+- **Until the first frame** the node has no value: its tile shows `–`, and a plot
+  wired to it draws nothing.
+- **Browser only.** The device never sees these values as a source, so a core
+  temperature can't drive a PWM; the UI refuses that wire.
 
 ### Labels, positions and wires
 

@@ -25,6 +25,7 @@ const NODE_CLASSES = {
     [MSG_HW_GPO]: uiGPO,
     [MSG_HW_PWM]: uiPWM,
     [MSG_UI_GRAPH]: uiPlot,
+    [MSG_HW_CORE]: uiCore,
 };
 
 // Rebuild the Command view from the graph's UI inputs and outputs.
