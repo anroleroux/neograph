@@ -174,9 +174,21 @@ function restoreGraph(msgs) {
     buildCommandInterface();
 }
 
-// Show or hide the add-node buttons.
+// Show or hide the add-node buttons. Folded, each sits on the plus: its offset
+// from the plus is measured first (layout offsets, which ignore the transform),
+// without a transition, so the buttons fold to where the plus is now.
 function toggleAddMenu() {
-    document.getElementById('add').classList.toggle('open');
+    const menu = document.getElementById('add');
+    const plus = menu.querySelector('.toggle');
+    const buttons = [...menu.children].filter(b => b !== plus);
+    buttons.forEach(b => {
+        b.style.transition = 'none';
+        b.style.setProperty('--dx', `${plus.offsetLeft - b.offsetLeft}px`);
+        b.style.setProperty('--dy', `${plus.offsetTop - b.offsetTop}px`);
+    });
+    void menu.offsetWidth;      // apply the offsets before the transition comes back
+    buttons.forEach(b => b.style.transition = '');
+    menu.classList.toggle('open');
 }
 
 // Add a node of a control message type in the middle of the view, and select it.

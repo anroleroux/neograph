@@ -56,26 +56,35 @@
     margin-left: var(--step-0);
 }
 
-/* The add-node buttons, in two columns below the plus: the GUI nodes (button,
-   slider, plot) on the left, the hardware nodes (LED, GPO, PWM, core
-   temperature, ADC) on the right. Each button's --c and --r give its column and row;
-   the plus is at column 0, row 0.
-   Folded, they hide behind the plus; open, each slides out to its place. */
+/* The add-node buttons, in four blocks across the canvas, sources on the left
+   and outputs on the right:
+
+     +             (toolbar)          row 1
+     BTN SLD         LED GPO PWM      row 2: GUI inputs, HW outputs
+                                      row 3: the gap between the two pairs
+     TMP ADC                 PLT      row 4: HW inputs, GUI outputs
+
+   Each button's --col and --row give its grid cell. The right-hand blocks sit at
+   the right edge, under the toolbar's buttons.
+   Folded, they hide behind the plus; open, each slides out to its place.
+   --dx and --dy, each button's offset from the plus, are measured by
+   toggleAddMenu, as the right-hand blocks move with the canvas's width. */
 #graph > .buttons.add {
     display: grid;
-    grid-template-columns: repeat(2, max-content);
+    grid-template-columns: repeat(2, max-content) 1fr repeat(3, max-content);
+    grid-template-rows: repeat(2, max-content) var(--step-3) max-content;
     gap: var(--step-0);
     align-items: start;
     left: 0;
-    right: auto;
+    right: 0;
     /* the folded buttons must not block the canvas */
     pointer-events: none;
 }
 
 #graph > .buttons.add > div {
     margin: 0;
-    grid-column: calc(var(--c) + 1);
-    grid-row: calc(var(--r) + 1);
+    grid-column: var(--col);
+    grid-row: var(--row);
     pointer-events: auto;
     transition: transform 0.25s ease, opacity 0.25s ease;
 }
@@ -91,8 +100,7 @@
 }
 
 #graph > .buttons.add:not(.open) > div:not(.toggle) {
-    transform: translate(calc(-1 * var(--c) * (var(--step-5) + var(--step-0))),
-                         calc(-1 * var(--r) * (var(--step-5) + var(--step-0))));
+    transform: translate(var(--dx, 0), var(--dy, 0));
     opacity: 0;
     pointer-events: none;
 }
