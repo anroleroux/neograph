@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, PWM_, SLIDER_ and VALUE_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, PWM_, SLIDER_, VALUE_, PIN_ and ADC_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -47,7 +47,7 @@
 #define MSG_HW_PWM              0x22
 #define MSG_HW_CORE             0x30    /* the core temperature, from telemetry */
 #define MSG_HW_GPI              0x31    /* reserved */
-#define MSG_HW_ADC              0x32    /* reserved */
+#define MSG_HW_ADC              0x32    /* an analog input pin */
 
 /* Supporting and networking element types. */
 #define MSG_STRING              0xA0    /* a node's label, keyed by node ID */
@@ -77,6 +77,16 @@
 /* Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical. */
 #define SLIDER_VERTICAL         0x01
 
+/* GPIO pins a GPO or PWM may use, bit n = GPIO n: GPIO 0-22 and 26-28, the ones on
+   the Pico 2 W's header. GPIO 23, 24, 25 and 29 drive the WiFi chip. */
+#define PIN_USABLE_MASK         0x1C7FFFFF
+
+/* ADC input (MSG_HW_ADC) payload byte 0: the channel, 0 to ADC_CHANNELS - 1, on GPIO
+   ADC_PIN_FIRST + channel. ADC3, on GPIO 29, is the WiFi chip's clock on the Pico 2 W. */
+#define ADC_CHANNELS            3
+#define ADC_PIN_FIRST           26
+#define ADC_RAW_FULL            4095    /* a 12-bit reading at the reference voltage, 3.3 V */
+
 /* PWM output (MSG_HW_PWM) payload limits and options. */
 #define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
 #define PWM_DUTY_MAX            100     /* duty cycle in percent */
@@ -84,21 +94,24 @@
 #define PWM_FREQ_INPUT          0x02    /* options bit 1: 0 = constant frequency, 1 = frequency from its input, min to max */
 #define PWM_FREQ_LOG            0x04    /* options bit 2: a frequency from its input goes from min to max 0 = linearly, 1 = logarithmically */
 
+static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
+
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
 /* Core 0 -> core 1: operation word, bits 31-30. */
 #define FIFO_OP_CONTROL_ACTION  1
 #define FIFO_OP_SETUP           2
-#define FIFO_OP_CLEAN_SETUP     3       /* handled by core 1, never sent */
+#define FIFO_OP_CLEAN_SETUP     3       /* sent first for every config, clears core 1's controls */
 
 /* Core 1 -> core 0: tag word, followed by one value word. */
 #define FIFO_TAG_UPTIME         0       /* value: uptime in 1.2 s ticks */
 #define FIFO_TAG_TEMPERATURE    1       /* value: float bits, degrees C */
 #define FIFO_TAG_LED            2       /* value: onboard LED state, 0 or 1 */
+#define FIFO_TAG_ADC            3       /* value: an ADC reading, see fifo_adc_word */
 
 /*
  * Operation word: [31:30] op · [29] unused · [28:24] type & 0x1F ·
- * [23:8] element ID · [7:0] value (action) or GPIO pin (setup)
+ * [23:8] element ID · [7:0] value (action), or GPIO pin or ADC channel (setup)
  */
 static inline uint32_t fifo_op_word(uint8_t op, uint8_t type, uint16_t id, uint8_t value) {
     return (uint32_t)(op & 0x03) << 30
@@ -112,6 +125,11 @@ static inline uint8_t fifo_op(uint32_t word) { return (word >> 30) & 0x03; }
 static inline uint8_t fifo_op_type(uint32_t word) { return ((word >> 24) & 0x1F) | 0x20; }
 static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
 static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
+
+/* ADC word, the value after FIFO_TAG_ADC: [31:16] channel · [15:0] reading, 0 to ADC_RAW_FULL. */
+static inline uint32_t fifo_adc_word(uint8_t channel, uint16_t raw) { return (uint32_t)channel << 16 | raw; }
+static inline uint8_t fifo_adc_channel(uint32_t word) { return (word >> 16) & 0xFF; }
+static inline uint16_t fifo_adc_raw(uint32_t word) { return word & 0xFFFF; }
 
 /* Reference word, sent after a setup word for LED/GPO/PWM: [31:16] source element ID. */
 static inline uint32_t fifo_ref_word(uint16_t source_id) { return (uint32_t)source_id << 16; }

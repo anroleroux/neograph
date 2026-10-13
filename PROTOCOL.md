@@ -61,13 +61,13 @@ sequenceDiagram
     UI->>C0: WebSocket upgrade
     C0-->>UI: 101 Switching Protocols
     C0-->>UI: 0x0D Device ID
-    C0->>C1: setup words for each stored LED/GPO/PWM
+    C0->>C1: setup words for each stored LED/GPO/PWM/ADC
     C0-->>UI: 0x0A Config (if one is stored)
     Note over UI: user edits network fields
     UI->>C0: 0x0B / 0x0C field update (written to flash)
     Note over UI: user saves the graph
     UI->>C0: 0x0A Config (written to flash)
-    C0->>C1: setup words for each LED/GPO/PWM
+    C0->>C1: setup words for each LED/GPO/PWM/ADC
     Note over UI: user presses a button
     UI->>C0: 0x01 Command
     C0->>C1: action word
@@ -75,6 +75,10 @@ sequenceDiagram
     loop every 5 ticks (1.2 s each)
         C1-->>C0: uptime / temperature
         C0-->>UI: text frame "uptime N" / "core T"
+    end
+    loop each ADC channel in the graph, up to every 100 ms
+        C1-->>C0: ADC reading
+        C0-->>UI: text frame "adc C R"
     end
 ```
 
@@ -118,7 +122,7 @@ header included, is what the device stores in flash (see [Storage](#storage)).
 - **HW → UI.** Sent on connect, after `0D`, if flash holds a config. The UI
   rebuilds its graph from it (see [Restoring the graph](#restoring-the-graph)).
 - **UI → HW.** Sent when the user saves the graph. The device writes the whole
-  packet to flash, then sends setup words for each LED, GPO and PWM element to core 1.
+  packet to flash, then sends setup words for each LED, GPO, PWM and ADC element to core 1.
 
 [Part 2](#part-2-config-model) describes the payload; [The graph](#the-graph) has a
 full example.
@@ -198,9 +202,10 @@ connected client as WebSocket text frames:
 |---|---|
 | `uptime N` | Uptime in 1.2 s ticks (integer) |
 | `core T` | Chip temperature in °C, two decimals |
+| `adc C R` | A reading of ADC channel C (0–2): R from 0 to 4095 (`ADC_RAW_FULL`, 3.3 V) |
 
-The UI hands `core T` to the [core temperature](#core-temperature) nodes and ignores
-`uptime N`.
+The UI hands `core T` to the [core temperature](#core-temperature) nodes, `adc C R`
+to the [ADC](#adc-inputs) nodes on channel C, and ignores `uptime N`.
 
 ### Limits
 
@@ -271,7 +276,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `22` | `MSG_HW_PWM` | HW output: PWM pin | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Reserved |
-| `32` | `MSG_HW_ADC` | HW input: ADC | Reserved |
+| `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
 | `A0` | `MSG_STRING` | String: a node's label | Implemented |
 | `A1` | `MSG_LAYOUT` | A node's position in the graph | Implemented |
 | `A2` | `MSG_WIRE` | The shape of the wire into an output | Implemented |
@@ -286,11 +291,22 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 |---|---|---|
 | `10` Button | 0 | None. The device ignores button messages in a config. |
 | `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
-| `02` Plot | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10). The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
+| `02` Plot | 3–19 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10) · bytes 3…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
+| `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
-| `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
+| `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
 | `22` PWM | 15 | See below |
+
+#### GPIO pins
+
+A GPO or PWM may use **GPIO 0–22 and 26–28**, the pins on the Pico 2 W's header
+(`PIN_USABLE_MASK`, bit n for GPIO n). GPIO 23, 24, 25 and 29 drive the WiFi chip:
+changing them cuts the device off the network.
+
+- The UI offers only the usable pins, and keeps the default pin when a config names
+  another one.
+- Core 1 doesn't set up a GPO or PWM on another pin, and logs that it skipped it.
 
 A PWM has two parameters, its **duty cycle** and its **frequency**. Each is constant, or
 follows an input: a source element whose value maps linearly onto it, 0 → min and
@@ -299,7 +315,7 @@ follows an input: a source element whose value maps linearly onto it, 0 → min 
 | Bytes | Field | Range (UI default) |
 |---|---|---|
 | 0–1 | Duty source element ID, 0 = none | |
-| 2 | GPIO pin | 0–28 (2) |
+| 2 | GPIO pin | A [usable](#gpio-pins) one (2) |
 | 3–4 | Constant frequency, Hz | `PWM_FREQ_MIN` (10)–65535 (1000) |
 | 5 | Options: bit 0 `PWM_DUTY_INPUT`, bit 1 `PWM_FREQ_INPUT`: a set bit makes that parameter follow its source. Bit 2 `PWM_FREQ_LOG`: a frequency that follows its source goes from min to max logarithmically, not linearly. Other bits 0. | (0) |
 | 6 | Constant duty, % | 0–`PWM_DUTY_MAX` (100) (50) |
@@ -311,7 +327,7 @@ follows an input: a source element whose value maps linearly onto it, 0 → min 
 
 - **A constant parameter is constant:** a PWM whose duty cycle and frequency are both
   constant runs from setup and ignores its inputs.
-- **Only floating sources** (a slider) can drive a PWM; see
+- **Only floating sources** the device has (a slider or an ADC) can drive a PWM; see
   [Wire types](#wire-types).
 - **A logarithmic frequency** (`PWM_FREQ_LOG`) is min × (max / min)^value: each step
   of the input multiplies it by the same factor, so a slider spends as long on
@@ -343,10 +359,10 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button | `20` LED, `21` GPO | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `30` core temperature | `22` PWM, `02` plot | A slider 0 to 1 (`00`–`FF`); the core temperature in °C |
+| Floating | `12` slider, `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider 0 to 1 (`00`–`FF`); an ADC in volts in the browser, 0 to 1 on the device; the core temperature in °C |
 
 The core temperature's values reach only the browser, so it drives a plot but not a
-PWM. The UI only draws wires between matching types, and drops mismatched source references
+PWM. An ADC's are on the device, so it drives both. The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
 
 When the user saves, the UI sends a `0A` config whose payload is:
@@ -404,16 +420,16 @@ When a config arrives, the UI rebuilds the graph from it:
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `02` plot, `20` LED, `21` GPO, `22` PWM, `30` core
-  temperature) becomes a node with the message's ID. If an ID
+  temperature, `32` ADC) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a slider takes its orientation, a plot its time window, a GPO its pin, and a PWM its
+- **Settings and label:** a slider takes its orientation, a plot its time window and unit, an ADC its channel, a GPO its pin, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source ID of an output that is a restored node of the
-  output's [type](#wire-types): an LED's or GPO's button, a plot's slider or core temperature, and the sliders of a PWM's
-  parameters that follow an input. Each is shaped by its `A2` message; without one,
+  output's [type](#wire-types): an LED's or GPO's button, a plot's slider, ADC or core temperature, and the sliders or
+  ADCs of a PWM's parameters that follow an input. Each is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
   get IDs above the highest restored one.
@@ -437,6 +453,11 @@ that time.
   current value; taking the wire out ends the trace.
 - **The history lives in the page.** It is lost on reload, and kept for the largest
   window (255 s), so a wider window shows what was already received.
+- **The unit** is shown after the value. By default it is the source's: V for an
+  [ADC](#adc-inputs), °C for a [core temperature](#core-temperature), none for a
+  slider. A unit set in the plot's settings (up to 16 bytes) overrides it, and is
+  saved in the plot's message; clearing it, or setting "auto", goes back to the
+  source's.
 
 ### Core temperature
 
@@ -451,6 +472,40 @@ The Command view shows it on a tile, and a plot wired to it draws it.
   wired to it draws nothing.
 - **Browser only.** The device never sees these values as a source, so a core
   temperature can't drive a PWM; the UI refuses that wire.
+
+### ADC inputs
+
+An ADC node (`32`) is a floating source: one of the device's analog inputs, ADC0 to
+ADC2 on GPIO 26 to 28. In the browser its value is the reading in volts, 0 to 3.3
+(1.3 V reads 1.3), and its unit is V. The Command view shows it on a tile, and a plot
+wired to it draws it.
+
+- **Two scales.** On the device the reading drives outputs as a fraction of 3.3 V, 0
+  to 1, as a slider's value does: 1.3 V puts a PWM's duty 39 % of the way from its
+  min to its max.
+
+- **On the device.** Core 1 samples each channel that has an ADC node and drives the
+  outputs wired to the node directly, as a command from the browser would, so a
+  potentiometer can drive a PWM without the browser (see
+  [Core 1 behaviour](#core-1-behaviour)).
+- **In the browser.** Core 1 also reports each channel's reading, which core 0 sends as
+  an `adc C R` [telemetry text frame](#telemetry-text-frames). The UI hands it to
+  every ADC node on that channel, which hands it to its plots.
+- **After a save.** The device samples a channel once a saved config has an ADC node
+  on it, so a new node's tile shows `–` until the graph is saved.
+- **ADC3** (GPIO 29) is the WiFi chip's clock on the Pico 2 W, so it isn't offered.
+- **The pin is the ADC's.** A GPO or PWM on the same pin is refused by core 1; the
+  first setup on a pin wins (see [Known issues](#known-issues)).
+
+An ADC on ADC1 (GPIO 27) driving a PWM's duty cycle, and drawn on a plot:
+
+```hex example=adc-config
+0A 00 22                                        # Config, 34 bytes
+32 00 00 01 01  01                              # ADC n1 on ADC1
+22 00 00 02 0F  00 01 02 03 E8 01               # PWM n2: duty ← n1, pin 2, 1000 Hz, duty from input
+                32 00 64  00 00 00 64 27 10     #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
+02 00 00 03 03  00 01 0A                        # plot n3 ← n1, 10 s
+```
 
 ### Labels, positions and wires
 
@@ -560,8 +615,8 @@ Every exchange starts with an **operation word**:
 | `op` | Constant | Sent by | Followed by |
 |---|---|---|---|
 | 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per message | One word per further 4 payload bytes (none for a button) |
-| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM message | One reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word |
-| 3 | `FIFO_OP_CLEAN_SETUP` | Nothing | — |
+| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM/ADC message | For an LED, GPO or PWM, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel |
+| 3 | `FIFO_OP_CLEAN_SETUP` | `0A` config and on each connect, once, before the setup words | Nothing |
 
 Only the low 5 bits of the element type travel. Core 1 sets bit 5 on decode, so it
 always sees a hardware type: LED `20` and GPO `21` survive, but a button `10`
@@ -604,14 +659,27 @@ Frequency word
 `fifo_op_word`, `fifo_ref_word`, `fifo_pwm_word`, `fifo_duty_word`, `fifo_freq_word`
 and the matching decoders in `src/protocol.h` build and read these words.
 
-The setup words for the [save-config example](#the-graph). The button and slider are skipped,
-and each LED/GPO/PWM message becomes an operation word plus a reference word, then
-the PWM's four further words:
+The words for the [save-config example](#the-graph). A clean setup comes first, so the
+config replaces the controls core 1 has rather than adding to them. The button and
+slider are skipped, and each LED/GPO/PWM message becomes an operation word plus a
+reference word, then the PWM's four further words:
 
 ```fifo example=save-config
+C0000000                    # clean setup
 80000200 00010000           # setup LED n2, source n1
 81000301 00010000           # setup GPO n3 on pin 1, source n1
 82000402 00050000           # setup PWM n4 on pin 2, duty source n5
+03E80001 32006400           #   1000 Hz, duty from input; duty 50 %, 0–100 %
+00000000 00642710           #   no frequency source; 100–10000 Hz
+```
+
+The words for the [adc-config example](#adc-inputs). An ADC's setup word carries its
+channel and is followed by nothing; the plot is skipped:
+
+```fifo example=adc-config
+C0000000                    # clean setup
+92000101                    # setup ADC n1, type 32 → 12, channel 1
+82000202 00010000           # setup PWM n2 on pin 2, duty source n1
 03E80001 32006400           #   1000 Hz, duty from input; duty 50 %, 0–100 %
 00000000 00642710           #   no frequency source; 100–10000 Hz
 ```
@@ -639,6 +707,22 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   constant value, or at its min if it follows an input. The PWM goes in the table
   under its duty source, and also under its frequency source, each entry marked
   with the parameter that source drives.
+  A GPO or PWM on a pin that isn't [usable](#gpio-pins), or that another GPO, PWM or
+  ADC already uses, is skipped: it reads its further words but doesn't touch the pin
+  or go in the table.
+- **ADC setup** (`op` 2, type `32`): starts sampling the channel in the low byte, on
+  GPIO 26 + channel, unless another GPO or PWM uses that pin. Several ADC nodes may
+  share a channel; up to 16 ADC nodes are kept.
+- **ADC sampling:** every 10 ms, each channel is read 16 times and averaged. Its value,
+  0 to `VALUE_FULL` as a command's, changes only when the reading is 12 counts (about
+  3/4 of a value step) from the middle of the current value, so noise doesn't flicker
+  the outputs. A new value drives the outputs wired to each of the channel's ADC
+  nodes, as an action word would. After any output is set up, the next sample drives
+  every ADC's outputs whatever its value, so an output set up after its ADC gets the
+  ADC's value at once.
+- **ADC reports:** every 100 ms, each sampled channel is reported to core 0 (below)
+  if its reading has moved by 8 counts or more since the last report, or 1 s has
+  passed since it.
 - **PWM clock:** the clock divider is the smallest whole number that fits one period
   in the 16-bit counter, so the duty cycle has at least ~2300 steps (at 65535 Hz) and
   the slowest frequency is ~9 Hz. A change of frequency reprograms the slice and
@@ -650,8 +734,9 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   `VALUE_FULL`, or for a logarithmic frequency min × (max / min)^(value / `VALUE_FULL`),
   rounded; a constant one ignores it. An LED is passed
   back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0.
-- **Clean setup** (`op` 3): clears the table and the PWM states, resets all GPIO pins and PWM slices,
-  then carries on as if it were an action word.
+- **Clean setup** (`op` 3): clears the table, the PWM states and the ADC nodes, and
+  turns off the pins it set up as GPO, PWM or ADC pins, making them inputs again. Other pins are left
+  alone: on the Pico 2 W, GPIO 23, 24, 25 and 29 drive the WiFi chip.
 
 ### Pausing core 1 for flash writes
 
@@ -692,8 +777,11 @@ Each message is two words: a **tag**, then a **value**.
 | 0 | `FIFO_TAG_UPTIME` | Uptime in 1.2 s ticks | Sends text frame `uptime N` |
 | 1 | `FIFO_TAG_TEMPERATURE` | `float` bits, °C | Sends text frame `core T` |
 | 2 | `FIFO_TAG_LED` | 0 or 1 | Sets the onboard LED |
+| 3 | `FIFO_TAG_ADC` | Bits 31–16 the channel, 15–0 the reading, 0–4095 (`fifo_adc_word`) | Sends text frame `adc C R` |
 
 Uptime is first sent at tick 5 and temperature at tick 6, then each every 5 ticks.
+Core 0 takes every waiting message each pass of its main loop, which waits at most
+10 ms for network work.
 
 ---
 
@@ -730,23 +818,30 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 **Inter-core FIFO**
 
-9. **Controls are set up again on every connect.** `retrieve_store` sends setup
-    words each time a client connects, and `0A` sends them again. Nothing sends clean
-    setup (`op` 3), so core 1's table gains duplicates each time.
-10. **Clean setup falls through into the action handler** (missing `break`).
-11. **Extra action words are never read.** Core 0 sends one word per further 4
+9. **Extra action words are never read.** Core 0 sends one word per further 4
     payload bytes, but core 1 doesn't read them, so it would treat them as operation
     words. It also reads past the payload when the length isn't 1 + 4n. Buttons are
     unaffected (length 1).
-12. **A setup word whose reference word is late uses stale data.** If the reference
+10. **A setup word whose reference word is late uses stale data.** If the reference
     word misses its 1 ms timeout, core 1 decodes the setup word itself as the
     reference.
-13. **There is no framing.** Tags and values, and operation and extra words, are told
+11. **There is no framing.** Tags and values, and operation and extra words, are told
     apart only by order, so one lost or extra word desyncs everything after it.
-14. **Uptime counts 1.2 s ticks**, not seconds.
-15. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
+12. **Uptime counts 1.2 s ticks**, not seconds.
+
+**Hardware**
+
+13. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
     at one frequency. Two PWM outputs on the same slice both run at the frequency of
     the one set up last; the UI doesn't warn about it.
+14. **The UI lets two nodes claim one pin.** Two GPOs, PWMs or an ADC and a GPO or
+    PWM may name the same pin. Core 1 sets up the first and skips the others (it logs
+    each), but the UI doesn't warn about it.
+15. **ADC readings carry power-supply noise.** The Pico 2 W's switching regulator
+    runs in its power-saving mode, which adds ripple to the ADC's 3.3 V reference.
+    Its quieter PWM mode is set through the WiFi chip (`WL_GPIO1`, the regulator's PS
+    pin), and the firmware doesn't set it. Core 1's averaging and hysteresis hide most
+    of the noise, at the cost of resolution.
 
 ---
 

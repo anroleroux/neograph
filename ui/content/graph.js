@@ -26,6 +26,7 @@ const NODE_CLASSES = {
     [MSG_HW_PWM]: uiPWM,
     [MSG_UI_GRAPH]: uiPlot,
     [MSG_HW_CORE]: uiCore,
+    [MSG_HW_ADC]: uiADC,
 };
 
 // Rebuild the Command view from the graph's UI inputs and outputs.
@@ -119,7 +120,11 @@ function restoreGraph(msgs) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
-        if (m.type === MSG_UI_GRAPH && m.len >= 3) elm.setWindow(m.pay[2]);
+        if (m.type === MSG_UI_GRAPH && m.len >= 3) {
+            elm.setWindow(m.pay[2]);
+            elm.setUnit(decoder.decode(m.pay.slice(3)));
+        }
+        if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
         if (m.type === MSG_HW_PWM && m.len >= 15) {
             const u16 = (i) => m.pay[i] << 8 | m.pay[i + 1];
             elm.setPin(m.pay[2]);
@@ -172,9 +177,21 @@ function restoreGraph(msgs) {
     buildCommandInterface();
 }
 
-// Show or hide the add-node buttons.
+// Show or hide the add-node buttons. Folded, each sits on the plus: its offset
+// from the plus is measured first (layout offsets, which ignore the transform),
+// without a transition, so the buttons fold to where the plus is now.
 function toggleAddMenu() {
-    document.getElementById('add').classList.toggle('open');
+    const menu = document.getElementById('add');
+    const plus = menu.querySelector('.toggle');
+    const buttons = [...menu.children].filter(b => b !== plus);
+    buttons.forEach(b => {
+        b.style.transition = 'none';
+        b.style.setProperty('--dx', `${plus.offsetLeft - b.offsetLeft}px`);
+        b.style.setProperty('--dy', `${plus.offsetTop - b.offsetTop}px`);
+    });
+    void menu.offsetWidth;      // apply the offsets before the transition comes back
+    buttons.forEach(b => b.style.transition = '');
+    menu.classList.toggle('open');
 }
 
 // Add a node of a control message type in the middle of the view, and select it.

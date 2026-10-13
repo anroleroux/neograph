@@ -150,8 +150,16 @@ function toggleWebSocket(n,d) {
         gfig = data.slice(3);
         unmarshalConfigs(gfig);
         // and a chip temperature drifting around 30 °C, as telemetry.
-        offlineTelemetry = setInterval(() => receiveTelemetry(
-            `core ${(30 + 4 * Math.sin(performance.now() / 20000) + Math.random() - 0.5).toFixed(2)}`), 1200);
+        // and ADC readings: a slow wave on each channel.
+        let tick = 0;
+        offlineTelemetry = setInterval(() => {
+            const t = performance.now() / 1000;
+            if (tick++ % 6 === 0) receiveTelemetry(`core ${(30 + 4 * Math.sin(t / 20) + Math.random() - 0.5).toFixed(2)}`);
+            for (let ch = 0; ch < ADC_CHANNELS; ch++) {
+                const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * ch)) + 0.01 * (Math.random() - 0.5);
+                receiveTelemetry(`adc ${ch} ${Math.round(level * ADC_RAW_FULL)}`);
+            }
+        }, 200);
         //offline-end
     }
 }

@@ -55,9 +55,9 @@ class uiPWM extends uiComponents {
 
     // Each setter takes a whole number in its range, and returns false otherwise.
     setPin(pin) {
-        pin = String(pin).trim();
-        if (!/^\d+$/.test(pin) || Number(pin) > 28) return false;
-        this.pin = Number(pin);
+        pin = parsePin(pin);
+        if (pin === null) return false;
+        this.pin = pin;
     }
 
     // A whole number from min to max; null if it isn't one.
@@ -131,8 +131,7 @@ class uiPWM extends uiComponents {
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        settings.appendChild(editableSetting('GPIO pin', () => this.pin, (pin) => this.setPin(pin),
-            {type: 'number', min: 0, max: 28, step: 1}));
+        settings.appendChild(pinSetting(() => this.pin, (pin) => this.setPin(pin)));
         this.paramSettings(settings, 'freq', 'Frequency', 'Hz', {type: 'number', min: PWM_FREQ_MIN, max: 0xFFFF, step: 1});
         this.paramSettings(settings, 'duty', 'Duty cycle', '%', {type: 'number', min: 0, max: PWM_DUTY_MAX, step: 1});
     }

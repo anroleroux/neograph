@@ -17,7 +17,8 @@ class uiCore extends uiComponents {
         this.actDir = "outputs";
         this.actNum = 0;
 
-        this.value = NaN;       // no reading yet
+        this.value = NaN;       // °C; no reading yet
+        this.unit = '°C';
 
         this.buildGraphElement();
     }
@@ -69,10 +70,15 @@ class uiCore extends uiComponents {
 }
 
 // Telemetry from the device, a text frame (see PROTOCOL.md, "Telemetry text
-// frames"): "core T" is the chip temperature, which the core nodes pass on.
+// frames"): "core T" is the chip temperature, which the core nodes pass on, and
+// "adc C R" a reading R of ADC channel C, which that channel's ADC nodes pass on.
 function receiveTelemetry(text) {
-    const [name, value] = text.split(' ');
-    if (name !== 'core') return;
-    const temperature = parseFloat(value);
-    Object.values(elements).filter(e => e instanceof uiCore).forEach(e => e.update(temperature));
+    const [name, ...values] = text.split(' ');
+    if (name === 'core') {
+        const temperature = parseFloat(values[0]);
+        Object.values(elements).filter(e => e instanceof uiCore).forEach(e => e.update(temperature));
+    } else if (name === 'adc') {
+        const [channel, raw] = values.map(Number);
+        Object.values(elements).filter(e => e instanceof uiADC && e.channel === channel).forEach(e => e.update(raw));
+    }
 }

@@ -339,6 +339,11 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
     config_element_iterator itr;
     config_element_iterator_init(&itr, data, length);
 
+    // Core 1 adds each setup to what it already has, so clear its table first:
+    // the config replaces the controls rather than adding to them.
+    multicore_fifo_push_blocking(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0));
+    printf("send hw clean setup\n");
+
     // size_t offset = 0;
     // size_t capacity = 4;
 
@@ -399,6 +404,14 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             control_setup_msg = fifo_freq_word(itr.pay[11]<<8 | itr.pay[12], itr.pay[13]<<8 | itr.pay[14]);
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
+            break;
+
+        case MSG_HW_ADC:
+            if (itr.len != 1 || itr.pay[0] >= ADC_CHANNELS) break;
+
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_ADC, itr.id, itr.pay[0]);
+            multicore_fifo_push_blocking(control_setup_msg);
+            printf("send hw ADC setup %X\n",control_setup_msg);
             break;
 
         default:

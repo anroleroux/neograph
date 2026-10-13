@@ -35,7 +35,7 @@ const MSG_HW_GPO             = 0x21;
 const MSG_HW_PWM             = 0x22;
 const MSG_HW_CORE            = 0x30;  // the core temperature, from telemetry
 const MSG_HW_GPI             = 0x31;  // reserved
-const MSG_HW_ADC             = 0x32;  // reserved
+const MSG_HW_ADC             = 0x32;  // an analog input pin
 
 // Supporting and networking element types.
 const MSG_STRING             = 0xA0;  // a node's label, keyed by node ID
@@ -61,6 +61,18 @@ const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from h
 
 // Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical.
 const SLIDER_VERTICAL        = 0x01;
+
+// GPIO pins a GPO or PWM may use, bit n = GPIO n: GPIO 0-22 and 26-28, the ones on
+// the Pico 2 W's header. GPIO 23, 24, 25 and 29 drive the WiFi chip.
+const PIN_USABLE_MASK        = 0x1C7FFFFF;
+const pinUsable = (pin) => Number.isInteger(pin) && pin >= 0 && pin < 32 && (PIN_USABLE_MASK >> pin & 1) === 1;
+const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable);
+
+// ADC input (MSG_HW_ADC) payload byte 0: the channel, 0 to ADC_CHANNELS - 1, on GPIO
+// ADC_PIN_FIRST + channel. ADC3, on GPIO 29, is the WiFi chip's clock on the Pico 2 W.
+const ADC_CHANNELS           = 3;
+const ADC_PIN_FIRST          = 26;
+const ADC_RAW_FULL           = 4095;  // a 12-bit reading at the reference voltage, 3.3 V
 
 // PWM output (MSG_HW_PWM) payload limits and options.
 const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz

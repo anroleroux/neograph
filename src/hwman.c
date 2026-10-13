@@ -32,8 +32,6 @@ float read_internal_temperature() {
     return temperature;
 }
 
-#define PWM_SLICE_NUM 12
-
 typedef struct {
     uint8_t operation;
     uint8_t control_type;
@@ -92,6 +90,11 @@ typedef struct {
 } pwm_out;
 
 static pwm_out pwm_outs[PWM_PINS];
+
+// The pins core 1 has set up as a GPO or PWM, one bit per GPIO. A clean setup
+// resets only these: other pins belong to someone else, such as GPIO 23, 24,
+// 25 and 29, which drive the WiFi chip on the Pico 2 W.
+static uint32_t used_pins = 0;
 
 // From a at value 0 to b at VALUE_FULL, linearly. b may be below a.
 static uint32_t pwm_lerp(uint32_t a, uint32_t b, uint8_t value) {
@@ -268,6 +271,141 @@ void delete_all_packets() {
     }
 }
 
+// Drive the outputs wired to a source with its new value, 0 to VALUE_FULL.
+// Returns false if nothing is wired to it. `log` prints each output driven: a
+// command from the browser logs, an ADC reading, which changes often, doesn't.
+static bool drive_outputs(uint16_t source_id, uint8_t value, bool log) {
+    hwel_sources *hw_srcs = find_packet(source_id);
+    if (!hw_srcs) return false;
+
+    for (size_t i = 0; i < hw_srcs->len; i++) {
+        hwel el = hw_srcs->hwels[i];
+
+        switch (el.control_type) {
+        case MSG_HW_LED:
+            if (log) printf("switch LED, value:%i\n", value);
+            push_to_core0(FIFO_TAG_LED);
+            push_to_core0(value >= VALUE_HALF);
+            break;
+
+        case MSG_HW_GPO:
+            if (log) printf("switch GPO %d, value:%i\n", el.io, value);
+            gpio_put(el.io, value >= VALUE_HALF);
+            break;
+
+        case MSG_HW_PWM:
+            if (log) printf("switch PWM %d, value:%i\n", el.io, value);
+            if (el.io >= PWM_PINS) break;
+            if (el.drives == PWM_DRIVES_FREQ) pwm_outs[el.io].freq_in = value;
+            else pwm_outs[el.io].duty_in = value;
+            pwm_apply(el.io);
+            break;
+
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
+// ── ADC inputs ──
+// Each channel with an ADC node is sampled every ADC_SAMPLE_MS. When its value
+// (0 to VALUE_FULL, as a command's) changes, it drives the outputs wired to its
+// nodes, as a command from the browser would. Its reading is reported to core 0
+// for the browser every ADC_REPORT_MS, when it has moved by ADC_REPORT_DELTA or
+// ADC_REPORT_MAX_MS has passed since the last report.
+#define ADC_SAMPLE_MS       10
+#define ADC_AVERAGE         16      // reads averaged into one sample
+#define ADC_HYSTERESIS      12      // counts from the middle of the value's step before it changes; a step is ~16
+#define ADC_REPORT_MS       100
+#define ADC_REPORT_DELTA    8
+#define ADC_REPORT_MAX_MS   1000
+#define ADC_NODES_MAX       16
+
+typedef struct {
+    bool on;
+    bool drive;                 // drive the outputs at the next sample, whatever its value
+    bool sampled;
+    uint16_t raw;               // the last sample, 0 to ADC_RAW_FULL
+    uint8_t value;              // the value the outputs were last driven with
+    uint16_t reported;          // the last reading reported; above ADC_RAW_FULL if none
+    absolute_time_t reported_at;
+} adc_input;
+
+typedef struct {
+    uint16_t id;
+    uint8_t channel;
+} adc_node;
+
+static adc_input adc_inputs[ADC_CHANNELS];
+static adc_node adc_nodes[ADC_NODES_MAX];
+static uint8_t adc_node_count = 0;
+
+static uint16_t adc_sample(uint8_t channel) {
+    adc_select_input(channel);
+    uint32_t sum = 0;
+    for (int i = 0; i < ADC_AVERAGE; i++) sum += adc_read();
+    return (sum + ADC_AVERAGE / 2) / ADC_AVERAGE;
+}
+
+// Sample each channel, and drive the outputs of its nodes with a new value. The
+// value changes only once the reading is ADC_HYSTERESIS counts from the middle
+// of the value's step, so noise at the edge of a step doesn't flicker the outputs.
+static void adc_poll(void) {
+    for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) {
+        adc_input *in = &adc_inputs[ch];
+        if (!in->on) continue;
+
+        in->raw = adc_sample(ch);
+        in->sampled = true;
+        uint8_t value = (in->raw * VALUE_FULL + ADC_RAW_FULL / 2) / ADC_RAW_FULL;
+        int32_t middle = (in->value * ADC_RAW_FULL + VALUE_FULL / 2) / VALUE_FULL;
+        int32_t off = (int32_t)in->raw - middle;
+        if (!in->drive && (value == in->value || (off < ADC_HYSTERESIS && -off < ADC_HYSTERESIS))) continue;
+
+        in->drive = false;
+        in->value = value;
+        for (uint8_t i = 0; i < adc_node_count; i++) {
+            if (adc_nodes[i].channel == ch) drive_outputs(adc_nodes[i].id, value, false);
+        }
+    }
+}
+
+static void adc_report(absolute_time_t now) {
+    for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) {
+        adc_input *in = &adc_inputs[ch];
+        if (!in->on || !in->sampled) continue;
+
+        int32_t moved = (int32_t)in->raw - in->reported;
+        if (moved < ADC_REPORT_DELTA && -moved < ADC_REPORT_DELTA
+            && absolute_time_diff_us(in->reported_at, now) < ADC_REPORT_MAX_MS * 1000) continue;
+
+        push_to_core0(FIFO_TAG_ADC);
+        push_to_core0(fifo_adc_word(ch, in->raw));
+        in->reported = in->raw;
+        in->reported_at = now;
+    }
+}
+
+// Set up an ADC node on its channel. Returns false if it can't be: the channel is
+// out of range, its pin is used by a GPO or PWM, or there are ADC_NODES_MAX nodes.
+// Several nodes may share a channel.
+static bool adc_setup(uint16_t id, uint8_t channel) {
+    if (channel >= ADC_CHANNELS || adc_node_count == ADC_NODES_MAX) return false;
+    adc_input *in = &adc_inputs[channel];
+    uint pin = ADC_PIN_FIRST + channel;
+
+    if (!in->on) {
+        if (used_pins & (1u << pin)) return false;
+        adc_gpio_init(pin);
+        used_pins |= 1u << pin;
+        *in = (adc_input){ .on = true, .reported = 0xFFFF };
+    }
+    adc_nodes[adc_node_count++] = (adc_node){ id, channel };
+    printf("ADC%d on GPIO %d for ID %d\n", channel, pin, id);
+    return true;
+}
+
 void core1_worker() {
     printf("(core1) started\n");
     
@@ -277,6 +415,8 @@ void core1_worker() {
     absolute_time_t start = get_absolute_time();
     uint64_t next_uptime_timeout = 5;
     uint64_t next_coretm_timeout = 6;
+    absolute_time_t next_adc_sample = start;
+    absolute_time_t next_adc_report = start;
 
     core1_running = true;
     __dmb();
@@ -292,13 +432,26 @@ void core1_worker() {
             next_uptime_timeout = up_time_elapsed + 5;
         }
 
+        absolute_time_t now = get_absolute_time();
+        if (time_reached(next_adc_sample)) {
+            adc_poll();
+            next_adc_sample = delayed_by_ms(now, ADC_SAMPLE_MS);
+        }
+        if (time_reached(next_adc_report)) {
+            adc_report(now);
+            next_adc_report = delayed_by_ms(now, ADC_REPORT_MS);
+        }
+
         uint32_t op;
         if (multicore_fifo_pop_timeout_us(1000, &op)) {
             hwel decop = decode_hwel(op);
             // printf("hw opp %d type %d, io %d\n",decop.operation, decop.control_type, decop.io);
             
             switch (decop.operation) {
-            case FIFO_OP_SETUP:
+            case FIFO_OP_SETUP: {
+                // An output on a pin it may not use (see PIN_USABLE_MASK), or on
+                // one already in use, is not set up: the first setup on a pin wins.
+                bool usable = true;
                 switch (decop.control_type) {
                 case MSG_HW_LED:
                     multicore_fifo_pop_timeout_us(1000, &op);
@@ -309,8 +462,11 @@ void core1_worker() {
                     multicore_fifo_pop_timeout_us(1000, &op);
                     decode_hwrf(op,&decop);
 
+                    usable = pin_usable(decop.io) && !(used_pins & (1u << decop.io));
+                    if (!usable) break;
                     gpio_init(decop.io);
                     gpio_set_dir(decop.io, GPIO_OUT);
+                    used_pins |= 1u << decop.io;
                     break;
                 
                 case MSG_HW_PWM: {
@@ -321,7 +477,9 @@ void core1_worker() {
                     decode_hwrf(w[0], &decop);
 
                     uint pin = decop.io;
-                    if (pin >= PWM_PINS) break;
+                    usable = pin_usable(pin) && !(used_pins & (1u << pin));
+                    if (!usable) break;
+                    used_pins |= 1u << pin;
                     pwm_out *p = &pwm_outs[pin];
                     *p = (pwm_out){
                         .options  = fifo_pwm_options(w[1]),
@@ -347,73 +505,59 @@ void core1_worker() {
                     break;
                 }
 
+                case MSG_HW_ADC:
+                    // A source, not an output: nothing goes in the table under it
+                    // here, but its outputs do, under its ID.
+                    if (!adc_setup(decop.id, decop.io)) {
+                        printf("hw man skipping ADC on ID %i: channel %d is not usable or its pin is in use\n",
+                               decop.id, decop.io);
+                    }
+                    break;
+
                 default:
                     break;
                 }
 
+                if (decop.control_type == MSG_HW_ADC) break;
+                if (!usable) {
+                    printf("hw man skipping control type %02X on ID %i: GPIO %d is not usable or in use\n",
+                           decop.control_type, decop.id, decop.io);
+                    break;
+                }
                 add_packet(decop);
                 printf("hw man adding control type %02X on ID %i\n",decop.control_type,decop.id);
+
+                // An output set up after its ADC source was sampled gets the
+                // source's value at the next sample, not at its next change.
+                for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) adc_inputs[ch].drive = true;
                 break;
+            }
 
             case FIFO_OP_CLEAN_SETUP:
                 delete_all_packets();
                 memset(pwm_outs, 0, sizeof pwm_outs);
-                for (uint gpio = 0; gpio < 30; gpio++) {
+                memset(adc_inputs, 0, sizeof adc_inputs);
+                adc_node_count = 0;
+                for (uint gpio = 0; gpio < PWM_PINS; gpio++) {
+                    if (!(used_pins & (1u << gpio))) continue;
+                    if (gpio_get_function(gpio) == GPIO_FUNC_PWM) {
+                        pwm_set_enabled(pwm_gpio_to_slice_num(gpio), false);
+                        pwm_set_gpio_level(gpio, 0);
+                    }
                     gpio_set_function(gpio, GPIO_FUNC_SIO);
                     gpio_set_dir(gpio, GPIO_IN);
                     gpio_disable_pulls(gpio);
                 }
-                for (uint slice_num = 0; slice_num < PWM_SLICE_NUM; slice_num++) {
-                    pwm_set_enabled(slice_num, false);
-                    pwm_set_wrap(slice_num, 0xFFFF);
-                    pwm_set_chan_level(slice_num, PWM_CHAN_A, 0);
-                    pwm_set_chan_level(slice_num, PWM_CHAN_B, 0);
-                }
+                used_pins = 0;
+                printf("hw man cleared controls\n");
+                break;
+
             case FIFO_OP_CONTROL_ACTION:
-                // msg = multicore_fifo_pop_blocking();
                 printf("hw man buffer %02X %02X %02X %02X\n",op>>24&0xFF,op>>16&0xFF,op>>8&0xFF,op&0xFF);
-                // hwop decop = decode_hwop(msg);
-                
-                // uint32_t values[decop.n_values];
-                // for (size_t iValue = 0; iValue < decop.n_values; iValue++) {
-                //     values[iValue] = multicore_fifo_pop_blocking();
-                // }
-
-                printf("hw man finding ID %d\n",decop.id);
-                
-                hwel_sources *hw_srcs = find_packet(decop.id);
-                if (hw_srcs) {
-                    for (size_t i = 0; i < hw_srcs->len; i++) {
-                        hwel el = hw_srcs->hwels[i];
-    
-                        printf("hw man found type %02X with ID %d\n",el.control_type,el.id);
-                        switch (el.control_type) {
-                        case MSG_HW_LED:
-                            printf("switch LED, value:%i\n",decop.value);
-                            push_to_core0(FIFO_TAG_LED);
-                            push_to_core0(decop.value >= VALUE_HALF);
-                            break;
-                        
-                        case MSG_HW_GPO:
-                            printf("switch GPO %d, value:%i\n",el.io, decop.value);
-                            gpio_put(el.io, decop.value >= VALUE_HALF);
-                            break;
-                        
-                        case MSG_HW_PWM:
-                            printf("switch PWM %d, value:%i\n",el.io, decop.value);
-                            if (el.io >= PWM_PINS) break;
-                            if (el.drives == PWM_DRIVES_FREQ) pwm_outs[el.io].freq_in = decop.value;
-                            else pwm_outs[el.io].duty_in = decop.value;
-                            pwm_apply(el.io);
-                            break;
-
-                        default:
-                            break;
-                        }
-                    }
-                } else {
+                if (!drive_outputs(decop.id, decop.value, true)) {
                     printf("hw sources with ID %d not found\n",decop.id);
                 }
+                break;
             }
         }
 

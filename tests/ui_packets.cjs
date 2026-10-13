@@ -144,6 +144,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
     const rows = () => page.$$eval('#settings .editable .label', ls => ls.slice(2).map(l => l.textContent).join('|'));
+    const select = (label) => page.locator('#settings .editable.select', { has: page.locator(`.label:text-is("${label}:")`) })
+        .locator('select');
     const choice = (label, option) => page.locator('#settings .choice', { has: page.locator(`.label:text-is("${label}:")`) })
         .locator('button', { hasText: option }).dispatchEvent('click');
     expect(await rows() === 'Frequency:|Frequency (Hz):|Duty cycle:|Duty cycle (%):',
@@ -158,12 +160,27 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             || pwm.setFreqMin('9') !== false || pwm.setFreqMax('65536') !== false) {
             throw new Error('PWM settings out of range were accepted');
         }
+        // The pins that drive the WiFi chip, and those off the header, are refused.
+        for (const pin of ['23', '24', '25', '29', '30', '-1', '2.5', 'x']) {
+            if (pwm.setPin(pin) !== false || elements.n3.setPin(pin) !== false) {
+                throw new Error('GPIO pin ' + pin + ' was accepted');
+            }
+        }
         pwm.setPin('15');
         pwm.setFreq('20000');
         pwm.setDuty('75');
         pwm.setDutyMin('20');
         pwm.setDutyMax('80');
     });
+
+    // The pin is picked from the usable pins only.
+    const pins = await page.evaluate(() => [...document.querySelectorAll('#settings .editable.select')]
+        .find(row => row.querySelector('.label').textContent === 'GPIO pin:')
+        .querySelectorAll('option').length + '|' + USABLE_PINS.join());
+    expect(pins === '26|' + [...Array(23).keys(), 26, 27, 28].join(), 'the PWM offers GPIO pins ' + pins);
+    await select('GPIO pin').selectOption('26');
+    expect(await page.evaluate(() => elements.n4.pin) === 26, 'picking GPIO 26 did not set the PWM pin');
+    await page.evaluate(() => elements.n4.setPin('15'));
 
     // Add a slider, make it vertical from its settings, and wire it to the PWM.
     await page.locator('#add [title="Add a slider"]').dispatchEvent('click');
@@ -179,7 +196,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add [title="Add a slider"]').dispatchEvent('click');
     await page.evaluate(() => { elements.n6.setLabel('Pitch'); selectById(4); });
     await choice('Frequency', 'From input');
-    await page.locator('#settings .editable.select select').first().selectOption('n6');
+    await select('Input').first().selectOption('n6');      // the frequency's; the duty's follows
     await page.evaluate(() => { elements.n4.setFreqMin('200'); elements.n4.setFreqMax('2000'); });
     expect(await page.evaluate(() => elements.n4.freqLog) === false, 'a frequency from an input does not start linear');
     await choice('Scale', 'Logarithmic');
@@ -230,6 +247,50 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(core.toLed, 'the core temperature was wired to a GPO');
     expect(core.toPlot, 'the core temperature was not wired to the plot');
 
+    // Add an ADC input on ADC1, and a plot for it. Its values are on the device,
+    // so it drives a PWM as well as a plot; it is floating, so not a GPO.
+    await page.locator('#add [title="Add an ADC input"]').dispatchEvent('click');
+    const channels = await page.evaluate(() => [...document.querySelectorAll('#settings .editable.select option')]
+        .map(o => o.textContent).join('|'));
+    expect(channels === 'ADC0 · GPIO 26|ADC1 · GPIO 27|ADC2 · GPIO 28', 'the ADC offers channels ' + channels);
+    await select('Channel').selectOption('1');
+    await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
+    const adc = await page.evaluate(() => {
+        const adc = elements.n10;
+        adc.setLabel('Level sensor');
+        elements.n11.setLabel('Level');
+        return {
+            channel: adc.channel,
+            rejected: adc.setChannel('3') === false && adc.setChannel('-1') === false && adc.setChannel('x') === false,
+            toGpo: createEdge('n10', 'n3') === null,
+            forPwm: elements.n4.takesType(adc),
+            toPlot: createEdge('n10', 'n11') !== null && elements.n11.sourceID() === 10,
+        };
+    });
+    expect(adc.channel === 1, 'picking ADC1 did not set the channel');
+    expect(adc.rejected, 'ADC channels out of range were accepted');
+    expect(adc.toGpo, 'the ADC was wired to a GPO');
+    expect(adc.forPwm, 'a PWM does not take the ADC');
+    expect(adc.toPlot, 'the ADC was not wired to the plot');
+
+    // A plot shows its source's unit, unless it is given its own.
+    const units = await page.evaluate(() => {
+        const [speed, temp, level] = [elements.n7, elements.n9, elements.n11];
+        const auto = [speed.unit(), temp.unit(), level.unit()].join('|');
+        const tooLong = speed.setUnit('x'.repeat(17)) === false;
+        speed.setUnit('rpm');
+        level.setUnit('mV');
+        level.setUnit('auto');
+        selectById(9);
+        const shown = [...document.querySelectorAll('#settings .editable')]
+            .find(row => row.querySelector('.label').textContent === 'Unit:').querySelector('.value').textContent;
+        return { auto, tooLong, set: [speed.unit(), level.unit(), level.unitOverride].join('|'), shown };
+    });
+    expect(units.auto === '|°C|V', 'the plots\' units from their sources are ' + units.auto);
+    expect(units.tooLong, 'a unit over 16 bytes was accepted');
+    expect(units.set === 'rpm|V|', 'setting the units gave ' + units.set);
+    expect(units.shown === 'Auto (°C)', 'the Unit setting shows ' + units.shown);
+
     await page.locator('#graph .write svg').dispatchEvent('click');
     const saves = await sent(page);
     expect(saves.length === 1 && saves[0][0] === 0x0A, 'saving did not send one config packet');
@@ -269,9 +330,9 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // The plot took each value the slider sent, after the 0 it started from, and shows the latest.
     const trace = await page.evaluate(() => elements.n7.samples.map(([, v]) => v.toFixed(2)).join());
     expect(trace === '0.00,0.75,0.00', 'the plot did not follow the slider: ' + trace);
-    expect(await page.locator('#command .control-plot canvas').count() === 2, 'the Command view has no plot');
+    expect(await page.locator('#command .control-plot canvas').count() === 3, 'the Command view has no plot');
     await toCommandView(page);
-    expect(await page.locator('#command .control-plot .state').first().textContent() === '0', 'the plot does not show its value');
+    expect(await page.locator('#command .control-plot .state').first().textContent() === '0 rpm', 'the plot does not show its value and unit');
 
     // A plot takes any number, not only 0 to 1, and its axis fits what it shows.
     const anyRange = await page.evaluate(() => {
@@ -300,6 +361,18 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(temperature.tile === '31.3 °C', 'the core temperature tile shows ' + temperature.tile);
     expect(temperature.plot === ',31.27', 'the temperature plot holds ' + temperature.plot);
 
+    // ADC readings reach the ADC nodes on their channel only, in volts.
+    await page.evaluate(() => { window.__ws.receive('adc 0 4095'); window.__ws.receive('adc 1 2048'); });
+    const reading = await page.evaluate(() => ({
+        tile: document.querySelectorAll('#command .control-reading .state')[1].textContent,
+        plot: elements.n11.samples.map(([, v]) => v === null ? '' : v.toFixed(4)).join(),
+    }));
+    expect(reading.tile === '1.65 V', 'the ADC tile shows ' + reading.tile);
+    expect(reading.plot === ',1.6504', 'the ADC plot holds ' + reading.plot);
+    await toCommandView(page);
+    const plotStates = await page.$$eval('#command .control-plot .state', ss => ss.map(s => s.textContent).join('|'));
+    expect(plotStates.endsWith('|31.27 °C|1.65 V'), 'the plots show ' + plotStates);
+
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {
         await page.locator('.netconn-buttons > div').nth(nth).dispatchEvent('click');
@@ -319,41 +392,43 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
-        const pwm = new uiPWM(400, 300);      // n10, no wires yet
-        new uiButton(-400, 300);              // n11
+        const pwm = new uiPWM(400, 300);      // n12, no wires yet
+        new uiButton(-400, 300);              // n13
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
-        selectById(10);
+        selectById(12);
         const fromPwm = marked();
         clearSelection();
         toggleConnectMode();
-        selectById(10);
+        selectById(12);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
-        const picks = [...document.querySelectorAll('#settings select option')].map(o => o.value).join();
+        const input = [...document.querySelectorAll('#settings .editable.select')]
+            .find(row => row.querySelector('.label').textContent === 'Input:');
+        const picks = [...input.querySelectorAll('option')].map(o => o.value).join();
         return {
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
-            buttonToPwm: createEdge('n11', 'n10') === null && pwm.setSource('duty', elements.n11) === false
+            buttonToPwm: createEdge('n13', 'n12') === null && pwm.setSource('duty', elements.n13) === false
                 && pwm.inConns().length === 0,
         };
     });
-    expect(types.fromPwm === 'n5,n6', 'wire mode from a PWM marks ' + types.fromPwm);
-    expect(types.picks === ',n5,n6', 'the PWM offers inputs ' + types.picks);
+    expect(types.fromPwm === 'n5,n6,n10', 'wire mode from a PWM marks ' + types.fromPwm);
+    expect(types.picks === ',n5,n6,n10', 'the PWM offers inputs ' + types.picks);
     expect(types.sliderToLed, 'a slider was wired to the LED');
     expect(types.buttonToPwm, 'a button was wired to a PWM');
 
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n11', 'n2');
+        createEdge('n13', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n11' && replaced.button === 'n3' && replaced.wires === 1,
+    expect(replaced.led === 'n13' && replaced.button === 'n3' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
@@ -368,16 +443,18 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             elements.n4.dutyMin, elements.n4.dutyMax, elements.n4.freqFromInput,
             elements.n4.freqMin, elements.n4.freqMax, elements.n4.freqLog].join(),
         vertical: elements.n5.vertical,
-        plot: [elements.n7.window, elements.n7.sourceID(), elements.n9.sourceID()].join(),
+        plot: [elements.n7.window, elements.n7.sourceID(), elements.n9.sourceID(), elements.n11.sourceID()].join(),
+        adc: elements.n10.channel,
+        units: [elements.n7.unit(), elements.n7.unitOverride, elements.n9.unit(), elements.n9.unitOverride, elements.n11.unit()].join('|'),
         plots: document.querySelectorAll('#command .control-plot').length,
         readings: document.querySelectorAll('#command .control-reading').length,
         wires: gEdges.length,
         pwmSources: [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join(),
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 6
-        && restored.plot === '20,5,8' && restored.plots === 2 && restored.readings === 1
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 7
+        && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 3 && restored.readings === 2
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));
