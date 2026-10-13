@@ -229,7 +229,13 @@ class uiComponents {
         console.log(cmdPkt) //debug
         socket.send(cmdPkt); //online
 
-        // UI outputs wired to this input (a plot) take the value here, in the browser.
+        this.emit(value);
+    }
+
+    // Hand a new value of this source to the nodes wired to it. UI outputs (a
+    // plot) show it in the browser; hardware outputs ignore it, as the device
+    // drives them. The value may be any number, not only 0 to 1.
+    emit(value) {
         this.outputs.forEach(output => output.conns.forEach(conn => conn.end.node.receive(value)));
     }
 

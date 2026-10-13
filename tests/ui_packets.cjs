@@ -247,7 +247,25 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(trace === '0.00,0.75,0.00', 'the plot did not follow the slider: ' + trace);
     expect(await page.locator('#command .control-plot canvas').count() === 1, 'the Command view has no plot');
     await toCommandView(page);
-    expect(await page.locator('#command .control-plot .state').textContent() === '0.00', 'the plot does not show its value');
+    expect(await page.locator('#command .control-plot .state').textContent() === '0', 'the plot does not show its value');
+
+    // A plot takes any number, not only 0 to 1, and its axis fits what it shows.
+    const anyRange = await page.evaluate(() => {
+        const axis = (values) => { const a = plotAxis(values); return a.ticks.map(v => a.format(v)).join(' '); };
+        elements.n5.emit(-250);
+        elements.n5.emit(1200.5);
+        elements.n5.emit(NaN);
+        return {
+            samples: elements.n7.samples.slice(-3).map(([, v]) => v).join(),
+            wide: axis([-250, 1200.5]),
+            flat: axis([3]),
+            none: axis([]),
+        };
+    });
+    expect(anyRange.samples === '-250,1200.5,', 'the plot did not take any number: ' + anyRange.samples);
+    expect(anyRange.wide === '-500 0 500 1000 1500', 'the axis for -250 to 1200.5 is ' + anyRange.wide);
+    expect(anyRange.flat === '2.6 2.8 3.0 3.2 3.4', 'the axis for a flat 3 is ' + anyRange.flat);
+    expect(anyRange.none === '0.0 0.5 1.0', 'the axis with no values is ' + anyRange.none);
 
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {

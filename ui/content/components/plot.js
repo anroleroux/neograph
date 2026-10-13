@@ -2,6 +2,36 @@
 const PLOT_WINDOW_MIN = 1;
 const PLOT_WINDOW_MAX = 255;
 
+// A value axis that fits `values`: round-numbered ticks, the lowest at or below
+// the smallest value and the highest at or above the largest, about four steps
+// apart. A flat signal gets a range around its value; no values, 0 to 1.
+// `format` writes a tick with as many decimals as the step needs, or with
+// `precise`, a value to 4 significant digits.
+function plotAxis(values) {
+    let lo = values.length ? Math.min(...values) : 0;
+    let hi = values.length ? Math.max(...values) : 1;
+    if (lo === hi) {
+        const d = lo === 0 ? 1 : Math.abs(lo) * 0.1;
+        lo -= d;
+        hi += d;
+    }
+    const rough = (hi - lo) / 4;
+    const p = 10 ** Math.floor(Math.log10(rough));
+    const f = rough / p;
+    const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+    const first = Math.floor(lo / step), last = Math.ceil(hi / step);
+    const ticks = [];
+    for (let i = first; i <= last; i++) ticks.push(i * step);
+
+    const exp = step >= 1e5 || step < 1e-4;
+    const decimals = Math.max(0, -Math.floor(Math.log10(step)));
+    const format = (v, precise = false) => {
+        if (precise) return String(Number(v.toPrecision(4)));
+        return exp ? v.toExponential(1) : v.toFixed(decimals);
+    };
+    return { min: ticks[0], max: ticks[ticks.length - 1], ticks, format };
+}
+
 class uiPlot extends uiComponents {
     constructor(x = 0, y = 0) {
         super("plot", x, y);
@@ -59,11 +89,12 @@ class uiPlot extends uiComponents {
             {type: 'number', min: PLOT_WINDOW_MIN, max: PLOT_WINDOW_MAX}));
     }
 
-    // A new value from the source. Samples older than the window are dropped,
-    // except the last of them, which holds the signal at the plot's left edge.
+    // A new value from the source, any number. One that is not finite leaves a
+    // gap in the trace. Samples older than the widest window are dropped, except
+    // the last of them, which holds the signal at the plot's left edge.
     receive(value) {
         const now = performance.now();
-        this.samples.push([now, value]);
+        this.samples.push([now, Number.isFinite(value) ? value : null]);
         const start = now - PLOT_WINDOW_MAX * 1000;
         const old = this.samples.findIndex(([t]) => t >= start) - 1;
         if (old > 0) this.samples.splice(0, old);
@@ -79,6 +110,15 @@ class uiPlot extends uiComponents {
         this.receive(null);
     }
 
+    // The samples from a time on, starting with the value held at that time.
+    samplesSince(t) {
+        const i = this.samples.findIndex(([ts]) => ts > t);
+        const from = i === -1 ? this.samples.length : i;
+        const shown = this.samples.slice(from);
+        if (from > 0) shown.unshift([t, this.samples[from - 1][1]]);
+        return shown;
+    }
+
     // The value at a time: the last sample at or before it, undefined before the first.
     valueAt(t) {
         let value;
@@ -90,8 +130,9 @@ class uiPlot extends uiComponents {
     }
 
     // In the Command view: a tile with the label, the current value, and the
-    // signal over the last `window` seconds, 0 at the bottom to 1 at the top,
-    // newest on the right. Pointing at the plot reads the value at that time.
+    // signal over the last `window` seconds, newest on the right. The value axis
+    // fits what the window shows, whatever its range, with gridlines at round
+    // numbers. Pointing at the plot reads the value at that time.
     buildUI(commandInterface) {
         const control = document.createElement('div');
         control.className = 'control-plot';
@@ -107,7 +148,6 @@ class uiPlot extends uiComponents {
         canvas.addEventListener('pointermove', (e) => { pointerX = e.offsetX; });
         canvas.addEventListener('pointerleave', () => { pointerX = null; });
 
-        const show = (v) => v == null ? '–' : v.toFixed(2);
         const draw = () => {
             if (!canvas.isConnected) return;    // the Command view was rebuilt
             requestAnimationFrame(draw);
@@ -122,20 +162,30 @@ class uiPlot extends uiComponents {
             const ctx = canvas.getContext('2d');
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, w, h);
+            ctx.font = '10px sans-serif';
 
             const now = performance.now();
             const span = this.window * 1000;
-            const pad = 2;      // keeps a 2px line at 0 or 1 inside the canvas
-            const x = (t) => (t - (now - span)) / span * w;
-            const y = (v) => pad + (1 - v) * (h - 2 * pad);
+            const shown = this.samplesSince(now - span);
+            const axis = plotAxis(shown.map(([, v]) => v).filter(v => v != null));
 
-            // Grid at 0, ½ and 1.
+            // The tick labels sit left of the plot, which takes the rest.
+            const pad = 6;      // keeps a 2px line and the labels inside the canvas
+            const left = Math.ceil(Math.max(...axis.ticks.map(v => ctx.measureText(axis.format(v)).width))) + 6;
+            const x = (t) => left + (t - (now - span)) / span * (w - left);
+            const y = (v) => pad + (axis.max - v) / (axis.max - axis.min) * (h - 2 * pad);
+
             ctx.strokeStyle = 'rgba(32, 32, 43, 0.15)';
+            ctx.fillStyle = 'rgba(32, 32, 43, 0.6)';
             ctx.lineWidth = 1;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
             ctx.beginPath();
-            for (const v of [0, 0.5, 1]) {
-                ctx.moveTo(0, Math.round(y(v)) + 0.5);
-                ctx.lineTo(w, Math.round(y(v)) + 0.5);
+            for (const v of axis.ticks) {
+                const ty = Math.round(y(v)) + 0.5;
+                ctx.moveTo(left, ty);
+                ctx.lineTo(w, ty);
+                ctx.fillText(axis.format(v), left - 4, ty);
             }
             ctx.stroke();
 
@@ -144,23 +194,22 @@ class uiPlot extends uiComponents {
             ctx.lineWidth = 2;
             ctx.lineJoin = 'round';
             ctx.beginPath();
-            this.samples.forEach(([t, v], i) => {
+            shown.forEach(([t, v], i) => {
                 if (v == null) return;
-                const end = i + 1 < this.samples.length ? this.samples[i + 1][0] : now;
-                if (end < now - span) return;
-                const prev = this.samples[i - 1];
-                const x0 = Math.max(0, x(t));
-                if (prev && prev[1] != null && x(t) >= 0) ctx.lineTo(x0, y(v));
+                const end = i + 1 < shown.length ? shown[i + 1][0] : now;
+                const x0 = Math.max(left, x(t));
+                if (i > 0 && shown[i - 1][1] != null) ctx.lineTo(x0, y(v));
                 else ctx.moveTo(x0, y(v));
                 ctx.lineTo(x(end), y(v));
             });
             ctx.stroke();
 
             // The value now, or where the pointer is.
-            if (pointerX == null) {
+            const show = (v) => v == null ? '–' : axis.format(v, true);
+            if (pointerX == null || pointerX < left) {
                 state.textContent = show(this.valueAt(now));
             } else {
-                const t = now - span + pointerX / w * span;
+                const t = now - span + (pointerX - left) / (w - left) * span;
                 ctx.strokeStyle = 'rgba(32, 32, 43, 0.4)';
                 ctx.lineWidth = 1;
                 ctx.beginPath();

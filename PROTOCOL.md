@@ -416,14 +416,17 @@ When a config arrives, the UI rebuilds the graph from it:
 
 ### Plots
 
-A plot (`02`) draws the value of the slider wired to it in the Command view, over its
-time window, 0 at the bottom to 1 at the top, newest on the right. Pointing at the
-plot reads the value at that time.
+A plot (`02`) draws the value of the floating source wired to it in the Command view,
+over its time window, newest on the right. Pointing at the plot reads the value at
+that time.
 
-- **The values never reach the device and back.** When a slider sends a
-  [command](#01-command), the UI hands the same value to the plots wired to it.
-  Nothing is sent for a plot, and the device stores its message but sends nothing to
-  core 1 for it.
+- **Any number.** A plot isn't limited to the 0–1 of a command value: its value axis
+  fits the values the window shows, with gridlines at round numbers. A value that is
+  not finite leaves a gap.
+- **The values come from the source in the browser.** A source hands each new
+  value to the plots wired to it (`emit` in `ui/content/components/parent.js`); a
+  slider does so when it sends its [command](#01-command). Nothing is sent for a
+  plot, and the device stores its message but sends nothing to core 1 for it.
 - **The plot holds each value until the next.** A slider sends a value only when it
   changes, so the trace is a step line. Wiring a plot starts it from the slider's
   current value; taking the wire out ends the trace.
