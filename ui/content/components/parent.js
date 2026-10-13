@@ -136,7 +136,7 @@ class uiComponents {
     // an output with room for another wire (most take one, a PWM two), not
     // already wired from that source. Their types must match: a boolean source
     // (a button) drives a boolean output (an LED or GPO), and a floating one (a
-    // slider) a floating output (a PWM).
+    // slider) a floating output (a PWM or a plot).
     canTakeConn(other) {
         if (other === this || other.actDir === this.actDir) return false;
         const [output, source] = this.actDir === 'inputs' ? [this, other] : [other, this];
@@ -228,7 +228,14 @@ class uiComponents {
 
         console.log(cmdPkt) //debug
         socket.send(cmdPkt); //online
+
+        // UI outputs wired to this input (a plot) take the value here, in the browser.
+        this.outputs.forEach(output => output.conns.forEach(conn => conn.end.node.receive(value)));
     }
+
+    // A new value from the source wired into this node. Only UI outputs show it:
+    // hardware outputs get it on the device.
+    receive(value) {}
 
     // The label as a MSG_STRING message keyed by this node's ID (see PROTOCOL.md).
     marshalLabel() {

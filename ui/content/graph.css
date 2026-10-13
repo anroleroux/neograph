@@ -56,8 +56,8 @@
     margin-left: var(--step-0);
 }
 
-/* The add-node buttons, in two columns below the plus: the GUI inputs (button,
-   slider) on the left, the hardware outputs (LED, GPO, PWM) on the right. Each
+/* The add-node buttons, in two columns below the plus: the GUI nodes (button,
+   slider, plot) on the left, the hardware outputs (LED, GPO, PWM) on the right. Each
    button's --c and --r give its column and row; the plus is at column 0, row 0.
    Folded, they hide behind the plus; open, each slides out to its place. */
 #graph > .buttons.add {

@@ -34,7 +34,7 @@
 
 #define MSG_UI_GAUGE            0x00    /* reserved */
 #define MSG_UI_INDICATOR        0x01    /* reserved */
-#define MSG_UI_GRAPH            0x02    /* reserved */
+#define MSG_UI_GRAPH            0x02    /* a plot, drawn in the browser */
 #define MSG_UI_BUTTON           0x10
 #define MSG_UI_SWITCH           0x11    /* reserved */
 #define MSG_UI_SLIDER           0x12

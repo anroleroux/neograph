@@ -257,7 +257,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 |---|---|---|---|
 | `00` | `MSG_UI_GAUGE` | UI output gauge | Reserved |
 | `01` | `MSG_UI_INDICATOR` | UI output indicator | Reserved |
-| `02` | `MSG_UI_GRAPH` | UI output graph | Reserved |
+| `02` | `MSG_UI_GRAPH` | UI output graph: a plot | Implemented |
 | `10` | `MSG_UI_BUTTON` | UI input button | Implemented |
 | `11` | `MSG_UI_SWITCH` | UI input switch | Reserved |
 | `12` | `MSG_UI_SLIDER` | UI input slider | Implemented |
@@ -285,6 +285,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 |---|---|---|
 | `10` Button | 0 | None. The device ignores button messages in a config. |
 | `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
+| `02` Plot | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10). The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
 | `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
 | `22` PWM | 15 | See below |
@@ -328,8 +329,8 @@ A node's label, position and incoming wire shape are separate messages (see
 The graph editor's nodes are control elements, and its wires are **source
 references**. A wire is not a message of its own:
 
-- An output stores the ID of the element wired to it: an LED or GPO its one source,
-  a PWM the source of its duty cycle and of its frequency.
+- An output stores the ID of the element wired to it: an LED, GPO or plot its one
+  source, a PWM the source of its duty cycle and of its frequency.
 - An input (button, slider) can feed many outputs; it stores nothing about them.
 
 #### Wire types
@@ -340,7 +341,7 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button | `20` LED, `21` GPO | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider | `22` PWM | 0 to 1 (`00`–`FF`) |
+| Floating | `12` slider | `22` PWM, `02` plot | 0 to 1 (`00`–`FF`) |
 
 The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
@@ -399,19 +400,35 @@ When a config arrives, the UI rebuilds the graph from it:
 - **If the config has no control messages** (a first-boot config), the UI keeps the
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
-  (`10` button, `12` slider, `20` LED, `21` GPO, `22` PWM) becomes a node with the message's ID. If an ID
+  (`10` button, `12` slider, `02` plot, `20` LED, `21` GPO, `22` PWM) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a slider takes its orientation, a GPO its pin, and a PWM its
+- **Settings and label:** a slider takes its orientation, a plot its time window, a GPO its pin, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source ID of an output that is a restored node of the
-  output's [type](#wire-types): an LED's or GPO's button, and the sliders of a PWM's
+  output's [type](#wire-types): an LED's or GPO's button, a plot's slider, and the sliders of a PWM's
   parameters that follow an input. Each is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
   get IDs above the highest restored one.
+
+### Plots
+
+A plot (`02`) draws the value of the slider wired to it in the Command view, over its
+time window, 0 at the bottom to 1 at the top, newest on the right. Pointing at the
+plot reads the value at that time.
+
+- **The values never reach the device and back.** When a slider sends a
+  [command](#01-command), the UI hands the same value to the plots wired to it.
+  Nothing is sent for a plot, and the device stores its message but sends nothing to
+  core 1 for it.
+- **The plot holds each value until the next.** A slider sends a value only when it
+  changes, so the trace is a step line. Wiring a plot starts it from the slider's
+  current value; taking the wire out ends the trace.
+- **The history lives in the page.** It is lost on reload, and kept for the largest
+  window (255 s), so a wider window shows what was already received.
 
 ### Labels, positions and wires
 

@@ -91,6 +91,12 @@ async function connect(page, config) {
     }, [DEVICE_ID, config]);
 }
 
+// Show the Command view, and give the plots a frame to draw.
+async function toCommandView(page) {
+    await page.evaluate(() => toCommand());
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
 const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
 (async () => {
@@ -181,6 +187,25 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const freqWire = await page.evaluate(() => [elements.n4.freqSource?.name,
         elements.n4.inConns().map(c => c.start.node.name).join()].join('|'));
     expect(freqWire === 'n6|n5,n6', 'picking the frequency input did not wire it: ' + freqWire);
+
+    // Add a plot, set its window, and wire the first slider to it. A plot takes
+    // only a floating source.
+    await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
+    const plot = await page.evaluate(() => {
+        const plot = elements.n7;
+        const rejected = plot.setWindow('0') === false && plot.setWindow('256') === false && plot.setWindow('2.5') === false;
+        plot.setWindow('20');
+        plot.setLabel('Speed plot');
+        return {
+            rejected,
+            buttonToPlot: createEdge('n1', 'n7') === null,
+            sliderToPlot: createEdge('n5', 'n7') !== null && plot.sourceID() === 5,
+        };
+    });
+    expect(plot.rejected, 'plot windows out of range were accepted');
+    expect(plot.buttonToPlot, 'a button was wired to a plot');
+    expect(plot.sliderToPlot, 'the slider was not wired to the plot');
+
     await page.locator('#graph .write svg').dispatchEvent('click');
     const saves = await sent(page);
     expect(saves.length === 1 && saves[0][0] === 0x0A, 'saving did not send one config packet');
@@ -217,6 +242,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await page.locator('#command .control-slider .state').first().textContent() === '0.00', 'the slider does not show its value');
     packets.push(...moves);
 
+    // The plot took each value the slider sent, after the 0 it started from, and shows the latest.
+    const trace = await page.evaluate(() => elements.n7.samples.map(([, v]) => v.toFixed(2)).join());
+    expect(trace === '0.00,0.75,0.00', 'the plot did not follow the slider: ' + trace);
+    expect(await page.locator('#command .control-plot canvas').count() === 1, 'the Command view has no plot');
+    await toCommandView(page);
+    expect(await page.locator('#command .control-plot .state').textContent() === '0.00', 'the plot does not show its value');
+
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {
         await page.locator('.netconn-buttons > div').nth(nth).dispatchEvent('click');
@@ -236,15 +268,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
-        const pwm = new uiPWM(400, 300);      // n7, no wires yet
-        new uiButton(-400, 300);              // n8
+        const pwm = new uiPWM(400, 300);      // n8, no wires yet
+        new uiButton(-400, 300);              // n9
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
-        selectById(7);
+        selectById(8);
         const fromPwm = marked();
         clearSelection();
         toggleConnectMode();
-        selectById(7);
+        selectById(8);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
         const picks = [...document.querySelectorAll('#settings select option')].map(o => o.value).join();
@@ -252,7 +284,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
-            buttonToPwm: createEdge('n8', 'n7') === null && pwm.setSource('duty', elements.n8) === false
+            buttonToPwm: createEdge('n9', 'n8') === null && pwm.setSource('duty', elements.n9) === false
                 && pwm.inConns().length === 0,
         };
     });
@@ -263,14 +295,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n8', 'n2');
+        createEdge('n9', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n8' && replaced.button === 'n3' && replaced.wires === 1,
+    expect(replaced.led === 'n9' && replaced.button === 'n3' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
@@ -285,12 +317,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             elements.n4.dutyMin, elements.n4.dutyMax, elements.n4.freqFromInput,
             elements.n4.freqMin, elements.n4.freqMax, elements.n4.freqLog].join(),
         vertical: elements.n5.vertical,
+        plot: [elements.n7.window, elements.n7.sourceID()].join(),
+        plots: document.querySelectorAll('#command .control-plot').length,
         wires: gEdges.length,
         pwmSources: [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join(),
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 4
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 5
+        && restored.plot === '20,5' && restored.plots === 1
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));
