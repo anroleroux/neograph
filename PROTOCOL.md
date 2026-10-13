@@ -61,13 +61,13 @@ sequenceDiagram
     UI->>C0: WebSocket upgrade
     C0-->>UI: 101 Switching Protocols
     C0-->>UI: 0x0D Device ID
-    C0->>C1: setup words for each stored LED/GPO
+    C0->>C1: setup words for each stored LED/GPO/PWM
     C0-->>UI: 0x0A Config (if one is stored)
     Note over UI: user edits network fields
     UI->>C0: 0x0B / 0x0C field update (written to flash)
     Note over UI: user saves the graph
     UI->>C0: 0x0A Config (written to flash)
-    C0->>C1: setup words for each LED/GPO
+    C0->>C1: setup words for each LED/GPO/PWM
     Note over UI: user presses a button
     UI->>C0: 0x01 Command
     C0->>C1: action word
@@ -118,7 +118,7 @@ header included, is what the device stores in flash (see [Storage](#storage)).
 - **HW → UI.** Sent on connect, after `0D`, if flash holds a config. The UI
   rebuilds its graph from it (see [Restoring the graph](#restoring-the-graph)).
 - **UI → HW.** Sent when the user saves the graph. The device writes the whole
-  packet to flash, then sends setup words for each LED and GPO element to core 1.
+  packet to flash, then sends setup words for each LED, GPO and PWM element to core 1.
 
 [Part 2](#part-2-config-model) describes the payload; [The graph](#the-graph) has a
 full example.
@@ -252,7 +252,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `16` | `MSG_UI_TIMER` | UI input timer | Reserved |
 | `20` | `MSG_HW_LED` | HW output: onboard LED | Implemented |
 | `21` | `MSG_HW_GPO` | HW output: GPIO pin | Implemented |
-| `22` | `MSG_HW_PWM` | HW output: PWM | Reserved (commented out in `hwman.c`) |
+| `22` | `MSG_HW_PWM` | HW output: PWM pin | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core telemetry | Reserved |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Reserved |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Reserved |
@@ -271,6 +271,11 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `10` Button | 0 | None. The device ignores button messages in a config. |
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
 | `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
+| `22` PWM | 6 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 2) · bytes 3–4: frequency in Hz, `PWM_FREQ_MIN` (10) to 65535 (UI default 1000) · byte 5: duty cycle in percent, 0–`PWM_DUTY_MAX` (100) (UI default 50) |
+
+A PWM output runs at its frequency from setup, held low. When its source sends a
+non-zero value it switches to its duty cycle; when the source sends 0 it is held low
+again. A button therefore turns the PWM signal on and off.
 
 A node's label, position and incoming wire shape are separate messages (see
 [Labels, positions and wires](#labels-positions-and-wires)).
@@ -280,7 +285,7 @@ A node's label, position and incoming wire shape are separate messages (see
 The graph editor's nodes are control elements, and its wires are **source
 references**. A wire is not a message of its own:
 
-- An output (LED, GPO) has one input, so it stores the ID of the element wired to it.
+- An output (LED, GPO, PWM) has one input, so it stores the ID of the element wired to it.
 - An input (button) can feed many outputs; it stores nothing about them.
 
 When the user saves, the UI sends a `0A` config whose payload is:
@@ -295,10 +300,11 @@ Graph messages in the device's previous config are dropped, so a save replaces t
 stored graph rather than adding to it.
 
 Example: the demo graph with button `n1` wired to LED `n2` and to GPO `n3` on pin 1,
-with `n1` and `n2` renamed, saved against the first-boot config below.
+with `n1` and `n2` renamed, and a PWM `n4` added and wired to `n1` (pin 2, 1000 Hz,
+50 %), saved against the first-boot config below.
 
 ```hex example=save-config
-0A 00 9E                                        # Config, 158 bytes
+0A 00 C3                                        # Config, 195 bytes
 # networking, kept from the device's config
 B0 00 00 00 09  00 BD FC EA C1 4E 1E 79 4D      # device 0: DID
 B1 00 00 00 05  01 4C 38 53 47                  # device 0: name "L8SG"
@@ -318,6 +324,10 @@ A2 00 00 02 04  F5 62 75 62                     #   wire from n1: 345.1° at n1,
 A0 00 00 03 03  47 50 4F                        #   label "GPO"
 A1 00 00 03 04  00 C8 00 00                     #   at (200, 0)
 A2 00 00 03 04  FB F0 7B F0                     #   wire from n1: 354.3° at n1, 174.3° at n3
+22 00 00 04 06  00 01 02 03 E8 32               # PWM n4 ← n1, pin 2, 1000 Hz, 50 %
+A0 00 00 04 03  50 57 4D                        #   label "PWM"
+A1 00 00 04 04  00 C8 00 78                     #   at (200, 120)
+A2 00 00 04 04  F0 7F 70 7F                     #   wire from n1: 338.2° at n1, 158.2° at n4
 ```
 
 ### Restoring the graph
@@ -327,13 +337,14 @@ When a config arrives, the UI rebuilds the graph from it:
 - **If the config has no control messages** (a first-boot config), the UI keeps the
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
-  (`10` button, `20` LED, `21` GPO) becomes a node with the message's ID. If an ID
+  (`10` button, `20` LED, `21` GPO, `22` PWM) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Pin and label:** a GPO takes its pin from the message (an invalid pin keeps the
-  default 1), and a node takes the label from its `A0` message.
-- **Wires:** one for each LED or GPO whose source ID is a restored node, shaped by
+- **Settings and label:** a GPO takes its pin, and a PWM its pin, frequency and duty
+  cycle, from the message (an invalid value keeps the default), and a node takes the
+  label from its `A0` message.
+- **Wires:** one for each output (LED, GPO, PWM) whose source ID is a restored node, shaped by
   the output's `A2` message. Without one, the wire is drawn straight between the
   nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
@@ -447,7 +458,7 @@ Every exchange starts with an **operation word**:
 | `op` | Constant | Sent by | Followed by |
 |---|---|---|---|
 | 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per message | One word per further 4 payload bytes (none for a button) |
-| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO message | One reference word |
+| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM message | One reference word; for a PWM, then one PWM word |
 | 3 | `FIFO_OP_CLEAN_SETUP` | Nothing | — |
 
 Only the low 5 bits of the element type travel. Core 1 sets bit 5 on decode, so it
@@ -463,15 +474,26 @@ The **reference word** after a setup word carries the source element ID:
 +-------------------------+--------------------------------+
 ```
 
-`fifo_op_word`, `fifo_ref_word` and the matching decoders in `src/protocol.h` build
-and read these words.
+The **PWM word** after a PWM's reference word carries its frequency and duty cycle:
+
+```text
+ 31                      16 15             8 7             0
++-------------------------+----------------+---------------+
+|      frequency (Hz)     |   duty (%)     |       0       |
++-------------------------+----------------+---------------+
+```
+
+`fifo_op_word`, `fifo_ref_word`, `fifo_pwm_word` and the matching decoders in
+`src/protocol.h` build and read these words.
 
 The setup words for the [save-config example](#the-graph). The button is skipped,
-and each LED/GPO message becomes an operation word plus a reference word:
+and each LED/GPO/PWM message becomes an operation word plus a reference word, and a
+PWM word for the PWM:
 
 ```fifo example=save-config
 80000200 00010000           # setup LED n2, source n1
 81000301 00010000           # setup GPO n3 on pin 1, source n1
+82000402 00010000 03E83200  # setup PWM n4 on pin 2, source n1, 1000 Hz, 50 %
 ```
 
 The action word for the [command-button example](#01-command):
@@ -486,9 +508,14 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
 
 - **Setup** (`op` 2): reads the reference word (waiting up to 1 ms) and adds the
   output to the table under its source. For a GPO it also makes the pin an output.
+  For a PWM it also reads the PWM word (waiting up to 1 ms) and starts the pin's PWM
+  slice at that frequency, held low. The clock divider is the smallest whole number
+  that fits one period in the 16-bit counter, so the duty cycle has at least ~2300
+  steps (at 65535 Hz) and the slowest frequency is ~9 Hz.
 - **Action** (`op` 1): looks up the element ID as a source and drives each output
-  wired to it with the value byte. A GPO is set directly; an LED is passed back to
-  core 0 with an LED tag (below).
+  wired to it with the value byte. A GPO is set directly; a PWM runs at its duty
+  cycle for a non-zero value and is held low for 0; an LED is passed back to core 0
+  with an LED tag (below).
 - **Clean setup** (`op` 3): clears the table and resets all GPIO pins and PWM slices,
   then carries on as if it were an action word.
 
@@ -583,6 +610,9 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 13. **There is no framing.** Tags and values, and operation and extra words, are told
     apart only by order, so one lost or extra word desyncs everything after it.
 14. **Uptime counts 1.2 s ticks**, not seconds.
+15. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
+    at one frequency. Two PWM outputs on the same slice both run at the frequency of
+    the one set up last; the UI doesn't warn about it.
 
 ---
 

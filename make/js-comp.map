@@ -3,3 +3,4 @@
 {{button-js}}:ui/content/components/button.js
 {{led-js}}:ui/content/components/led.js
 {{gpo-js}}:ui/content/components/gpo.js
+{{pwm-js}}:ui/content/components/pwm.js

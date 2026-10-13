@@ -204,6 +204,20 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_EQUAL_HEX16(0xFBF0, it.pay[0] << 8 | it.pay[1]);
     TEST_ASSERT_EQUAL_HEX16(0x7BF0, it.pay[2] << 8 | it.pay[3]);
 
+    assert_message(&it, MSG_HW_PWM, 4, 6);
+    TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
+    TEST_ASSERT_EQUAL_UINT8(2, it.pay[2]);                         /* pin 2 */
+    TEST_ASSERT_EQUAL_UINT16(1000, it.pay[3] << 8 | it.pay[4]);    /* 1000 Hz */
+    TEST_ASSERT_EQUAL_UINT8(50, it.pay[5]);                        /* 50 % */
+    assert_message(&it, MSG_STRING, 4, 3);
+    TEST_ASSERT_EQUAL_MEMORY("PWM", it.pay, 3);
+    assert_message(&it, MSG_LAYOUT, 4, 4);
+    TEST_ASSERT_EQUAL_INT16(200, (int16_t)(it.pay[0] << 8 | it.pay[1]));
+    TEST_ASSERT_EQUAL_INT16(120, (int16_t)(it.pay[2] << 8 | it.pay[3]));
+    assert_message(&it, MSG_WIRE, 4, 4);                          /* wire n1 -> n4 */
+    TEST_ASSERT_EQUAL_HEX16(0xF07F, it.pay[0] << 8 | it.pay[1]);
+    TEST_ASSERT_EQUAL_HEX16(0x707F, it.pay[2] << 8 | it.pay[3]);
+
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
@@ -228,7 +242,7 @@ void test_graph_messages_belong_to_controls(void)
             while (controls.next(&controls)) {
                 if (controls.type > 0x3F || controls.id != labels.id) continue;
                 if (labels.type == MSG_WIRE)
-                    found = (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO)
+                    found = (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO || controls.type == MSG_HW_PWM)
                         && (controls.pay[0] << 8 | controls.pay[1]) != 0;
                 else
                     found = true;
@@ -245,6 +259,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_INPUT_BIT, MSG_UI_BUTTON & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_LED & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_GPO & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
@@ -264,11 +279,16 @@ void test_fifo_setup_words_match_save_config(void)
         switch (it.type) {
         case MSG_HW_LED: pin = 0; break;
         case MSG_HW_GPO: pin = it.pay[2]; break;
+        case MSG_HW_PWM: pin = it.pay[2]; break;
         default: continue;
         }
         TEST_ASSERT_TRUE(n + 2 <= words->len);
         TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, pin), words->words[n++]);
         TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(it.pay[0] << 8 | it.pay[1]), words->words[n++]);
+        if (it.type == MSG_HW_PWM) {
+            TEST_ASSERT_TRUE(n + 1 <= words->len);
+            TEST_ASSERT_EQUAL_HEX32(fifo_pwm_word(it.pay[3] << 8 | it.pay[4], it.pay[5]), words->words[n++]);
+        }
     }
     TEST_ASSERT_EQUAL_UINT(words->len, n);
 }
@@ -294,6 +314,10 @@ void test_fifo_words_decode(void)
     TEST_ASSERT_EQUAL_HEX16(0x1234, fifo_op_id(setup));
     TEST_ASSERT_EQUAL_UINT8(28, fifo_op_value(setup));
     TEST_ASSERT_EQUAL_HEX16(0xBEEF, fifo_ref_source(fifo_ref_word(0xBEEF)));
+
+    uint32_t pwm = fifo_pwm_word(65535, PWM_DUTY_MAX);
+    TEST_ASSERT_EQUAL_UINT16(65535, fifo_pwm_freq(pwm));
+    TEST_ASSERT_EQUAL_UINT8(PWM_DUTY_MAX, fifo_pwm_duty(pwm));
 }
 
 /* Current behaviour (PROTOCOL.md, Part 3): only 5 type bits travel and core 1 forces bit 5. */

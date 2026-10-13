@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_ and NET_OPT_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_ and PWM_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -44,7 +44,7 @@
 #define MSG_UI_TIMER            0x16    /* reserved */
 #define MSG_HW_LED              0x20
 #define MSG_HW_GPO              0x21
-#define MSG_HW_PWM              0x22    /* reserved */
+#define MSG_HW_PWM              0x22
 #define MSG_HW_CORE             0x30    /* reserved */
 #define MSG_HW_GPI              0x31    /* reserved */
 #define MSG_HW_ADC              0x32    /* reserved */
@@ -69,6 +69,10 @@
 
 /* Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network. */
 #define NET_OPT_JOIN            0x01
+
+/* PWM output (MSG_HW_PWM) payload limits. */
+#define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
+#define PWM_DUTY_MAX            100     /* duty cycle in percent */
 
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
@@ -99,8 +103,13 @@ static inline uint8_t fifo_op_type(uint32_t word) { return ((word >> 24) & 0x1F)
 static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
 static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
 
-/* Reference word, sent after a setup word for LED/GPO: [31:16] source element ID. */
+/* Reference word, sent after a setup word for LED/GPO/PWM: [31:16] source element ID. */
 static inline uint32_t fifo_ref_word(uint16_t source_id) { return (uint32_t)source_id << 16; }
 static inline uint16_t fifo_ref_source(uint32_t word) { return (word >> 16) & 0xFFFF; }
+
+/* PWM word, sent after the reference word for PWM: [31:16] frequency in Hz · [15:8] duty in percent. */
+static inline uint32_t fifo_pwm_word(uint16_t freq, uint8_t duty) { return (uint32_t)freq << 16 | (uint32_t)duty << 8; }
+static inline uint16_t fifo_pwm_freq(uint32_t word) { return (word >> 16) & 0xFFFF; }
+static inline uint8_t fifo_pwm_duty(uint32_t word) { return (word >> 8) & 0xFF; }
 
 #endif

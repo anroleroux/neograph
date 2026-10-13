@@ -22,6 +22,7 @@ const NODE_CLASSES = {
     [MSG_UI_BUTTON]: uiButton,
     [MSG_HW_LED]: uiLED,
     [MSG_HW_GPO]: uiGPO,
+    [MSG_HW_PWM]: uiPWM,
 };
 
 // Rebuild the Command view from the graph's UI inputs.
@@ -110,6 +111,11 @@ function restoreGraph(msgs) {
         elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
 
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
+        if (m.type === MSG_HW_PWM && m.len >= 6) {
+            elm.setPin(m.pay[2]);
+            elm.setFreq(m.pay[3] << 8 | m.pay[4]);
+            elm.setDuty(m.pay[5]);
+        }
         if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
     }
     idCounter = Math.max(...controls.keys()) + 1;
@@ -118,7 +124,7 @@ function restoreGraph(msgs) {
     // there is one (otherwise drawn straight between the nodes).
     const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
     for (const [id, m] of controls) {
-        if (m.type !== MSG_HW_LED && m.type !== MSG_HW_GPO) continue;
+        if (elements['n' + id].actDir !== 'inputs') continue;
         const source = m.len >= 2 ? (m.pay[0] << 8 | m.pay[1]) : 0;
         if (!source || !elements['n' + source]) continue;
 

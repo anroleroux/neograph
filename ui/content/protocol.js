@@ -32,7 +32,7 @@ const MSG_UI_DIAL            = 0x15;  // reserved
 const MSG_UI_TIMER           = 0x16;  // reserved
 const MSG_HW_LED             = 0x20;
 const MSG_HW_GPO             = 0x21;
-const MSG_HW_PWM             = 0x22;  // reserved
+const MSG_HW_PWM             = 0x22;
 const MSG_HW_CORE            = 0x30;  // reserved
 const MSG_HW_GPI             = 0x31;  // reserved
 const MSG_HW_ADC             = 0x32;  // reserved
@@ -54,6 +54,10 @@ const FIELD_NETWORK_OPTIONS  = 0x00;
 const FIELD_NETWORK_NAME     = 0x01;
 const FIELD_NETWORK_SSID     = 0x02;
 const FIELD_NETWORK_PASSWORD = 0x03;  // secrets store only
+
+// PWM output (MSG_HW_PWM) payload limits.
+const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz
+const PWM_DUTY_MAX           = 100;   // duty cycle in percent
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;

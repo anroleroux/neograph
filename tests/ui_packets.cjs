@@ -116,6 +116,20 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         gEdges[0].start.angle = Math.PI / 2;
         gEdges[0].start.mvfunc();
     });
+
+    // Add a PWM output from the add menu, set it up and wire the button to it.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
+    await page.evaluate(() => {
+        const pwm = elements.n4;
+        if (pwm.setFreq('5') !== false || pwm.setDuty('101') !== false || pwm.setPin('29') !== false) {
+            throw new Error('PWM settings out of range were accepted');
+        }
+        pwm.setPin('15');
+        pwm.setFreq('20000');
+        pwm.setDuty('75');
+        createEdge('n1', 'n4');
+    });
     await page.locator('#graph .write svg').dispatchEvent('click');
     const saves = await sent(page);
     expect(saves.length === 1 && saves[0][0] === 0x0A, 'saving did not send one config packet');
@@ -153,11 +167,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const restored = await page.evaluate(() => ({
         labels: Object.values(elements).map(e => e.label),
         pin: elements.n3.pin,
+        pwm: [elements.n4.pin, elements.n4.freq, elements.n4.duty].join(),
         wires: gEdges.length,
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.wires === 2 && restored.buttons === 1, 'graph not restored: ' + JSON.stringify(restored));
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,75' && restored.wires === 3 && restored.buttons === 1,
+        'graph not restored: ' + JSON.stringify(restored));
 
     await page.locator('#graph .write svg').dispatchEvent('click');
     const resaved = await sent(page);
