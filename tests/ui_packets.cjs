@@ -273,6 +273,24 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(adc.forPwm, 'a PWM does not take the ADC');
     expect(adc.toPlot, 'the ADC was not wired to the plot');
 
+    // A plot shows its source's unit, unless it is given its own.
+    const units = await page.evaluate(() => {
+        const [speed, temp, level] = [elements.n7, elements.n9, elements.n11];
+        const auto = [speed.unit(), temp.unit(), level.unit()].join('|');
+        const tooLong = speed.setUnit('x'.repeat(17)) === false;
+        speed.setUnit('rpm');
+        level.setUnit('mV');
+        level.setUnit('auto');
+        selectById(9);
+        const shown = [...document.querySelectorAll('#settings .editable')]
+            .find(row => row.querySelector('.label').textContent === 'Unit:').querySelector('.value').textContent;
+        return { auto, tooLong, set: [speed.unit(), level.unit(), level.unitOverride].join('|'), shown };
+    });
+    expect(units.auto === '|°C|V', 'the plots\' units from their sources are ' + units.auto);
+    expect(units.tooLong, 'a unit over 16 bytes was accepted');
+    expect(units.set === 'rpm|V|', 'setting the units gave ' + units.set);
+    expect(units.shown === 'Auto (°C)', 'the Unit setting shows ' + units.shown);
+
     await page.locator('#graph .write svg').dispatchEvent('click');
     const saves = await sent(page);
     expect(saves.length === 1 && saves[0][0] === 0x0A, 'saving did not send one config packet');
@@ -314,7 +332,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(trace === '0.00,0.75,0.00', 'the plot did not follow the slider: ' + trace);
     expect(await page.locator('#command .control-plot canvas').count() === 3, 'the Command view has no plot');
     await toCommandView(page);
-    expect(await page.locator('#command .control-plot .state').first().textContent() === '0', 'the plot does not show its value');
+    expect(await page.locator('#command .control-plot .state').first().textContent() === '0 rpm', 'the plot does not show its value and unit');
 
     // A plot takes any number, not only 0 to 1, and its axis fits what it shows.
     const anyRange = await page.evaluate(() => {
@@ -343,14 +361,17 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(temperature.tile === '31.3 °C', 'the core temperature tile shows ' + temperature.tile);
     expect(temperature.plot === ',31.27', 'the temperature plot holds ' + temperature.plot);
 
-    // ADC readings reach the ADC nodes on their channel only, as a fraction of 3.3 V.
+    // ADC readings reach the ADC nodes on their channel only, in volts.
     await page.evaluate(() => { window.__ws.receive('adc 0 4095'); window.__ws.receive('adc 1 2048'); });
     const reading = await page.evaluate(() => ({
         tile: document.querySelectorAll('#command .control-reading .state')[1].textContent,
         plot: elements.n11.samples.map(([, v]) => v === null ? '' : v.toFixed(4)).join(),
     }));
-    expect(reading.tile === '0.50 · 1.65 V', 'the ADC tile shows ' + reading.tile);
-    expect(reading.plot === ',0.5001', 'the ADC plot holds ' + reading.plot);
+    expect(reading.tile === '1.65 V', 'the ADC tile shows ' + reading.tile);
+    expect(reading.plot === ',1.6504', 'the ADC plot holds ' + reading.plot);
+    await toCommandView(page);
+    const plotStates = await page.$$eval('#command .control-plot .state', ss => ss.map(s => s.textContent).join('|'));
+    expect(plotStates.endsWith('|31.27 °C|1.65 V'), 'the plots show ' + plotStates);
 
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {
@@ -424,6 +445,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         vertical: elements.n5.vertical,
         plot: [elements.n7.window, elements.n7.sourceID(), elements.n9.sourceID(), elements.n11.sourceID()].join(),
         adc: elements.n10.channel,
+        units: [elements.n7.unit(), elements.n7.unitOverride, elements.n9.unit(), elements.n9.unitOverride, elements.n11.unit()].join('|'),
         plots: document.querySelectorAll('#command .control-plot').length,
         readings: document.querySelectorAll('#command .control-reading').length,
         wires: gEdges.length,
@@ -432,7 +454,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     }));
     expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level', 'labels not restored: ' + restored.labels);
     expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 7
-        && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.plots === 3 && restored.readings === 2
+        && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 3 && restored.readings === 2
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));

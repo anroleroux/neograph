@@ -2,10 +2,10 @@
 const ADC_VREF = 3.3;
 
 // An analog input: one of the device's ADC channels, ADC0 to ADC2 on GPIO 26 to
-// 28. A floating source whose value is the reading as a fraction of the
-// reference voltage, 0 to 1. On the device it drives the hardware outputs wired
-// to it (a PWM) directly; its readings also reach the browser as telemetry, for
-// its tile and the plots wired to it.
+// 28. A floating source whose value is the reading in volts, 0 to ADC_VREF. On the
+// device it drives the hardware outputs wired to it (a PWM) directly, with the
+// reading as a fraction of ADC_VREF; its readings also reach the browser as
+// telemetry, for its tile and the plots wired to it.
 class uiADC extends uiComponents {
     constructor(x = 0, y = 0) {
         super("adc", x, y);
@@ -23,7 +23,8 @@ class uiADC extends uiComponents {
         this.actNum = 0;
 
         this.channel = 0;
-        this.value = NaN;       // no reading yet
+        this.value = NaN;       // volts; no reading yet
+        this.unit = 'V';
 
         this.buildGraphElement();
     }
@@ -65,16 +66,15 @@ class uiADC extends uiComponents {
     }
 
     // A new reading from the device, 0 to ADC_RAW_FULL, or NaN for none: hand
-    // its fraction of full scale on to the wired nodes.
+    // it on to the wired nodes in volts.
     update(raw) {
-        this.value = raw / ADC_RAW_FULL;
+        this.value = raw / ADC_RAW_FULL * ADC_VREF;
         this.emit(this.value);
         if (this.tileState?.isConnected) this.tileState.textContent = this.reading();
     }
 
     reading() {
-        if (!Number.isFinite(this.value)) return '–';
-        return `${this.value.toFixed(2)} · ${(this.value * ADC_VREF).toFixed(2)} V`;
+        return Number.isFinite(this.value) ? `${this.value.toFixed(2)} V` : '–';
     }
 
     // In the Command view: a tile with the label and the latest reading.

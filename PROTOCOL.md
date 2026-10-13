@@ -291,7 +291,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 |---|---|---|
 | `10` Button | 0 | None. The device ignores button messages in a config. |
 | `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
-| `02` Plot | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10). The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
+| `02` Plot | 3–19 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10) · bytes 3…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
@@ -359,7 +359,7 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button | `20` LED, `21` GPO | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider or an ADC 0 to 1 (`00`–`FF`); the core temperature in °C |
+| Floating | `12` slider, `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider 0 to 1 (`00`–`FF`); an ADC in volts in the browser, 0 to 1 on the device; the core temperature in °C |
 
 The core temperature's values reach only the browser, so it drives a plot but not a
 PWM. An ADC's are on the device, so it drives both. The UI only draws wires between matching types, and drops mismatched source references
@@ -424,7 +424,7 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a slider takes its orientation, a plot its time window, an ADC its channel, a GPO its pin, and a PWM its
+- **Settings and label:** a slider takes its orientation, a plot its time window and unit, an ADC its channel, a GPO its pin, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source ID of an output that is a restored node of the
@@ -453,6 +453,11 @@ that time.
   current value; taking the wire out ends the trace.
 - **The history lives in the page.** It is lost on reload, and kept for the largest
   window (255 s), so a wider window shows what was already received.
+- **The unit** is shown after the value. By default it is the source's: V for an
+  [ADC](#adc-inputs), °C for a [core temperature](#core-temperature), none for a
+  slider. A unit set in the plot's settings (up to 16 bytes) overrides it, and is
+  saved in the plot's message; clearing it, or setting "auto", goes back to the
+  source's.
 
 ### Core temperature
 
@@ -471,8 +476,13 @@ The Command view shows it on a tile, and a plot wired to it draws it.
 ### ADC inputs
 
 An ADC node (`32`) is a floating source: one of the device's analog inputs, ADC0 to
-ADC2 on GPIO 26 to 28. Its value is the reading as a fraction of the 3.3 V
-reference, 0 to 1. The Command view shows it on a tile, as the fraction and in volts.
+ADC2 on GPIO 26 to 28. In the browser its value is the reading in volts, 0 to 3.3
+(1.3 V reads 1.3), and its unit is V. The Command view shows it on a tile, and a plot
+wired to it draws it.
+
+- **Two scales.** On the device the reading drives outputs as a fraction of 3.3 V, 0
+  to 1, as a slider's value does: 1.3 V puts a PWM's duty 39 % of the way from its
+  min to its max.
 
 - **On the device.** Core 1 samples each channel that has an ADC node and drives the
   outputs wired to the node directly, as a command from the browser would, so a

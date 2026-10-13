@@ -17,7 +17,8 @@ class uiCore extends uiComponents {
         this.actDir = "outputs";
         this.actNum = 0;
 
-        this.value = NaN;       // no reading yet
+        this.value = NaN;       // °C; no reading yet
+        this.unit = '°C';
 
         this.buildGraphElement();
     }

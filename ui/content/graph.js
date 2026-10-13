@@ -120,7 +120,10 @@ function restoreGraph(msgs) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
-        if (m.type === MSG_UI_GRAPH && m.len >= 3) elm.setWindow(m.pay[2]);
+        if (m.type === MSG_UI_GRAPH && m.len >= 3) {
+            elm.setWindow(m.pay[2]);
+            elm.setUnit(decoder.decode(m.pay.slice(3)));
+        }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
         if (m.type === MSG_HW_PWM && m.len >= 15) {
             const u16 = (i) => m.pay[i] << 8 | m.pay[i + 1];

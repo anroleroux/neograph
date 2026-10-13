@@ -75,7 +75,7 @@ static void check_config(const uint8_t *p, size_t len) {
             else if (it.pay[0] & ~SLIDER_VERTICAL) fail("slider orientation has bits other than SLIDER_VERTICAL");
             break;
         case MSG_UI_GRAPH:
-            if (it.len != 3) fail("plot message is not 3 bytes");
+            if (it.len < 3 || it.len > 3 + 16) fail("plot message is not 3 bytes plus a unit of up to 16");
             else if (it.pay[2] == 0) fail("plot window is 0 seconds");
             else check_source(p, len, it.pay[0] << 8 | it.pay[1], FLOATING,
                               "a plot is wired from something other than a slider, an ADC or the core temperature");

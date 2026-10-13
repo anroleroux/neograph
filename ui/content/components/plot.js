@@ -1,6 +1,8 @@
 // A plot's time window, in seconds: how much of the signal it shows.
 const PLOT_WINDOW_MIN = 1;
 const PLOT_WINDOW_MAX = 255;
+// The longest unit a plot saves, in UTF-8 bytes.
+const PLOT_UNIT_MAX = 16;
 
 // A value axis that fits `values`: round-numbered ticks, the lowest at or below
 // the smallest value and the highest at or above the largest, about four steps
@@ -50,6 +52,9 @@ class uiPlot extends uiComponents {
         this.actNum = 0;
 
         this.window = 10;
+        // The unit shown with the values: null for the source's own (see
+        // sourceUnit), or text that overrides it.
+        this.unitOverride = null;
         // The signal as [time in ms, value], one sample per change; a null value
         // marks where the plot lost its source.
         this.samples = [];
@@ -82,11 +87,35 @@ class uiPlot extends uiComponents {
         this.window = n;
     }
 
+    // The unit of the source wired in, '' if it has none (a slider) or there is no source.
+    sourceUnit() {
+        return this.inConns()[0]?.start.node.unit ?? '';
+    }
+
+    // The unit the plot shows: its own if set, otherwise its source's.
+    unit() {
+        return this.unitOverride ?? this.sourceUnit();
+    }
+
+    // Set the unit: text overrides the source's unit; nothing, or text starting
+    // with "auto", goes back to it. Returns false if the text is too long to save.
+    setUnit(unit) {
+        unit = String(unit).trim();
+        if (unit === '' || /^auto\b/i.test(unit)) {
+            this.unitOverride = null;
+            return;
+        }
+        if (new TextEncoder().encode(unit).length > PLOT_UNIT_MAX) return false;
+        this.unitOverride = unit;
+    }
+
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
         settings.appendChild(editableSetting('Window (s)', () => this.window, (s) => this.setWindow(s),
             {type: 'number', min: PLOT_WINDOW_MIN, max: PLOT_WINDOW_MAX}));
+        settings.appendChild(editableSetting('Unit',
+            () => this.unitOverride ?? `Auto (${this.sourceUnit() || 'none'})`, (u) => this.setUnit(u)));
     }
 
     // A new value from the source, any number. One that is not finite leaves a
@@ -205,7 +234,8 @@ class uiPlot extends uiComponents {
             ctx.stroke();
 
             // The value now, or where the pointer is.
-            const show = (v) => v == null ? '–' : axis.format(v, true);
+            const unit = this.unit();
+            const show = (v) => v == null ? '–' : axis.format(v, true) + (unit ? ' ' + unit : '');
             if (pointerX == null || pointerX < left) {
                 state.textContent = show(this.valueAt(now));
             } else {
@@ -223,11 +253,13 @@ class uiPlot extends uiComponents {
         requestAnimationFrame(draw);
     }
 
+    // The source, the window, then the unit if one is set: none means the source's.
     marshal() {
         const sourceID = this.sourceID();
+        const unit = new TextEncoder().encode(this.unitOverride ?? '');
         return [
-            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x03,
-            (sourceID >> 8) & 0xFF, sourceID & 0xFF, this.window,
+            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 3 + unit.length,
+            (sourceID >> 8) & 0xFF, sourceID & 0xFF, this.window, ...unit,
         ];
     }
 }
