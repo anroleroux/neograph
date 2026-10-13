@@ -58,24 +58,30 @@ class uiSlider extends uiComponents {
             () => this.vertical ? 'vertical' : 'horizontal', (o) => this.setOrientation(o)));
     }
 
-    // In the Command view: the label, the value from 0 to 1, and the slider.
-    // Only a change of the value's byte is sent, so a drag sends at most one
-    // command per step.
+    // In the Command view: a tile like a button's, with the label, the value
+    // from 0 to 1 below it, a light that is green while the value is above 0,
+    // and the slider. Only a change of the value's byte is sent, so a drag sends
+    // at most one command per step.
     buildUI(commandInterface) {
         const control = document.createElement('div');
         control.className = 'control-slider' + (this.vertical ? ' vertical' : '');
-        control.innerHTML = `<span class="name"></span><span class="value"></span>`
+        control.innerHTML = `<span class="light"></span><span class="name"></span><span class="state"></span>`
             + `<input type="range" min="0" max="${VALUE_FULL}" step="1">`;
         control.querySelector('.name').textContent = this.label;
-        const shown = control.querySelector('.value');
+        control.title = this.label;
         const input = control.querySelector('input');
         input.value = Math.round(this.value * VALUE_FULL);
         input.setAttribute('aria-label', this.label);
-        shown.textContent = this.value.toFixed(2);
+
+        const show = (value) => {
+            control.querySelector('.state').textContent = value.toFixed(2);
+            control.classList.toggle('on', value > 0);
+        };
+        show(this.value);
 
         input.addEventListener('input', () => {
             const value = Number(input.value) / VALUE_FULL;
-            shown.textContent = value.toFixed(2);
+            show(value);
             if (value === this.value) return;
             this.value = value;
             this.sendValue(value);

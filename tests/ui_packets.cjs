@@ -179,13 +179,17 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // ── Move the slider: 0.75, the same again (no command), then 0 ──
     const slider = page.locator('#command .control-slider input');
     expect(await page.locator('#command .control-slider.vertical').count() === 1, 'the Command view has no vertical slider');
-    for (const v of ['191', '191', '0']) {
-        await slider.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('input')); }, v);
-    }
+    const move = (v) => slider.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('input')); }, v);
+    await move('191');
+    expect(await page.locator('#command .control-slider.on .state').textContent() === '0.75',
+        'the slider does not show 0.75 with its light on');
+    await move('191');
+    await move('0');
     const moves = await sent(page);
     expect(moves.length === 2 && hex(moves[0]) === '010006' + '1200000501bf' && moves[1][8] === 0x00,
         'moving the slider did not send 0.75 then 0: ' + moves.map(hex));
-    expect(await page.locator('#command .control-slider .value').textContent() === '0.00', 'the slider does not show its value');
+    expect(await page.locator('#command .control-slider .state').textContent() === '0.00', 'the slider does not show its value');
+    expect(!(await page.locator('#command .control-slider.on').count()), 'the slider light is on at 0');
     packets.push(...moves);
 
     // ── Network fields: both options, then name, SSID and password ──
