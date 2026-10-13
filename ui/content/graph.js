@@ -135,6 +135,11 @@ function restoreGraph(msgs) {
     buildCommandInterface();
 }
 
+// Show or hide the add-node buttons.
+function toggleAddMenu() {
+    document.getElementById('add').classList.toggle('open');
+}
+
 // Add a node of a control message type in the middle of the view, and select it.
 // A node already there pushes the new one down and to the right.
 function addNode(type) {

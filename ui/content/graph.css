@@ -56,16 +56,37 @@
     margin-left: var(--step-0);
 }
 
-/* The add-node buttons, stacked down the left. */
+/* The add-node buttons, stacked down the left. Folded, they hide behind the
+   plus; open, each drops out to its place in the column. */
 #graph > .buttons.add {
     flex-direction: column;
     left: 0;
     right: auto;
+    /* the folded column must not block the canvas */
+    pointer-events: none;
 }
 
 #graph > .buttons.add > div {
     margin-left: 0;
     margin-bottom: var(--step-0);
+    pointer-events: auto;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+#graph > .buttons.add > .toggle {
+    position: relative;
+    z-index: 1;
+    background-color: var(--clr-pane);
+}
+
+#graph > .buttons.add.open > .toggle {
+    transform: rotate(45deg);
+}
+
+#graph > .buttons.add:not(.open) > div:not(.toggle) {
+    transform: translateY(calc(-1 * var(--i) * (var(--step-5) + var(--step-0))));
+    opacity: 0;
+    pointer-events: none;
 }
 
 #graph > .buttons > .connector {
