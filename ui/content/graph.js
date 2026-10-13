@@ -145,12 +145,15 @@ function restoreGraph(msgs) {
 
         if (m.type === MSG_HW_PWM) {
             if (m.len < 15) continue;
-            // A source only drives a parameter that is from the input.
-            elm.dutySource = elm.dutyFromInput ? ref(0) : null;
-            elm.freqSource = elm.freqFromInput ? ref(9) : null;
+            // A source only drives a parameter that is from the input, and only
+            // if it is floating: graphs saved before types were checked may wire
+            // a button to a PWM.
+            const source = (src, fromInput) => fromInput && src && elm.takesType(src) ? src : null;
+            elm.dutySource = source(ref(0), elm.dutyFromInput);
+            elm.freqSource = source(ref(9), elm.freqFromInput);
             elm.syncWires();
         } else if (ref(0)) {
-            createEdge(ref(0).name, elm.name);
+            createEdge(ref(0).name, elm.name);     // none if the types don't match
         }
 
         for (const edge of elm.inConns()) {
@@ -238,9 +241,13 @@ function createNode(id,obj) {
     return g;
 }
 
+// Wire two nodes, a source and an output whose types match; null if they don't.
 function createEdge(id1,id2) {
     let el1 = elements[id1];
     let el2 = elements[id2];
+    const output = el1.actDir === 'inputs' ? el1 : el2;
+    const source = output === el1 ? el2 : el1;
+    if (!output.takesType(source)) return null;
 
     return new gEdge(el1, el2);
 }

@@ -134,12 +134,20 @@ class uiComponents {
     // Whether a wire can join this node and `other`: one must be a source (an
     // input such as a button, which feeds any number of outputs) and the other
     // an output with room for another wire (most take one, a PWM two), not
-    // already wired from that source.
+    // already wired from that source. Their types must match: a boolean source
+    // (a button) drives a boolean output (an LED or GPO), and a floating one (a
+    // slider) a floating output (a PWM).
     canTakeConn(other) {
         if (other === this || other.actDir === this.actDir) return false;
         const [output, source] = this.actDir === 'inputs' ? [this, other] : [other, this];
         const input = output.inputs[output.actNum];
-        return input.conns.length < input.max && !input.conns.some(c => c.start.node === source);
+        return source.outputs[source.actNum].type === input.type
+            && input.conns.length < input.max && !input.conns.some(c => c.start.node === source);
+    }
+
+    // Whether `source` is of the type this output takes.
+    takesType(source) {
+        return source.actDir === 'outputs' && source.outputs[source.actNum].type === this.inputs[this.actNum].type;
     }
 
     // The wires into this node.

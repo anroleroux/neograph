@@ -6,7 +6,7 @@ class uiSlider extends uiComponents {
 
         this.outputs.push(
             {
-                type:"number",
+                type:"float",
                 conns:[]
             }
         );

@@ -217,13 +217,13 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_EQUAL_HEX16(0x7BF0, it.pay[2] << 8 | it.pay[3]);
 
     assert_message(&it, MSG_HW_PWM, 4, 15);
-    TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* duty source n1 */
+    TEST_ASSERT_EQUAL_UINT16(5, it.pay[0] << 8 | it.pay[1]);       /* duty source n5 */
     TEST_ASSERT_EQUAL_UINT8(2, it.pay[2]);                         /* pin 2 */
     TEST_ASSERT_EQUAL_UINT16(1000, it.pay[3] << 8 | it.pay[4]);    /* 1000 Hz */
     TEST_ASSERT_EQUAL_HEX8(PWM_DUTY_INPUT, it.pay[5]);             /* duty from input, constant frequency */
     TEST_ASSERT_EQUAL_UINT8(50, it.pay[6]);                        /* constant duty 50 % */
     TEST_ASSERT_EQUAL_UINT8(0, it.pay[7]);                         /* duty at 0: 0 % */
-    TEST_ASSERT_EQUAL_UINT8(50, it.pay[8]);                        /* duty at 1: 50 % */
+    TEST_ASSERT_EQUAL_UINT8(100, it.pay[8]);                       /* duty at 1: 100 % */
     TEST_ASSERT_EQUAL_UINT16(0, it.pay[9] << 8 | it.pay[10]);      /* no frequency source */
     TEST_ASSERT_EQUAL_UINT16(100, it.pay[11] << 8 | it.pay[12]);   /* frequency at 0 */
     TEST_ASSERT_EQUAL_UINT16(10000, it.pay[13] << 8 | it.pay[14]); /* frequency at 1 */
@@ -232,10 +232,18 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     assert_message(&it, MSG_LAYOUT, 4, 4);
     TEST_ASSERT_EQUAL_INT16(200, (int16_t)(it.pay[0] << 8 | it.pay[1]));
     TEST_ASSERT_EQUAL_INT16(120, (int16_t)(it.pay[2] << 8 | it.pay[3]));
-    assert_message(&it, MSG_WIRE, 4, 6);                          /* wire n1 -> n4, with its source */
-    TEST_ASSERT_EQUAL_HEX16(0xF07F, it.pay[0] << 8 | it.pay[1]);
-    TEST_ASSERT_EQUAL_HEX16(0x707F, it.pay[2] << 8 | it.pay[3]);
-    TEST_ASSERT_EQUAL_UINT16(1, it.pay[4] << 8 | it.pay[5]);
+    assert_message(&it, MSG_WIRE, 4, 6);                          /* wire n5 -> n4, with its source */
+    TEST_ASSERT_EQUAL_HEX16(0x0000, it.pay[0] << 8 | it.pay[1]);
+    TEST_ASSERT_EQUAL_HEX16(0x8000, it.pay[2] << 8 | it.pay[3]);
+    TEST_ASSERT_EQUAL_UINT16(5, it.pay[4] << 8 | it.pay[5]);
+
+    assert_message(&it, MSG_UI_SLIDER, 5, 1);
+    TEST_ASSERT_EQUAL_HEX8(0, it.pay[0] & SLIDER_VERTICAL);        /* horizontal */
+    assert_message(&it, MSG_STRING, 5, 5);
+    TEST_ASSERT_EQUAL_MEMORY("Level", it.pay, 5);
+    assert_message(&it, MSG_LAYOUT, 5, 4);
+    TEST_ASSERT_EQUAL_INT16(-200, (int16_t)(it.pay[0] << 8 | it.pay[1]));
+    TEST_ASSERT_EQUAL_INT16(120, (int16_t)(it.pay[2] << 8 | it.pay[3]));
 
     TEST_ASSERT_FALSE(it.next(&it));
 }
@@ -272,6 +280,39 @@ void test_graph_messages_belong_to_controls(void)
                 }
             }
             TEST_ASSERT_TRUE_MESSAGE(found, ex->name);
+        }
+    }
+}
+
+/* The type of a source element in a config example; 0 if it is not there. */
+static uint8_t element_type(const struct protocol_example *ex, uint16_t id)
+{
+    config_element_iterator it;
+    messages(&it, ex);
+    while (it.next(&it))
+        if (it.type <= 0x3F && it.id == id) return it.type;
+    return 0;
+}
+
+/* Wires join matching types (PROTOCOL.md, "Wire types"): an LED or GPO is driven by
+ * a button, a PWM by sliders. */
+void test_wires_join_matching_types(void)
+{
+    for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
+        const struct protocol_example *ex = &protocol_examples[i];
+        if (ex->bytes[0] != PKT_CONFIG) continue;
+
+        config_element_iterator it;
+        messages(&it, ex);
+        while (it.next(&it)) {
+            if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO) {
+                uint16_t src = it.pay[0] << 8 | it.pay[1];
+                if (src) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_BUTTON, element_type(ex, src), ex->name);
+            } else if (it.type == MSG_HW_PWM) {
+                uint16_t duty = it.pay[0] << 8 | it.pay[1], freq = it.pay[9] << 8 | it.pay[10];
+                if (duty) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_SLIDER, element_type(ex, duty), ex->name);
+                if (freq) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_SLIDER, element_type(ex, freq), ex->name);
+            }
         }
     }
 }
@@ -381,6 +422,7 @@ int main(void)
     RUN_TEST(test_default_config);
     RUN_TEST(test_save_config_keeps_device_config_then_appends_graph);
     RUN_TEST(test_graph_messages_belong_to_controls);
+    RUN_TEST(test_wires_join_matching_types);
     RUN_TEST(test_element_type_bits);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);

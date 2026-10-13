@@ -233,16 +233,44 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         'field updates are not 4 config and 1 secret');
     packets.push(...updates);
 
+    // Wires join only matching types: a button (boolean) drives an LED or GPO, a
+    // slider (floating) a PWM.
+    const types = await page.evaluate(() => {
+        const pwm = new uiPWM(400, 300);      // n7, no wires yet
+        new uiButton(-400, 300);              // n8
+        const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
+        toggleConnectMode();
+        selectById(7);
+        const fromPwm = marked();
+        clearSelection();
+        toggleConnectMode();
+        selectById(7);
+        pwm.setMode('duty', 'input');
+        pwm.createSettings();
+        const picks = [...document.querySelectorAll('#settings select option')].map(o => o.value).join();
+        return {
+            fromPwm,
+            picks,
+            sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
+            buttonToPwm: createEdge('n8', 'n7') === null && pwm.setSource('duty', elements.n8) === false
+                && pwm.inConns().length === 0,
+        };
+    });
+    expect(types.fromPwm === 'n5,n6', 'wire mode from a PWM marks ' + types.fromPwm);
+    expect(types.picks === ',n5,n6', 'the PWM offers inputs ' + types.picks);
+    expect(types.sliderToLed, 'a slider was wired to the LED');
+    expect(types.buttonToPwm, 'a button was wired to a PWM');
+
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n5', 'n2');
+        createEdge('n8', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n5' && replaced.button === 'n3' && replaced.wires === 1,
+    expect(replaced.led === 'n8' && replaced.button === 'n3' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
@@ -271,6 +299,21 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const resaved = await sent(page);
     expect(resaved.length === 1 && hex(resaved[0]) === hex(saved), 'saving the restored graph changed the config');
     packets.push(...resaved);
+
+    // A config saved before wire types were checked may wire a slider to an LED or a
+    // button to a PWM: restoring it drops those wires and keeps the matching one.
+    const mixed = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x10, 0, 0, 1, 0,                                  // button n1
+            0x12, 0, 0, 2, 1, 0,                               // slider n2
+            0x20, 0, 0, 3, 2, 0, 2,                            // LED n3 ← slider n2
+            0x22, 0, 0, 4, 15, 0, 1, 2, 0x03, 0xE8, 0x03,      // PWM n4: duty ← button n1,
+            50, 0, 100, 0, 2, 0, 100, 0x27, 0x10,              //   frequency ← slider n2
+        ])));
+        return gEdges.map(e => e.start.node.name + '>' + e.end.node.name).join()
+            + '|' + [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join();
+    });
+    expect(mixed === 'n2>n4|,n2', 'restoring mismatched wires gave ' + mixed);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

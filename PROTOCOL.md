@@ -307,8 +307,9 @@ follows an input: a source element whose value maps linearly onto it, 0 → min 
 | 13–14 | Frequency at input 1 (max), Hz | 10–65535 (10000) |
 
 - **A constant parameter is constant:** a PWM whose duty cycle and frequency are both
-  constant runs from setup and ignores its inputs. To switch a PWM with a button, drive
-  its duty cycle from the button, min 0 % and max the duty wanted.
+  constant runs from setup and ignores its inputs.
+- **Only floating sources** (a slider) can drive a PWM; see
+  [Wire types](#wire-types).
 - **A logarithmic frequency** (`PWM_FREQ_LOG`) is min × (max / min)^value: each step
   of the input multiplies it by the same factor, so a slider spends as long on
   100–1000 Hz as on 1–10 kHz. With 100 and 10000 Hz, 0.5 gives 1 kHz (5050 Hz when
@@ -329,7 +330,20 @@ references**. A wire is not a message of its own:
 
 - An output stores the ID of the element wired to it: an LED or GPO its one source,
   a PWM the source of its duty cycle and of its frequency.
-- An input (button) can feed many outputs; it stores nothing about them.
+- An input (button, slider) can feed many outputs; it stores nothing about them.
+
+#### Wire types
+
+Every input and output is **boolean** or **floating**, and a wire joins only the same
+type:
+
+| Type | Sources | Outputs | Values |
+|---|---|---|---|
+| Boolean | `10` button | `20` LED, `21` GPO | 0 or 1 (`00` / `FF`) |
+| Floating | `12` slider | `22` PWM | 0 to 1 (`00`–`FF`) |
+
+The UI only draws wires between matching types, and drops mismatched source references
+when it restores a config (configs saved before types were checked may hold them).
 
 When the user saves, the UI sends a `0A` config whose payload is:
 
@@ -343,12 +357,12 @@ Graph messages in the device's previous config are dropped, so a save replaces t
 stored graph rather than adding to it.
 
 Example: the demo graph with button `n1` wired to LED `n2` and to GPO `n3` on pin 1,
-with `n1` and `n2` renamed, and a PWM `n4` added on pin 2 whose duty cycle follows
-`n1` (0 % at 0, 50 % at 1: the button switches it between off and 50 %) at a constant
-1000 Hz, saved against the first-boot config below.
+with `n1` and `n2` renamed, then a PWM `n4` added on pin 2 at a constant 1000 Hz, and
+a slider `n5` "Level" wired to the PWM's duty cycle (0 % at 0, 100 % at 1), saved
+against the first-boot config below.
 
 ```hex example=save-config
-0A 00 CE                                        # Config, 206 bytes
+0A 00 E7                                        # Config, 231 bytes
 # networking, kept from the device's config
 B0 00 00 00 09  00 BD FC EA C1 4E 1E 79 4D      # device 0: DID
 B1 00 00 00 05  01 4C 38 53 47                  # device 0: name "L8SG"
@@ -368,11 +382,14 @@ A2 00 00 02 04  F5 62 75 62                     #   wire from n1: 345.1° at n1,
 A0 00 00 03 03  47 50 4F                        #   label "GPO"
 A1 00 00 03 04  00 C8 00 00                     #   at (200, 0)
 A2 00 00 03 04  FB F0 7B F0                     #   wire from n1: 354.3° at n1, 174.3° at n3
-22 00 00 04 0F  00 01 02 03 E8 01               # PWM n4: duty ← n1, pin 2, 1000 Hz, duty from input
-                32 00 32  00 00 00 64 27 10     #   duty 50 %, 0–50 %; no frequency source, 100–10000 Hz
+22 00 00 04 0F  00 05 02 03 E8 01               # PWM n4: duty ← n5, pin 2, 1000 Hz, duty from input
+                32 00 64  00 00 00 64 27 10     #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
 A0 00 00 04 03  50 57 4D                        #   label "PWM"
 A1 00 00 04 04  00 C8 00 78                     #   at (200, 120)
-A2 00 00 04 06  F0 7F 70 7F 00 01               #   wire from n1: 338.2° at n1, 158.2° at n4
+A2 00 00 04 06  00 00 80 00 00 05               #   wire from n5: 0° at n5, 180° at n4
+12 00 00 05 01  00                              # slider n5, horizontal
+A0 00 00 05 05  4C 65 76 65 6C                  #   label "Level"
+A1 00 00 05 04  FF 38 00 78                     #   at (-200, 120)
 ```
 
 ### Restoring the graph
@@ -389,10 +406,10 @@ When a config arrives, the UI rebuilds the graph from it:
 - **Settings and label:** a slider takes its orientation, a GPO its pin, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
-- **Wires:** one for each source ID of an output that is a restored node: an LED's or
-  GPO's source, and the sources of a PWM's parameters that follow an input. Each is
-  shaped by its `A2` message; without one, the wire is drawn straight between the
-  nodes.
+- **Wires:** one for each source ID of an output that is a restored node of the
+  output's [type](#wire-types): an LED's or GPO's button, and the sliders of a PWM's
+  parameters that follow an input. Each is shaped by its `A2` message; without one,
+  the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
   get IDs above the highest restored one.
 
@@ -548,15 +565,15 @@ Frequency word
 `fifo_op_word`, `fifo_ref_word`, `fifo_pwm_word`, `fifo_duty_word`, `fifo_freq_word`
 and the matching decoders in `src/protocol.h` build and read these words.
 
-The setup words for the [save-config example](#the-graph). The button is skipped,
+The setup words for the [save-config example](#the-graph). The button and slider are skipped,
 and each LED/GPO/PWM message becomes an operation word plus a reference word, then
 the PWM's four further words:
 
 ```fifo example=save-config
 80000200 00010000           # setup LED n2, source n1
 81000301 00010000           # setup GPO n3 on pin 1, source n1
-82000402 00010000           # setup PWM n4 on pin 2, duty source n1
-03E80001 32003200           #   1000 Hz, duty from input; duty 50 %, 0–50 %
+82000402 00050000           # setup PWM n4 on pin 2, duty source n5
+03E80001 32006400           #   1000 Hz, duty from input; duty 50 %, 0–100 %
 00000000 00642710           #   no frequency source; 100–10000 Hz
 ```
 

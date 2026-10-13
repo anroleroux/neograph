@@ -1,6 +1,6 @@
 // A PWM output. Its duty cycle and its frequency are each constant, or from an
-// input: a source node, picked in the settings, whose value 0 gives the
-// parameter's min and 1 its max. The PWM's wires are those sources.
+// input: a floating source node (a slider), picked in the settings, whose value
+// 0 gives the parameter's min and 1 its max. The PWM's wires are those sources.
 class uiPWM extends uiComponents {
     constructor(x = 0, y = 0) {
         super("pwm",x,y);
@@ -9,7 +9,7 @@ class uiPWM extends uiComponents {
 
         this.inputs.push(
             {
-                type:"number",
+                type:"float",
                 conns:[],
                 max:2
             }
@@ -87,8 +87,10 @@ class uiPWM extends uiComponents {
         if (mode === 'constant') this.setSource(param, null);
     }
 
-    // Drive a parameter from a source node, or from none, and redraw the wires.
+    // Drive a parameter from a floating source node, or from none, and redraw
+    // the wires. A source of another type is refused.
     setSource(param, node) {
+        if (node && !this.takesType(node)) return false;
         this[param + 'Source'] = node;
         this.syncWires();
     }
@@ -149,8 +151,8 @@ class uiPWM extends uiComponents {
                 (v) => this['set' + cap](v), attrs));
             return;
         }
-        // Any input node can be picked; picking one draws its wire.
-        const choices = Object.values(elements).filter(n => n.actDir === 'outputs')
+        // Any floating input node (a slider) can be picked; picking one draws its wire.
+        const choices = Object.values(elements).filter(n => this.takesType(n))
             .map(n => [n.name, `${n.label} (${n.name})`]);
         settings.appendChild(selectSetting('Input', [['', 'None'], ...choices],
             () => this[param + 'Source']?.name ?? '',
