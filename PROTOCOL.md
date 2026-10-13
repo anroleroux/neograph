@@ -818,12 +818,20 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 11. **There is no framing.** Tags and values, and operation and extra words, are told
     apart only by order, so one lost or extra word desyncs everything after it.
 12. **Uptime counts 1.2 s ticks**, not seconds.
+
+**Hardware**
+
 13. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
     at one frequency. Two PWM outputs on the same slice both run at the frequency of
     the one set up last; the UI doesn't warn about it.
 14. **The UI lets two nodes claim one pin.** Two GPOs, PWMs or an ADC and a GPO or
     PWM may name the same pin. Core 1 sets up the first and skips the others (it logs
     each), but the UI doesn't warn about it.
+15. **ADC readings carry power-supply noise.** The Pico 2 W's switching regulator
+    runs in its power-saving mode, which adds ripple to the ADC's 3.3 V reference.
+    Its quieter PWM mode is set through the WiFi chip (`WL_GPIO1`, the regulator's PS
+    pin), and the firmware doesn't set it. Core 1's averaging and hysteresis hide most
+    of the noise, at the cost of resolution.
 
 ---
 
