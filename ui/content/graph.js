@@ -304,11 +304,14 @@ function clearSelection() {
     }
 }
 
-// Delete the selected wire.
+// Delete the selected wire, or the selected node with its wires.
 function deleteSelected() {
     if (selectedEdge) {
         selectedEdge.remove();
         selectedEdge = null;
+    } else if (selected) {
+        selected.remove();
+        clearSelection();
     }
 }
 
