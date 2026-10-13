@@ -42,6 +42,53 @@
     box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px;
 }
 
+/* A slider: its name and value above, the track below. A horizontal slider
+   takes two columns, a vertical one two rows, with the track running up. */
+#command > div.control-slider {
+    grid-column: span 2;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto 1fr;
+    align-items: center;
+    padding: 0.6em 1em;
+    color: #20202b;
+    font-weight: bold;
+}
+
+#command > div.control-slider.vertical {
+    grid-column: auto;
+    grid-row: span 2;
+    height: calc(12em + var(--step-0));
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
+    justify-items: center;
+}
+
+#command > div.control-slider > .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#command > div.control-slider > .value {
+    font-variant-numeric: tabular-nums;
+}
+
+#command > div.control-slider > input {
+    grid-column: 1 / -1;
+    width: 100%;
+    accent-color: #20202b;
+    cursor: pointer;
+}
+
+#command > div.control-slider.vertical > input {
+    grid-column: auto;
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: auto;
+    height: 100%;
+}
+
 #command > div.enabled > div {
     background-color: #4BAC4F;
 }

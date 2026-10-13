@@ -311,17 +311,18 @@ void core1_worker() {
                         case MSG_HW_LED:
                             printf("switch LED, value:%i\n",decop.value);
                             push_to_core0(FIFO_TAG_LED);
-                            push_to_core0(decop.value);
+                            push_to_core0(decop.value >= VALUE_HALF);
                             break;
                         
                         case MSG_HW_GPO:
                             printf("switch GPO %d, value:%i\n",el.io, decop.value);
-                            gpio_put(el.io,decop.value);
+                            gpio_put(el.io, decop.value >= VALUE_HALF);
                             break;
                         
                         case MSG_HW_PWM:
                             printf("switch PWM %d, value:%i\n",el.io, decop.value);
-                            pwm_set_gpio_level(el.io, decop.value ? el.level : 0);
+                            // The value scales the set duty cycle: full scale runs at it.
+                            pwm_set_gpio_level(el.io, (uint32_t)el.level * decop.value / VALUE_FULL);
                             break;
 
                         default:

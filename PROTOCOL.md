@@ -130,11 +130,21 @@ that was operated, with its new value as the payload.
 
 | Message byte | Field | Notes |
 |---|---|---|
-| 0 | Message type | The type of the operated element, e.g. `10` button |
+| 0 | Message type | The type of the operated element: `10` button or `12` slider |
 | 1 | Reserved | `00` |
 | 2–3 | Element ID | The operated element |
-| 4 | Payload length | `01` for a button |
-| 5… | Value | Button: `00` released / `01` pressed (toggles on each click) |
+| 4 | Payload length | `01` |
+| 5… | Value | One byte, a fraction of full scale: `00` = 0 to `FF` = 1 (`VALUE_FULL`) |
+
+**Values** run from 0 to 1, sent as one byte, `round(value × 255)`:
+
+- **Button:** `00` released / `FF` pressed (toggles on each click).
+- **Slider:** its position, `00`–`FF` (shown as 0.00–1.00). Dragging sends a command
+  each time the byte changes.
+
+Outputs read the value the same way: an LED or GPO is on from `80` (`VALUE_HALF`, about
+0.5) up, and a PWM runs at its duty cycle scaled by the value (see
+[Control payloads](#control-payloads)).
 
 For each message, core 0 sends one [action word](#core-0--core-1) to core 1 carrying
 the first payload byte. The remaining payload bytes, if any, follow as extra words
@@ -142,7 +152,12 @@ the first payload byte. The remaining payload bytes, if any, follow as extra wor
 
 ```hex example=command-button
 01 00 06                    # Command, 6 bytes
-10 00 00 01 01  01          # button n1 → value 1
+10 00 00 01 01  FF          # button n1 → pressed, value 1
+```
+
+```hex example=command-slider
+01 00 06                    # Command, 6 bytes
+12 00 00 04 01  BF          # slider n4 → value 0.75
 ```
 
 #### `0B` Update config field, `0C` Update secret field
@@ -245,7 +260,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `02` | `MSG_UI_GRAPH` | UI output graph | Reserved |
 | `10` | `MSG_UI_BUTTON` | UI input button | Implemented |
 | `11` | `MSG_UI_SWITCH` | UI input switch | Reserved |
-| `12` | `MSG_UI_SLIDER` | UI input slider | Reserved |
+| `12` | `MSG_UI_SLIDER` | UI input slider | Implemented |
 | `13` | `MSG_UI_SLIDER_2D` | UI input 2D slider | Reserved |
 | `14` | `MSG_UI_MULTI_SLIDER` | UI input multi slider | Reserved |
 | `15` | `MSG_UI_DIAL` | UI input dial | Reserved |
@@ -269,13 +284,15 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | Element | Payload length | Payload |
 |---|---|---|
 | `10` Button | 0 | None. The device ignores button messages in a config. |
+| `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
 | `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
 | `22` PWM | 6 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 2) · bytes 3–4: frequency in Hz, `PWM_FREQ_MIN` (10) to 65535 (UI default 1000) · byte 5: duty cycle in percent, 0–`PWM_DUTY_MAX` (100) (UI default 50) |
 
 A PWM output runs at its frequency from setup, held low. When its source sends a
-non-zero value it switches to its duty cycle; when the source sends 0 it is held low
-again. A button therefore turns the PWM signal on and off.
+value, the PWM runs at its duty cycle scaled by that value: a pressed button (1) runs
+it at the duty cycle and a released one (0) holds it low, and a slider at 0.5 runs it
+at half the duty cycle.
 
 A node's label, position and incoming wire shape are separate messages (see
 [Labels, positions and wires](#labels-positions-and-wires)).
@@ -337,12 +354,12 @@ When a config arrives, the UI rebuilds the graph from it:
 - **If the config has no control messages** (a first-boot config), the UI keeps the
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
-  (`10` button, `20` LED, `21` GPO, `22` PWM) becomes a node with the message's ID. If an ID
+  (`10` button, `12` slider, `20` LED, `21` GPO, `22` PWM) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a GPO takes its pin, and a PWM its pin, frequency and duty
-  cycle, from the message (an invalid value keeps the default), and a node takes the
+- **Settings and label:** a slider takes its orientation, a GPO its pin, and a PWM its
+  pin, frequency and duty cycle, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each output (LED, GPO, PWM) whose source ID is a restored node, shaped by
   the output's `A2` message. Without one, the wire is drawn straight between the
@@ -499,7 +516,13 @@ PWM word for the PWM:
 The action word for the [command-button example](#01-command):
 
 ```fifo example=command-button
-50000101                    # action, type 10 → 30, element n1, value 1
+500001FF                    # action, type 10 → 30, element n1, value FF
+```
+
+and for the [command-slider example](#01-command):
+
+```fifo example=command-slider
+520004BF                    # action, type 12 → 32, element n4, value BF
 ```
 
 ### Core 1 behaviour
@@ -513,9 +536,9 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   that fits one period in the 16-bit counter, so the duty cycle has at least ~2300
   steps (at 65535 Hz) and the slowest frequency is ~9 Hz.
 - **Action** (`op` 1): looks up the element ID as a source and drives each output
-  wired to it with the value byte. A GPO is set directly; a PWM runs at its duty
-  cycle for a non-zero value and is held low for 0; an LED is passed back to core 0
-  with an LED tag (below).
+  wired to it with the value byte. A GPO is set high from `VALUE_HALF` up, low below
+  it; a PWM's level is its duty-cycle level × value / `VALUE_FULL`; an LED is passed
+  back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0.
 - **Clean setup** (`op` 3): clears the table and resets all GPIO pins and PWM slices,
   then carries on as if it were an action word.
 

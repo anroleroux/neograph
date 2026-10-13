@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_ and PWM_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, PWM_, SLIDER_ and VALUE_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -37,7 +37,7 @@
 #define MSG_UI_GRAPH            0x02    /* reserved */
 #define MSG_UI_BUTTON           0x10
 #define MSG_UI_SWITCH           0x11    /* reserved */
-#define MSG_UI_SLIDER           0x12    /* reserved */
+#define MSG_UI_SLIDER           0x12
 #define MSG_UI_SLIDER_2D        0x13    /* reserved */
 #define MSG_UI_MULTI_SLIDER     0x14    /* reserved */
 #define MSG_UI_DIAL             0x15    /* reserved */
@@ -69,6 +69,13 @@
 
 /* Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network. */
 #define NET_OPT_JOIN            0x01
+
+/* Command values: one byte, a fraction of full scale, 0x00 = 0 to 0xFF = 1. */
+#define VALUE_FULL              0xFF    /* 1: a pressed button, a slider at its end */
+#define VALUE_HALF              0x80    /* on/off outputs (LED, GPO) are on from here up */
+
+/* Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical. */
+#define SLIDER_VERTICAL         0x01
 
 /* PWM output (MSG_HW_PWM) payload limits. */
 #define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */

@@ -57,21 +57,9 @@ class uiButton extends uiComponents {
         return buffer;
     }
 
+    // Each click toggles the button: pressed sends 1, released 0.
     handleClick() {
-        this.value = this.value?false:true;
-
-        const cmdPkt = new Uint8Array(9);
-        cmdPkt[0] = PKT_COMMAND;
-        cmdPkt[1] = 0;
-        cmdPkt[2] = cmdPkt.length - PKT_HEADER_LEN;
-        cmdPkt[3] = this.tc;
-        cmdPkt[4] = 0;
-        cmdPkt[5] = (this.id >> 8) & 0xFF;
-        cmdPkt[6] = this.id & 0xFF;
-        cmdPkt[7] = 1;
-        cmdPkt[8] = this.value;
-
-        console.log(cmdPkt) //debug
-        socket.send(cmdPkt); //online
+        this.value = !this.value;
+        this.sendValue(this.value ? 1 : 0);
     }
 }

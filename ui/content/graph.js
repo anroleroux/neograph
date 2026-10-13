@@ -20,6 +20,7 @@ const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FI
 // The node classes a config can restore, by control message type.
 const NODE_CLASSES = {
     [MSG_UI_BUTTON]: uiButton,
+    [MSG_UI_SLIDER]: uiSlider,
     [MSG_HW_LED]: uiLED,
     [MSG_HW_GPO]: uiGPO,
     [MSG_HW_PWM]: uiPWM,
@@ -110,6 +111,9 @@ function restoreGraph(msgs) {
         }
         elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
 
+        if (m.type === MSG_UI_SLIDER && m.len >= 1) {
+            elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
+        }
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
         if (m.type === MSG_HW_PWM && m.len >= 6) {
             elm.setPin(m.pay[2]);

@@ -4,6 +4,8 @@
 
 /* {{button-js}} */
 
+/* {{slider-js}} */
+
 /* {{led-js}} */
 
 /* {{gpo-js}} */

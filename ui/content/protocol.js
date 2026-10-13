@@ -25,7 +25,7 @@ const MSG_UI_INDICATOR       = 0x01;  // reserved
 const MSG_UI_GRAPH           = 0x02;  // reserved
 const MSG_UI_BUTTON          = 0x10;
 const MSG_UI_SWITCH          = 0x11;  // reserved
-const MSG_UI_SLIDER          = 0x12;  // reserved
+const MSG_UI_SLIDER          = 0x12;
 const MSG_UI_SLIDER_2D       = 0x13;  // reserved
 const MSG_UI_MULTI_SLIDER    = 0x14;  // reserved
 const MSG_UI_DIAL            = 0x15;  // reserved
@@ -54,6 +54,13 @@ const FIELD_NETWORK_OPTIONS  = 0x00;
 const FIELD_NETWORK_NAME     = 0x01;
 const FIELD_NETWORK_SSID     = 0x02;
 const FIELD_NETWORK_PASSWORD = 0x03;  // secrets store only
+
+// Command values: one byte, a fraction of full scale, 0x00 = 0 to 0xFF = 1.
+const VALUE_FULL             = 0xFF;  // 1: a pressed button, a slider at its end
+const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from here up
+
+// Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical.
+const SLIDER_VERTICAL        = 0x01;
 
 // PWM output (MSG_HW_PWM) payload limits.
 const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz

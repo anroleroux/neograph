@@ -128,7 +128,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         pwm.setPin('15');
         pwm.setFreq('20000');
         pwm.setDuty('75');
-        createEdge('n1', 'n4');
+    });
+
+    // Add a slider, make it vertical from its settings, and wire it to the PWM.
+    await page.locator('#add [title="Add a slider"]').dispatchEvent('click');
+    await page.locator('#settings .choice button', { hasText: 'Vertical' }).dispatchEvent('click');
+    expect(await page.evaluate(() => elements.n5.vertical), 'the orientation choice did not make the slider vertical');
+    await page.evaluate(() => {
+        elements.n5.setLabel('Speed');
+        createEdge('n5', 'n4');
     });
     await page.locator('#graph .write svg').dispatchEvent('click');
     const saves = await sent(page);
@@ -141,7 +149,20 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#command .control-btn').first().dispatchEvent('click');
     const commands = await sent(page);
     expect(commands.length === 2 && commands.every(p => p[0] === 0x01), 'pressing the button did not send two commands');
+    expect(commands[0][8] === 0xFF && commands[1][8] === 0x00, 'the button did not send 1 then 0');
     packets.push(...commands);
+
+    // ── Move the slider: 0.75, the same again (no command), then 0 ──
+    const slider = page.locator('#command .control-slider input');
+    expect(await page.locator('#command .control-slider.vertical').count() === 1, 'the Command view has no vertical slider');
+    for (const v of ['191', '191', '0']) {
+        await slider.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('input')); }, v);
+    }
+    const moves = await sent(page);
+    expect(moves.length === 2 && hex(moves[0]) === '010006' + '1200000501bf' && moves[1][8] === 0x00,
+        'moving the slider did not send 0.75 then 0: ' + moves.map(hex));
+    expect(await page.locator('#command .control-slider .value').textContent() === '0.00', 'the slider does not show its value');
+    packets.push(...moves);
 
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {
@@ -168,11 +189,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         labels: Object.values(elements).map(e => e.label),
         pin: elements.n3.pin,
         pwm: [elements.n4.pin, elements.n4.freq, elements.n4.duty].join(),
+        vertical: elements.n5.vertical,
         wires: gEdges.length,
+        pwmSource: elements.n4.inputs[0].conn?.start.node.name,
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,75' && restored.wires === 3 && restored.buttons === 1,
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,75' && restored.vertical && restored.wires === 3 && restored.pwmSource === 'n5'
+        && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));
 
     await page.locator('#graph .write svg').dispatchEvent('click');

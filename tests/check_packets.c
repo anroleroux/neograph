@@ -46,6 +46,10 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_DEVICE:
             device = true;
             break;
+        case MSG_UI_SLIDER:
+            if (it.len != 1) fail("slider message is not 1 byte");
+            else if (it.pay[0] & ~SLIDER_VERTICAL) fail("slider orientation has bits other than SLIDER_VERTICAL");
+            break;
         /* unmarshal_controls only sets up outputs with exactly these lengths */
         case MSG_HW_LED:
             if (it.len != 2) fail("LED message is not 2 bytes; the device would skip it");

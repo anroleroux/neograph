@@ -61,6 +61,34 @@ function editableSetting(label, get, set, attrs = {}) {
     return row;
 }
 
+// A settings field that picks one of a few options, shown side by side; the
+// current one is marked. `options` maps each value to its text; `set` stores
+// the picked value.
+function choiceSetting(label, options, get, set) {
+    const row = document.createElement('div');
+    row.className = 'editable choice';
+
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'label';
+    labelSpan.textContent = label + ':';
+    row.appendChild(labelSpan);
+
+    const buttons = Object.entries(options).map(([value, text]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = text;
+        button.dataset.value = value;
+        button.addEventListener('click', () => {
+            set(value);
+            buttons.forEach(b => b.classList.toggle('sel', b.dataset.value === get()));
+        });
+        row.appendChild(button);
+        return button;
+    });
+    buttons.forEach(b => b.classList.toggle('sel', b.dataset.value === get()));
+    return row;
+}
+
 class uiComponents {
     constructor(type,x, y) {
         this.type = type;
@@ -151,6 +179,19 @@ class uiComponents {
                 });
                 break;
         }
+    }
+
+    // Send this input's value to the device as a one-message command. The value
+    // is a fraction from 0 to 1, sent as one byte from 0 to VALUE_FULL.
+    sendValue(value) {
+        const byte = Math.round(Math.max(0, Math.min(1, value)) * VALUE_FULL);
+        const cmdPkt = Uint8Array.from([
+            PKT_COMMAND, 0, MSG_HEADER_LEN + 1,
+            this.tc, 0, (this.id >> 8) & 0xFF, this.id & 0xFF, 1, byte,
+        ]);
+
+        console.log(cmdPkt) //debug
+        socket.send(cmdPkt); //online
     }
 
     // The label as a MSG_STRING message keyed by this node's ID (see PROTOCOL.md).

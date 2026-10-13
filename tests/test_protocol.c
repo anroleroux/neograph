@@ -98,7 +98,19 @@ void test_command_button(void)
     config_element_iterator it;
     messages(&it, ex);
     assert_message(&it, MSG_UI_BUTTON, 1, 1);
-    TEST_ASSERT_EQUAL_UINT8(1, it.pay[0]);
+    TEST_ASSERT_EQUAL_HEX8(VALUE_FULL, it.pay[0]);                 /* pressed: 1 */
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
+void test_command_slider(void)
+{
+    const struct protocol_example *ex = example("command-slider");
+    TEST_ASSERT_EQUAL_HEX8(PKT_COMMAND, ex->bytes[0]);
+
+    config_element_iterator it;
+    messages(&it, ex);
+    assert_message(&it, MSG_UI_SLIDER, 4, 1);
+    TEST_ASSERT_EQUAL_UINT8(191, it.pay[0]);                       /* round(0.75 * 255) */
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
@@ -257,6 +269,7 @@ void test_graph_messages_belong_to_controls(void)
 void test_element_type_bits(void)
 {
     TEST_ASSERT_EQUAL_HEX8(MSG_INPUT_BIT, MSG_UI_BUTTON & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_INPUT_BIT, MSG_UI_SLIDER & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_LED & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_GPO & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -294,17 +307,20 @@ void test_fifo_setup_words_match_save_config(void)
 }
 
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c). */
-void test_fifo_action_word_matches_command_button(void)
+static void assert_action_word(const char *name)
 {
-    const struct fifo_example *words = fifo_example("command-button");
+    const struct fifo_example *words = fifo_example(name);
     config_element_iterator it;
-    messages(&it, example("command-button"));
+    messages(&it, example(name));
 
     TEST_ASSERT_TRUE(it.next(&it));
     TEST_ASSERT_EQUAL_UINT(1, words->len);
     TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_CONTROL_ACTION, it.type, it.id, it.pay[0]),
                             words->words[0]);
 }
+
+void test_fifo_action_word_matches_command_button(void) { assert_action_word("command-button"); }
+void test_fifo_action_word_matches_command_slider(void) { assert_action_word("command-slider"); }
 
 void test_fifo_words_decode(void)
 {
@@ -334,6 +350,7 @@ int main(void)
     RUN_TEST(test_every_packet_example_is_well_formed);
     RUN_TEST(test_device_id);
     RUN_TEST(test_command_button);
+    RUN_TEST(test_command_slider);
     RUN_TEST(test_update_examples);
     RUN_TEST(test_default_config);
     RUN_TEST(test_save_config_keeps_device_config_then_appends_graph);
@@ -341,6 +358,7 @@ int main(void)
     RUN_TEST(test_element_type_bits);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
+    RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_words_decode);
     RUN_TEST(test_fifo_ui_type_arrives_as_hw_type);
 

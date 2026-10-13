@@ -1,6 +1,7 @@
 {{edge-js}}:ui/content/components/edge.js
 {{parent-js}}:ui/content/components/parent.js
 {{button-js}}:ui/content/components/button.js
+{{slider-js}}:ui/content/components/slider.js
 {{led-js}}:ui/content/components/led.js
 {{gpo-js}}:ui/content/components/gpo.js
 {{pwm-js}}:ui/content/components/pwm.js
