@@ -133,6 +133,19 @@ function restoreGraph(msgs) {
     buildCommandInterface();
 }
 
+// Add a node of a control message type in the middle of the view, and select it.
+// A node already there pushes the new one down and to the right.
+function addNode(type) {
+    let x = Math.round(viewBox.x + viewBox.w / 2);
+    let y = Math.round(viewBox.y + viewBox.h / 2);
+    while (Object.values(elements).some(e => e.x === x && e.y === y)) {
+        x += 30;
+        y += 30;
+    }
+    const elm = new NODE_CLASSES[type](x, y);
+    selectById(elm.id);
+}
+
 function toggleConnectMode() {
     wireButton = document.getElementById('wire');
     

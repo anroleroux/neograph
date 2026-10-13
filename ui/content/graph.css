@@ -55,6 +55,18 @@
     margin-left: var(--step-0);
 }
 
+/* The add-node buttons, stacked down the left. */
+#graph > .buttons.add {
+    flex-direction: column;
+    left: 0;
+    right: auto;
+}
+
+#graph > .buttons.add > div {
+    margin-left: 0;
+    margin-bottom: var(--step-0);
+}
+
 #graph > .buttons > .connector {
     background-color: var(--clr-red);
 }
