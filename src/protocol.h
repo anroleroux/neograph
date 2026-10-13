@@ -77,9 +77,10 @@
 /* Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical. */
 #define SLIDER_VERTICAL         0x01
 
-/* PWM output (MSG_HW_PWM) payload limits. */
+/* PWM output (MSG_HW_PWM) payload limits and options. */
 #define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
 #define PWM_DUTY_MAX            100     /* duty cycle in percent */
+#define PWM_DUTY_INPUT          0x01    /* options bit 0: 0 = constant duty, 1 = duty from the input, min to max */
 
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
@@ -114,9 +115,17 @@ static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
 static inline uint32_t fifo_ref_word(uint16_t source_id) { return (uint32_t)source_id << 16; }
 static inline uint16_t fifo_ref_source(uint32_t word) { return (word >> 16) & 0xFFFF; }
 
-/* PWM word, sent after the reference word for PWM: [31:16] frequency in Hz · [15:8] duty in percent. */
-static inline uint32_t fifo_pwm_word(uint16_t freq, uint8_t duty) { return (uint32_t)freq << 16 | (uint32_t)duty << 8; }
+/* PWM word, sent after the reference word for PWM: [31:16] frequency in Hz · [7:0] options (PWM_DUTY_INPUT). */
+static inline uint32_t fifo_pwm_word(uint16_t freq, uint8_t options) { return (uint32_t)freq << 16 | options; }
 static inline uint16_t fifo_pwm_freq(uint32_t word) { return (word >> 16) & 0xFFFF; }
-static inline uint8_t fifo_pwm_duty(uint32_t word) { return (word >> 8) & 0xFF; }
+static inline uint8_t fifo_pwm_options(uint32_t word) { return word & 0xFF; }
+
+/* Duty word, sent after the PWM word: [31:24] constant duty · [23:16] min duty · [15:8] max duty, in percent. */
+static inline uint32_t fifo_duty_word(uint8_t duty, uint8_t min, uint8_t max) {
+    return (uint32_t)duty << 24 | (uint32_t)min << 16 | (uint32_t)max << 8;
+}
+static inline uint8_t fifo_duty_const(uint32_t word) { return (word >> 24) & 0xFF; }
+static inline uint8_t fifo_duty_min(uint32_t word) { return (word >> 16) & 0xFF; }
+static inline uint8_t fifo_duty_max(uint32_t word) { return (word >> 8) & 0xFF; }
 
 #endif

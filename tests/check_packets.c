@@ -59,10 +59,12 @@ static void check_config(const uint8_t *p, size_t len) {
             else if (it.pay[2] > 28) fail("GPO pin is over 28");
             break;
         case MSG_HW_PWM:
-            if (it.len != 6) fail("PWM message is not 6 bytes; the device would skip it");
+            if (it.len != 9) fail("PWM message is not 9 bytes; the device would skip it");
             else if (it.pay[2] > 28) fail("PWM pin is over 28");
             else if ((it.pay[3] << 8 | it.pay[4]) < PWM_FREQ_MIN) fail("PWM frequency is under PWM_FREQ_MIN");
-            else if (it.pay[5] > PWM_DUTY_MAX) fail("PWM duty cycle is over PWM_DUTY_MAX");
+            else if (it.pay[5] & ~PWM_DUTY_INPUT) fail("PWM options have bits other than PWM_DUTY_INPUT");
+            else if (it.pay[6] > PWM_DUTY_MAX || it.pay[7] > PWM_DUTY_MAX || it.pay[8] > PWM_DUTY_MAX)
+                fail("a PWM duty cycle is over PWM_DUTY_MAX");
             break;
         case MSG_STRING:
         case MSG_LAYOUT:

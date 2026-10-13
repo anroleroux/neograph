@@ -42,7 +42,12 @@ typedef struct {
         uint8_t value;
     };
     uint16_t source_id;
-    uint16_t level;     // PWM: the counter level for the set duty cycle
+    // PWM: the options (PWM_DUTY_INPUT), and the counter levels for the
+    // constant duty and for the duty at input 0 (min) and 1 (max).
+    uint8_t options;
+    uint16_t level;
+    uint16_t level_min;
+    uint16_t level_max;
 } hwel;
 
 typedef struct {
@@ -61,7 +66,10 @@ hwel decode_hwel(uint32_t op) {
     result.control_type = fifo_op_type(op);
     result.id           = fifo_op_id(op);
     result.value        = fifo_op_value(op);
+    result.options      = 0;
     result.level        = 0;
+    result.level_min    = 0;
+    result.level_max    = 0;
 
     return result;
 }
@@ -73,13 +81,12 @@ void decode_hwrf(uint32_t rf,hwel *decop) {
 static hwel_sources *hwel_source_table = NULL;
 
 // Run a pin as PWM at freq Hz, held low until its source drives it, and return the
-// counter level for duty percent. The clock divider is the smallest integer that
+// counter steps in one period. The clock divider is the smallest integer that
 // lets one period fit the 16-bit counter: an integer divider keeps the period free
 // of jitter, and the smallest one gives the finest duty steps. The pin's slice is
 // shared with one other pin, which gets the same frequency.
-static uint16_t pwm_setup(uint pin, uint16_t freq, uint8_t duty) {
+static uint32_t pwm_setup(uint pin, uint16_t freq) {
     if (freq < PWM_FREQ_MIN) freq = PWM_FREQ_MIN;
-    if (duty > PWM_DUTY_MAX) duty = PWM_DUTY_MAX;
 
     uint32_t steps = clock_get_hz(clk_sys) / freq;    // counter steps per period, undivided
     uint32_t div = (steps + 0xFFFE) / 0xFFFF;
@@ -95,7 +102,13 @@ static uint16_t pwm_setup(uint pin, uint16_t freq, uint8_t duty) {
     gpio_set_function(pin, GPIO_FUNC_PWM);
     pwm_set_enabled(slice, true);
 
-    printf("PWM on GPIO %d: %d Hz (div %d, top %d), duty %d%%\n", pin, freq, div, top, duty);
+    printf("PWM on GPIO %d: %d Hz (div %d, top %d)\n", pin, freq, div, top);
+    return top;
+}
+
+// The counter level for a duty cycle in percent, over a period of top steps.
+static uint16_t pwm_level(uint32_t top, uint8_t duty) {
+    if (duty > PWM_DUTY_MAX) duty = PWM_DUTY_MAX;
     return (uint16_t)(top * duty / PWM_DUTY_MAX);
 }
 
@@ -262,9 +275,19 @@ void core1_worker() {
                     multicore_fifo_pop_timeout_us(1000, &op);
                     decode_hwrf(op,&decop);
 
-                    uint32_t pwm_word = 0;
+                    uint32_t pwm_word = 0, duty_word = 0;
                     multicore_fifo_pop_timeout_us(1000, &pwm_word);
-                    decop.level = pwm_setup(decop.io, fifo_pwm_freq(pwm_word), fifo_pwm_duty(pwm_word));
+                    multicore_fifo_pop_timeout_us(1000, &duty_word);
+
+                    uint32_t top = pwm_setup(decop.io, fifo_pwm_freq(pwm_word));
+                    decop.options   = fifo_pwm_options(pwm_word);
+                    decop.level     = pwm_level(top, fifo_duty_const(duty_word));
+                    decop.level_min = pwm_level(top, fifo_duty_min(duty_word));
+                    decop.level_max = pwm_level(top, fifo_duty_max(duty_word));
+
+                    // Until its source sends a value, the input reads 0: a duty from
+                    // the input starts at min, a constant duty starts off.
+                    if (decop.options & PWM_DUTY_INPUT) pwm_set_gpio_level(decop.io, decop.level_min);
                     break;
                 }
 
@@ -321,8 +344,15 @@ void core1_worker() {
                         
                         case MSG_HW_PWM:
                             printf("switch PWM %d, value:%i\n",el.io, decop.value);
-                            // The value scales the set duty cycle: full scale runs at it.
-                            pwm_set_gpio_level(el.io, (uint32_t)el.level * decop.value / VALUE_FULL);
+                            if (el.options & PWM_DUTY_INPUT) {
+                                // Duty from the input: 0 runs at min, 1 at max, linearly
+                                // between. Min may be above max, which inverts the input.
+                                int32_t span = (int32_t)el.level_max - el.level_min;
+                                pwm_set_gpio_level(el.io, el.level_min + span * decop.value / VALUE_FULL);
+                            } else {
+                                // Constant duty, switched on and off like a GPO.
+                                pwm_set_gpio_level(el.io, decop.value >= VALUE_HALF ? el.level : 0);
+                            }
                             break;
 
                         default:

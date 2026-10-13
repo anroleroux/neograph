@@ -216,11 +216,14 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_EQUAL_HEX16(0xFBF0, it.pay[0] << 8 | it.pay[1]);
     TEST_ASSERT_EQUAL_HEX16(0x7BF0, it.pay[2] << 8 | it.pay[3]);
 
-    assert_message(&it, MSG_HW_PWM, 4, 6);
+    assert_message(&it, MSG_HW_PWM, 4, 9);
     TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
     TEST_ASSERT_EQUAL_UINT8(2, it.pay[2]);                         /* pin 2 */
     TEST_ASSERT_EQUAL_UINT16(1000, it.pay[3] << 8 | it.pay[4]);    /* 1000 Hz */
-    TEST_ASSERT_EQUAL_UINT8(50, it.pay[5]);                        /* 50 % */
+    TEST_ASSERT_EQUAL_HEX8(0, it.pay[5] & PWM_DUTY_INPUT);         /* constant duty */
+    TEST_ASSERT_EQUAL_UINT8(50, it.pay[6]);                        /* 50 % */
+    TEST_ASSERT_EQUAL_UINT8(0, it.pay[7]);                         /* min 0 % */
+    TEST_ASSERT_EQUAL_UINT8(100, it.pay[8]);                       /* max 100 % */
     assert_message(&it, MSG_STRING, 4, 3);
     TEST_ASSERT_EQUAL_MEMORY("PWM", it.pay, 3);
     assert_message(&it, MSG_LAYOUT, 4, 4);
@@ -299,8 +302,9 @@ void test_fifo_setup_words_match_save_config(void)
         TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, pin), words->words[n++]);
         TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(it.pay[0] << 8 | it.pay[1]), words->words[n++]);
         if (it.type == MSG_HW_PWM) {
-            TEST_ASSERT_TRUE(n + 1 <= words->len);
+            TEST_ASSERT_TRUE(n + 2 <= words->len);
             TEST_ASSERT_EQUAL_HEX32(fifo_pwm_word(it.pay[3] << 8 | it.pay[4], it.pay[5]), words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_duty_word(it.pay[6], it.pay[7], it.pay[8]), words->words[n++]);
         }
     }
     TEST_ASSERT_EQUAL_UINT(words->len, n);
@@ -331,9 +335,14 @@ void test_fifo_words_decode(void)
     TEST_ASSERT_EQUAL_UINT8(28, fifo_op_value(setup));
     TEST_ASSERT_EQUAL_HEX16(0xBEEF, fifo_ref_source(fifo_ref_word(0xBEEF)));
 
-    uint32_t pwm = fifo_pwm_word(65535, PWM_DUTY_MAX);
+    uint32_t pwm = fifo_pwm_word(65535, PWM_DUTY_INPUT);
     TEST_ASSERT_EQUAL_UINT16(65535, fifo_pwm_freq(pwm));
-    TEST_ASSERT_EQUAL_UINT8(PWM_DUTY_MAX, fifo_pwm_duty(pwm));
+    TEST_ASSERT_EQUAL_HEX8(PWM_DUTY_INPUT, fifo_pwm_options(pwm));
+
+    uint32_t duty = fifo_duty_word(50, 80, 20);
+    TEST_ASSERT_EQUAL_UINT8(50, fifo_duty_const(duty));
+    TEST_ASSERT_EQUAL_UINT8(80, fifo_duty_min(duty));
+    TEST_ASSERT_EQUAL_UINT8(20, fifo_duty_max(duty));
 }
 
 /* Current behaviour (PROTOCOL.md, Part 3): only 5 type bits travel and core 1 forces bit 5. */

@@ -137,14 +137,21 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Add a PWM output from the add menu, set it up and wire the button to it.
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
+    const dutyRows = () => page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).filter(t => t.startsWith('Duty')).join('|'));
+    expect(await dutyRows() === 'Duty cycle:|Duty cycle (%):', 'a new PWM does not show a constant duty: ' + await dutyRows());
+    await page.locator('#settings .choice button', { hasText: 'From input' }).dispatchEvent('click');
+    expect(await dutyRows() === 'Duty cycle:|Duty at 0 (%):|Duty at 1 (%):', 'duty from the input does not show min and max: ' + await dutyRows());
     await page.evaluate(() => {
         const pwm = elements.n4;
-        if (pwm.setFreq('5') !== false || pwm.setDuty('101') !== false || pwm.setPin('29') !== false) {
+        if (pwm.setFreq('5') !== false || pwm.setDuty('101') !== false || pwm.setPin('29') !== false
+            || pwm.setDutyMin('101') !== false || pwm.setDutyMax('-1') !== false) {
             throw new Error('PWM settings out of range were accepted');
         }
         pwm.setPin('15');
         pwm.setFreq('20000');
         pwm.setDuty('75');
+        pwm.setDutyMin('20');
+        pwm.setDutyMax('80');
     });
 
     // Add a slider, make it vertical from its settings, and wire it to the PWM.
@@ -227,14 +234,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const restored = await page.evaluate(() => ({
         labels: Object.values(elements).map(e => e.label),
         pin: elements.n3.pin,
-        pwm: [elements.n4.pin, elements.n4.freq, elements.n4.duty].join(),
+        pwm: [elements.n4.pin, elements.n4.freq, elements.n4.dutyFromInput, elements.n4.duty,
+            elements.n4.dutyMin, elements.n4.dutyMax].join(),
         vertical: elements.n5.vertical,
         wires: gEdges.length,
         pwmSource: elements.n4.inputs[0].conn?.start.node.name,
         buttons: document.querySelectorAll('#command .control-btn').length,
     }));
     expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,75' && restored.vertical && restored.wires === 3 && restored.pwmSource === 'n5'
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80' && restored.vertical && restored.wires === 3 && restored.pwmSource === 'n5'
         && restored.buttons === 1,
         'graph not restored: ' + JSON.stringify(restored));
 

@@ -109,6 +109,7 @@ input {
     border: 1px solid var(--clr-face-fade);
     border-radius: 0.35em;
     padding: var(--step--5) var(--step--3);
+    white-space: nowrap;
     cursor: pointer;
 }
 

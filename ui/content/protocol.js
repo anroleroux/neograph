@@ -62,9 +62,10 @@ const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from h
 // Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical.
 const SLIDER_VERTICAL        = 0x01;
 
-// PWM output (MSG_HW_PWM) payload limits.
+// PWM output (MSG_HW_PWM) payload limits and options.
 const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz
 const PWM_DUTY_MAX           = 100;   // duty cycle in percent
+const PWM_DUTY_INPUT         = 0x01;  // options bit 0: 0 = constant duty, 1 = duty from the input, min to max
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;

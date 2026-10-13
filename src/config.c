@@ -374,7 +374,7 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             break;
 
         case MSG_HW_PWM:
-            if (itr.len != 6) break;
+            if (itr.len != 9) break;
 
             control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_PWM, itr.id, itr.pay[2]);
             multicore_fifo_push_blocking(control_setup_msg);
@@ -385,6 +385,10 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             printf("send hw PWM setup %X\n",control_setup_msg);
 
             control_setup_msg = fifo_pwm_word(itr.pay[3]<<8 | itr.pay[4], itr.pay[5]);
+            multicore_fifo_push_blocking(control_setup_msg);
+            printf("send hw PWM setup %X\n",control_setup_msg);
+
+            control_setup_msg = fifo_duty_word(itr.pay[6], itr.pay[7], itr.pay[8]);
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
             break;

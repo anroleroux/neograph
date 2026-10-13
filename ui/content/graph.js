@@ -115,10 +115,13 @@ function restoreGraph(msgs) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
-        if (m.type === MSG_HW_PWM && m.len >= 6) {
+        if (m.type === MSG_HW_PWM && m.len >= 9) {
             elm.setPin(m.pay[2]);
             elm.setFreq(m.pay[3] << 8 | m.pay[4]);
-            elm.setDuty(m.pay[5]);
+            elm.setDutyMode(m.pay[5] & PWM_DUTY_INPUT ? 'input' : 'constant');
+            elm.setDuty(m.pay[6]);
+            elm.setDutyMin(m.pay[7]);
+            elm.setDutyMax(m.pay[8]);
         }
         if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
     }
