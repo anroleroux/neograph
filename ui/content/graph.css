@@ -1,9 +1,24 @@
+/* The graph fills the view below the nav. */
+.view.graph {
+    display: flex;
+    flex-direction: column;
+}
+
+.view.graph > .content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    /* the same margin at the bottom as at the sides */
+    padding: var(--step-1) 0 var(--step-0);
+}
+
 #graph {
     position: relative;
     background: var(--clr-pane);
-    margin-top: var(--step-1);
     box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
 
     /* Safari */
     -webkit-user-select: none;
@@ -18,6 +33,9 @@
 }
 
 #graph .svg-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
     /* let the graph handle touch pan and pinch-zoom, not the browser */
     touch-action: none;
 }
@@ -36,6 +54,39 @@
     padding: var(--step--3);
     cursor: pointer;
     margin-left: var(--step-0);
+}
+
+/* The add-node buttons, stacked down the left. Folded, they hide behind the
+   plus; open, each drops out to its place in the column. */
+#graph > .buttons.add {
+    flex-direction: column;
+    left: 0;
+    right: auto;
+    /* the folded column must not block the canvas */
+    pointer-events: none;
+}
+
+#graph > .buttons.add > div {
+    margin-left: 0;
+    margin-bottom: var(--step-0);
+    pointer-events: auto;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+#graph > .buttons.add > .toggle {
+    position: relative;
+    z-index: 1;
+    background-color: var(--clr-pane);
+}
+
+#graph > .buttons.add.open > .toggle {
+    transform: rotate(45deg);
+}
+
+#graph > .buttons.add:not(.open) > div:not(.toggle) {
+    transform: translateY(calc(-1 * var(--i) * (var(--step-5) + var(--step-0))));
+    opacity: 0;
+    pointer-events: none;
 }
 
 #graph > .buttons > .connector {

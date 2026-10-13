@@ -11,10 +11,10 @@ class gEdge {
 
         this.start.node = n1;
         this.start.mvfunc = () => this.moveStart();
-        this.start.handleDisplay = (display) => display?this.elm.children[1].classList.remove('hide'):this.elm.children[1].classList.add('hide');
+        this.start.handleDisplay = (display) => this.sHandle.classList.toggle('hide', !display);
         this.end.node = n2;
         this.end.mvfunc = () => this.moveEnd();
-        this.end.handleDisplay = (display) => display?this.elm.children[2].classList.remove('hide'):this.elm.children[2].classList.add('hide');
+        this.end.handleDisplay = (display) => this.eHandle.classList.toggle('hide', !display);
 
         const dx = n2.x - n1.x;
         const dy = n2.y - n1.y;
@@ -46,6 +46,20 @@ class gEdge {
         path.setAttribute('stroke-width', 1.8);
         path.setAttribute('fill', 'none');
         g.appendChild(path);
+        this.path = path;
+
+        // A wide, invisible copy of the wire, easier to click or tap than the wire.
+        const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        hit.setAttribute('d', path.getAttribute('d'));
+        hit.setAttribute('stroke', 'transparent');
+        hit.setAttribute('stroke-width', 16);
+        hit.setAttribute('fill', 'none');
+        hit.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            selectEdge(this);
+        });
+        g.appendChild(hit);
+        this.hit = hit;
 
         const sHandle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         sHandle.setAttribute('cx', `${xh1}`);
@@ -57,6 +71,7 @@ class gEdge {
         sHandle.classList.add('hide');
         sHandle.addEventListener('pointerdown', (e) => this.handlePointerDown(e,this.start));
         g.appendChild(sHandle);
+        this.sHandle = sHandle;
         
         const eHandle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         eHandle.setAttribute('cx', `${xh2}`);
@@ -68,33 +83,52 @@ class gEdge {
         eHandle.classList.add('hide');
         eHandle.addEventListener('pointerdown', (e) => this.handlePointerDown(e,this.end));
         g.appendChild(eHandle);
+        this.eHandle = eHandle;
 
         nodes.insertBefore(g,nodes.children[0]);
         return g;
     }
 
-    handleDisplay(end, display) {
+    // Show the wire as selected, with both handles, or not.
+    highlight(on) {
+        this.path.setAttribute('stroke', on ? '#4CAF50' : '#BFCDE7');
+        this.start.handleDisplay(on);
+        this.end.handleDisplay(on);
+    }
 
+    // Take the wire out of the graph: off both nodes, and off the page.
+    remove() {
+        const out = this.start.node.outputs[this.start.node.actNum];
+        out.conns = out.conns.filter(c => c !== this);
+        const inp = this.end.node.inputs[this.end.node.actNum];
+        if (inp.conn === this) inp.conn = null;
+        gEdges = gEdges.filter(e => e !== this);
+        this.elm.remove();
+    }
+
+    setPath(d) {
+        this.path.setAttribute('d', d);
+        this.hit.setAttribute('d', d);
     }
 
     moveStart() {
-        const d = this.elm.children[0].getAttribute('d');
+        const d = this.path.getAttribute('d');
         const match = d.match(/C\s[-\d.]+,[-\d.]+\s([-\d.]+),([-\d.]+)\s([-\d.]+),([-\d.]+)/);
         if (!match) return;
         const [x, y, xh, yh] = this.wireCoords(this.start);
-        this.elm.children[0].setAttribute('d', `M ${x},${y} C ${xh},${yh} ${match[1]},${match[2]} ${match[3]},${match[4]}`);
-        this.elm.children[1].setAttribute('cx', `${xh}`);
-        this.elm.children[1].setAttribute('cy', `${yh}`);
+        this.setPath(`M ${x},${y} C ${xh},${yh} ${match[1]},${match[2]} ${match[3]},${match[4]}`);
+        this.sHandle.setAttribute('cx', `${xh}`);
+        this.sHandle.setAttribute('cy', `${yh}`);
     }
     
     moveEnd() {
-        const d = this.elm.children[0].getAttribute('d');
+        const d = this.path.getAttribute('d');
         const match = d.match(/M\s([-\d.]+),([-\d.]+)\sC\s([-\d.]+),([-\d.]+)/);
         if (!match) return;
         const [x, y, xh, yh] = this.wireCoords(this.end);
-        this.elm.children[0].setAttribute('d', `M ${match[1]},${match[2]} C ${match[3]},${match[4]} ${xh},${yh} ${x},${y}`);
-        this.elm.children[2].setAttribute('cx', `${xh}`);
-        this.elm.children[2].setAttribute('cy', `${yh}`);
+        this.setPath(`M ${match[1]},${match[2]} C ${match[3]},${match[4]} ${xh},${yh} ${x},${y}`);
+        this.eHandle.setAttribute('cx', `${xh}`);
+        this.eHandle.setAttribute('cy', `${yh}`);
     }
 
     wireCoords(n) {

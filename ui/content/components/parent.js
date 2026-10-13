@@ -193,6 +193,14 @@ class uiComponents {
         settings.appendChild(editableSetting('Label', () => this.label, (label) => this.setLabel(label)));
     }
 
+    // Take the node out of the graph, with every wire to or from it.
+    remove() {
+        this.outputs.forEach(output => [...output.conns].forEach(conn => conn.remove()));
+        this.inputs.forEach(input => input.conn?.remove());
+        this.gElm.remove();
+        delete elements[this.name];
+    }
+
     addEdge(e) {
         if (this.actDir === 'outputs') {
             this[this.actDir][this.actNum].conns.push(e);
