@@ -20,8 +20,10 @@ const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FI
 // The node classes a config can restore, by control message type.
 const NODE_CLASSES = {
     [MSG_UI_BUTTON]: uiButton,
+    [MSG_UI_SLIDER]: uiSlider,
     [MSG_HW_LED]: uiLED,
     [MSG_HW_GPO]: uiGPO,
+    [MSG_HW_PWM]: uiPWM,
 };
 
 // Rebuild the Command view from the graph's UI inputs.
@@ -78,7 +80,9 @@ function restoreGraph(msgs) {
         if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
         else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
         else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
+        // A wire into an output that takes several carries its source's ID.
         else if (m.type === MSG_WIRE && m.len === 4) wires.set(m.id, m);
+        else if (m.type === MSG_WIRE && m.len === 6) wires.set(m.id + ':' + (m.pay[4] << 8 | m.pay[5]), m);
     }
     if (controls.size === 0) return;
 
@@ -109,22 +113,52 @@ function restoreGraph(msgs) {
         }
         elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
 
+        if (m.type === MSG_UI_SLIDER && m.len >= 1) {
+            elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
+        }
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
+        if (m.type === MSG_HW_PWM && m.len >= 15) {
+            const u16 = (i) => m.pay[i] << 8 | m.pay[i + 1];
+            elm.setPin(m.pay[2]);
+            elm.setFreq(u16(3));
+            elm.dutyFromInput = !!(m.pay[5] & PWM_DUTY_INPUT);
+            elm.freqFromInput = !!(m.pay[5] & PWM_FREQ_INPUT);
+            elm.freqLog = !!(m.pay[5] & PWM_FREQ_LOG);
+            elm.setDuty(m.pay[6]);
+            elm.setDutyMin(m.pay[7]);
+            elm.setDutyMax(m.pay[8]);
+            elm.setFreqMin(u16(11));
+            elm.setFreqMax(u16(13));
+        }
         if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
     }
     idCounter = Math.max(...controls.keys()) + 1;
 
-    // Wires: each output's source reference, shaped by its MSG_WIRE message if
-    // there is one (otherwise drawn straight between the nodes).
+    // Wires: each output's source references (a PWM's duty and frequency
+    // sources, another output's one source), shaped by their MSG_WIRE messages
+    // if there are any (otherwise drawn straight between the nodes).
     const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
     for (const [id, m] of controls) {
-        if (m.type !== MSG_HW_LED && m.type !== MSG_HW_GPO) continue;
-        const source = m.len >= 2 ? (m.pay[0] << 8 | m.pay[1]) : 0;
-        if (!source || !elements['n' + source]) continue;
+        const elm = elements['n' + id];
+        if (elm.actDir !== 'inputs') continue;
+        const ref = (i) => elements['n' + (m.len >= i + 2 ? (m.pay[i] << 8 | m.pay[i + 1]) : 0)] ?? null;
 
-        const edge = createEdge('n' + source, 'n' + id);
-        const wire = wires.get(id);
-        if (wire) {
+        if (m.type === MSG_HW_PWM) {
+            if (m.len < 15) continue;
+            // A source only drives a parameter that is from the input, and only
+            // if it is floating: graphs saved before types were checked may wire
+            // a button to a PWM.
+            const source = (src, fromInput) => fromInput && src && elm.takesType(src) ? src : null;
+            elm.dutySource = source(ref(0), elm.dutyFromInput);
+            elm.freqSource = source(ref(9), elm.freqFromInput);
+            elm.syncWires();
+        } else if (ref(0)) {
+            createEdge(ref(0).name, elm.name);     // none if the types don't match
+        }
+
+        for (const edge of elm.inConns()) {
+            const wire = wires.get(id + ':' + edge.start.node.id) ?? wires.get(id);
+            if (!wire) continue;
             edge.start.angle = angle(wire.pay[0], wire.pay[1]);
             edge.end.angle = angle(wire.pay[2], wire.pay[3]);
             edge.moveStart();
@@ -207,9 +241,13 @@ function createNode(id,obj) {
     return g;
 }
 
+// Wire two nodes, a source and an output whose types match; null if they don't.
 function createEdge(id1,id2) {
     let el1 = elements[id1];
     let el2 = elements[id2];
+    const output = el1.actDir === 'inputs' ? el1 : el2;
+    const source = output === el1 ? el2 : el1;
+    if (!output.takesType(source)) return null;
 
     return new gEdge(el1, el2);
 }
@@ -241,33 +279,14 @@ function selectById(id) {
     highlightSelection();
 }
 
+// Highlight the selected node. In wire mode, also mark the nodes it can be
+// wired to: clicking a marked node adds the wire.
 function highlightSelection() {
-    let connect = false;
-    let connDir = 'inputs';
-    let connType = 'bool';
-
-    if (wireMode) {
-        let n = elements['n'+selected.id];
-
-        if (n.actDir === 'outputs') {
-            if (n.outputs[n.actNum].conns.length === 0) {
-                connect = true;
-                connType = n.outputs[n.actNum].type;
-            }
-        } else {
-            if (!n.inputs[n.actNum].conn) {
-                connect = true;
-                connType = n.inputs[n.actNum].type;
-                connDir = 'outputs';
-            }
-        }
-    }
-
     Object.entries(elements).forEach(([key,n]) => {
         if (key === selected.name) {
             n.highlight('select');
         } else {
-            if (connect && n.canTakeConn(connType)) {
+            if (wireMode && n.canTakeConn(selected)) {
                 n.highlight('mark');
             } else {
                 n.highlight('hide');

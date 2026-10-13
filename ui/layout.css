@@ -96,6 +96,42 @@ input {
     cursor: pointer;
 }
 
+/* A choice field: one button per option, the current one marked. */
+.editable.choice {
+    justify-content: flex-start;
+    gap: var(--step--3);
+}
+
+.editable.choice > button {
+    font: inherit;
+    color: var(--clr-face);
+    background: none;
+    border: 1px solid var(--clr-face-fade);
+    border-radius: 0.35em;
+    padding: var(--step--5) var(--step--3);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.editable.choice > button.sel {
+    color: var(--clr-back);
+    background: var(--clr-face);
+    border-color: var(--clr-face);
+}
+
+/* A select field: the label, then the list. */
+.editable.select > select {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: var(--clr-face);
+    background: var(--clr-pane);
+    border: 1px solid var(--clr-face-fade);
+    border-radius: 0.35em;
+    padding: var(--step--5) var(--step--3);
+    cursor: pointer;
+}
+
 #container {
     display: flex;
     width: 400vw;

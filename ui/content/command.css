@@ -5,7 +5,8 @@
     column-gap: var(--step-0);
 }
 
-#command > div {
+/* A control's tile. */
+#command > * {
     position: relative;
     background-color: var(--clr-face);
     border: 1px solid var(--clr-face);
@@ -15,35 +16,110 @@
     box-shadow: rgba(0, 0, 0, 0.1) 0px 4px 12px;
 }
 
-#command > div > button {
-    background: none;
-    border: none;
+/* Buttons and sliders share a face: the name, with the state below it in small
+   capitals. A button also has a light in the corner, green while it is on. */
+#command > .control-btn,
+#command > .control-slider {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25em;
+    padding: 1.1em 0.5em 0.6em;     /* the top clears the light */
+    font: inherit;
     color: #20202b;
-    font-size: 2.2em;
+    text-align: center;
+}
+
+#command > * > .name {
+    max-width: 100%;
+    font-size: 1.15em;
     font-weight: bold;
-    cursor: pointer;
-    padding: 0;
-    border-radius: 0.35em;
-    height: 100%;
-    width: 100%;
+    line-height: 1.2;
+    overflow-wrap: break-word;
+    hyphens: auto;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
 }
 
-#command > div > div {
-    height: 0.7em;
-    width: 0.7em;
+#command > * > .state {
+    font-size: 0.75em;
+    font-weight: bold;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.6;
+}
+
+#command > * > .light {
     position: absolute;
+    top: 0.5em;
+    right: 0.5em;
+    width: 0.7em;
+    height: 0.7em;
+    border-radius: 50%;
     background-color: #000;
-    padding: 0;
-    margin: 0;
-    top: 0.35em;
-    right: 0.35em;
-    border-radius: 0.35em;
-    /* border: 1px solid #444; */
-    box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px;
+    box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 6px;
+    transition: background-color 0.15s, box-shadow 0.15s;
 }
 
-#command > div.enabled > div {
+#command > .control-btn[aria-pressed="true"] > .light {
     background-color: #4BAC4F;
+    box-shadow: 0 0 0.5em #4BAC4F;
+}
+
+/* A button: the whole tile is pressed. */
+#command > .control-btn {
+    cursor: pointer;
+}
+
+#command > .control-btn:active {
+    transform: translateY(1px);
+}
+
+#command > .control-btn:focus-visible,
+#command > .control-slider > input:focus-visible {
+    outline: 2px solid var(--clr-face);
+    outline-offset: 2px;
+}
+
+/* A slider: the track below the name and value. A horizontal slider takes two
+   columns and keeps its name to one line; a vertical one takes two rows, with
+   the track running up. */
+#command > .control-slider {
+    grid-column: span 2;
+    padding: 0.6em 0.5em;
+}
+
+#command > .control-slider:not(.vertical) > .name {
+    -webkit-line-clamp: 1;
+}
+
+#command > .control-slider.vertical {
+    grid-row: span 2;
+    height: calc(12em + var(--step-0));
+}
+
+#command > .control-slider > input {
+    width: 100%;
+    margin: 0.35em 0 0;
+    accent-color: #20202b;
+    cursor: pointer;
+}
+
+#command > .control-slider.vertical {
+    grid-column: auto;
+}
+
+#command > .control-slider.vertical > input {
+    flex: 1;
+    min-height: 0;
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: auto;
+    margin: 0.35em 0 0;
 }
 
 @media (max-width: 3399px) {#command {grid-template-columns: repeat(8, 1fr)}}

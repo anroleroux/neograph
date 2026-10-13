@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_ and NET_OPT_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, PWM_, SLIDER_ and VALUE_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -37,14 +37,14 @@
 #define MSG_UI_GRAPH            0x02    /* reserved */
 #define MSG_UI_BUTTON           0x10
 #define MSG_UI_SWITCH           0x11    /* reserved */
-#define MSG_UI_SLIDER           0x12    /* reserved */
+#define MSG_UI_SLIDER           0x12
 #define MSG_UI_SLIDER_2D        0x13    /* reserved */
 #define MSG_UI_MULTI_SLIDER     0x14    /* reserved */
 #define MSG_UI_DIAL             0x15    /* reserved */
 #define MSG_UI_TIMER            0x16    /* reserved */
 #define MSG_HW_LED              0x20
 #define MSG_HW_GPO              0x21
-#define MSG_HW_PWM              0x22    /* reserved */
+#define MSG_HW_PWM              0x22
 #define MSG_HW_CORE             0x30    /* reserved */
 #define MSG_HW_GPI              0x31    /* reserved */
 #define MSG_HW_ADC              0x32    /* reserved */
@@ -69,6 +69,20 @@
 
 /* Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network. */
 #define NET_OPT_JOIN            0x01
+
+/* Command values: one byte, a fraction of full scale, 0x00 = 0 to 0xFF = 1. */
+#define VALUE_FULL              0xFF    /* 1: a pressed button, a slider at its end */
+#define VALUE_HALF              0x80    /* on/off outputs (LED, GPO) are on from here up */
+
+/* Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical. */
+#define SLIDER_VERTICAL         0x01
+
+/* PWM output (MSG_HW_PWM) payload limits and options. */
+#define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
+#define PWM_DUTY_MAX            100     /* duty cycle in percent */
+#define PWM_DUTY_INPUT          0x01    /* options bit 0: 0 = constant duty, 1 = duty from its input, min to max */
+#define PWM_FREQ_INPUT          0x02    /* options bit 1: 0 = constant frequency, 1 = frequency from its input, min to max */
+#define PWM_FREQ_LOG            0x04    /* options bit 2: a frequency from its input goes from min to max 0 = linearly, 1 = logarithmically */
 
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
@@ -99,8 +113,26 @@ static inline uint8_t fifo_op_type(uint32_t word) { return ((word >> 24) & 0x1F)
 static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
 static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
 
-/* Reference word, sent after a setup word for LED/GPO: [31:16] source element ID. */
+/* Reference word, sent after a setup word for LED/GPO/PWM: [31:16] source element ID. */
 static inline uint32_t fifo_ref_word(uint16_t source_id) { return (uint32_t)source_id << 16; }
 static inline uint16_t fifo_ref_source(uint32_t word) { return (word >> 16) & 0xFFFF; }
+
+/* PWM word, sent after the reference word for PWM: [31:16] frequency in Hz · [7:0] options (PWM_DUTY_INPUT). */
+static inline uint32_t fifo_pwm_word(uint16_t freq, uint8_t options) { return (uint32_t)freq << 16 | options; }
+static inline uint16_t fifo_pwm_freq(uint32_t word) { return (word >> 16) & 0xFFFF; }
+static inline uint8_t fifo_pwm_options(uint32_t word) { return word & 0xFF; }
+
+/* Duty word, sent after the PWM word: [31:24] constant duty · [23:16] min duty · [15:8] max duty, in percent. */
+static inline uint32_t fifo_duty_word(uint8_t duty, uint8_t min, uint8_t max) {
+    return (uint32_t)duty << 24 | (uint32_t)min << 16 | (uint32_t)max << 8;
+}
+static inline uint8_t fifo_duty_const(uint32_t word) { return (word >> 24) & 0xFF; }
+static inline uint8_t fifo_duty_min(uint32_t word) { return (word >> 16) & 0xFF; }
+static inline uint8_t fifo_duty_max(uint32_t word) { return (word >> 8) & 0xFF; }
+
+/* Frequency word, sent after the frequency's reference word: [31:16] min Hz · [15:0] max Hz. */
+static inline uint32_t fifo_freq_word(uint16_t min, uint16_t max) { return (uint32_t)min << 16 | max; }
+static inline uint16_t fifo_freq_min(uint32_t word) { return (word >> 16) & 0xFFFF; }
+static inline uint16_t fifo_freq_max(uint32_t word) { return word & 0xFFFF; }
 
 #endif

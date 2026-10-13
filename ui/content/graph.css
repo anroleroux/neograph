@@ -56,19 +56,25 @@
     margin-left: var(--step-0);
 }
 
-/* The add-node buttons, stacked down the left. Folded, they hide behind the
-   plus; open, each drops out to its place in the column. */
+/* The add-node buttons, in two columns below the plus: the GUI inputs (button,
+   slider) on the left, the hardware outputs (LED, GPO, PWM) on the right. Each
+   button's --c and --r give its column and row; the plus is at column 0, row 0.
+   Folded, they hide behind the plus; open, each slides out to its place. */
 #graph > .buttons.add {
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(2, max-content);
+    gap: var(--step-0);
+    align-items: start;
     left: 0;
     right: auto;
-    /* the folded column must not block the canvas */
+    /* the folded buttons must not block the canvas */
     pointer-events: none;
 }
 
 #graph > .buttons.add > div {
-    margin-left: 0;
-    margin-bottom: var(--step-0);
+    margin: 0;
+    grid-column: calc(var(--c) + 1);
+    grid-row: calc(var(--r) + 1);
     pointer-events: auto;
     transition: transform 0.25s ease, opacity 0.25s ease;
 }
@@ -84,7 +90,8 @@
 }
 
 #graph > .buttons.add:not(.open) > div:not(.toggle) {
-    transform: translateY(calc(-1 * var(--i) * (var(--step-5) + var(--step-0))));
+    transform: translate(calc(-1 * var(--c) * (var(--step-5) + var(--step-0))),
+                         calc(-1 * var(--r) * (var(--step-5) + var(--step-0))));
     opacity: 0;
     pointer-events: none;
 }

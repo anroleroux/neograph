@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "uthash.h"
@@ -42,6 +43,7 @@ typedef struct {
         uint8_t value;
     };
     uint16_t source_id;
+    uint8_t drives;     // PWM: the parameter this source drives, PWM_DRIVES_DUTY or _FREQ
 } hwel;
 
 typedef struct {
@@ -60,6 +62,7 @@ hwel decode_hwel(uint32_t op) {
     result.control_type = fifo_op_type(op);
     result.id           = fifo_op_id(op);
     result.value        = fifo_op_value(op);
+    result.drives       = 0;
 
     return result;
 }
@@ -69,6 +72,87 @@ void decode_hwrf(uint32_t rf,hwel *decop) {
 }
 
 static hwel_sources *hwel_source_table = NULL;
+
+// ── PWM outputs ──
+// A PWM's duty cycle and frequency are each constant or follow an input (its
+// PWM_DUTY_INPUT and PWM_FREQ_INPUT options), so a PWM is in the source table
+// up to twice: under its duty source and under its frequency source, each
+// entry with the parameter it drives. The state they share is kept by pin.
+#define PWM_DRIVES_DUTY 0
+#define PWM_DRIVES_FREQ 1
+#define PWM_PINS 30
+
+typedef struct {
+    uint8_t options;
+    uint8_t duty, duty_min, duty_max;       // percent
+    uint16_t freq, freq_min, freq_max;      // Hz
+    uint8_t duty_in, freq_in;               // the inputs' last values, 0 to VALUE_FULL
+    uint16_t freq_now;                      // the frequency the slice runs at
+    uint32_t top;                           // counter steps in one period
+} pwm_out;
+
+static pwm_out pwm_outs[PWM_PINS];
+
+// From a at value 0 to b at VALUE_FULL, linearly. b may be below a.
+static uint32_t pwm_lerp(uint32_t a, uint32_t b, uint8_t value) {
+    return (uint32_t)((int32_t)a + ((int32_t)b - (int32_t)a) * value / VALUE_FULL);
+}
+
+// From a at value 0 to b at VALUE_FULL, logarithmically: each step multiplies by
+// the same factor, so a sweep spends as long on 100-1000 Hz as on 1-10 kHz. a and
+// b are at least PWM_FREQ_MIN, so neither is 0; b may be below a.
+static uint32_t pwm_lerp_log(uint32_t a, uint32_t b, uint8_t value) {
+    float f = a * powf((float)b / a, (float)value / VALUE_FULL) + 0.5f;
+    return f > 0xFFFF ? 0xFFFF : (uint32_t)f;
+}
+
+// Run a pin's PWM slice at freq Hz and return the counter steps in one period.
+// The clock divider is the smallest integer that lets one period fit the 16-bit
+// counter: an integer divider keeps the period free of jitter, and the smallest
+// one gives the finest duty steps. The slice is shared with one other pin,
+// which gets the same frequency.
+static uint32_t pwm_set_freq(uint pin, uint16_t freq) {
+    if (freq < PWM_FREQ_MIN) freq = PWM_FREQ_MIN;
+
+    uint32_t steps = clock_get_hz(clk_sys) / freq;    // counter steps per period, undivided
+    uint32_t div = (steps + 0xFFFE) / 0xFFFF;
+    if (div < 1) div = 1;
+    if (div > 255) div = 255;
+    uint32_t top = steps / div;
+    if (top > 0xFFFF) top = 0xFFFF;
+
+    uint slice = pwm_gpio_to_slice_num(pin);
+    pwm_set_clkdiv(slice, (float)div);
+    pwm_set_wrap(slice, top - 1);
+    gpio_set_function(pin, GPIO_FUNC_PWM);
+    pwm_set_enabled(slice, true);
+    return top;
+}
+
+// Drive a PWM pin from its state: the frequency and duty cycle, each constant
+// or from its input's last value. The slice is reprogrammed only when the
+// frequency changes.
+static void pwm_apply(uint pin) {
+    pwm_out *p = &pwm_outs[pin];
+
+    uint16_t freq = p->freq;
+    if (p->options & PWM_FREQ_INPUT) {
+        uint16_t lo = p->freq_min < PWM_FREQ_MIN ? PWM_FREQ_MIN : p->freq_min;
+        uint16_t hi = p->freq_max < PWM_FREQ_MIN ? PWM_FREQ_MIN : p->freq_max;
+        freq = (p->options & PWM_FREQ_LOG) ? pwm_lerp_log(lo, hi, p->freq_in) : pwm_lerp(lo, hi, p->freq_in);
+    }
+    if (freq != p->freq_now) {
+        p->top = pwm_set_freq(pin, freq);
+        p->freq_now = freq;
+    }
+
+    // The duty in percent × VALUE_FULL, to keep the input's resolution.
+    uint32_t duty = (p->options & PWM_DUTY_INPUT)
+        ? pwm_lerp(p->duty_min * VALUE_FULL, p->duty_max * VALUE_FULL, p->duty_in)
+        : p->duty * VALUE_FULL;
+    if (duty > PWM_DUTY_MAX * VALUE_FULL) duty = PWM_DUTY_MAX * VALUE_FULL;
+    pwm_set_gpio_level(pin, p->top * duty / (PWM_DUTY_MAX * VALUE_FULL));
+}
 
 // ── Pausing core 1 for flash writes ──
 // A handshake through shared RAM, not the inter-core FIFO: the FIFO carries the
@@ -229,42 +313,40 @@ void core1_worker() {
                     gpio_set_dir(decop.io, GPIO_OUT);
                     break;
                 
-                // case MSG_HW_PWM:
-                //     gpio_set_function(decop.io, GPIO_FUNC_PWM);
-                //     uint slice_num = pwm_gpio_to_slice_num(decop.io);
-                //     uint channel = pwm_gpio_to_channel(decop.io);
+                case MSG_HW_PWM: {
+                    // Reference (duty source), PWM, duty, reference (frequency
+                    // source) and frequency words follow.
+                    uint32_t w[5] = {0};
+                    for (int i = 0; i < 5; i++) multicore_fifo_pop_timeout_us(1000, &w[i]);
+                    decode_hwrf(w[0], &decop);
 
-                //     uint32_t frqval = multicore_fifo_pop_blocking();
-                //     uint16_t freq = (frqval>>24)&0xFF | (frqval>>16)&0xFF;
-                //     int16_t valx = (frqval>>8)&0xFF | frqval&0xFF;
+                    uint pin = decop.io;
+                    if (pin >= PWM_PINS) break;
+                    pwm_out *p = &pwm_outs[pin];
+                    *p = (pwm_out){
+                        .options  = fifo_pwm_options(w[1]),
+                        .freq     = fifo_pwm_freq(w[1]),
+                        .duty     = fifo_duty_const(w[2]),
+                        .duty_min = fifo_duty_min(w[2]),
+                        .duty_max = fifo_duty_max(w[2]),
+                        .freq_min = fifo_freq_min(w[4]),
+                        .freq_max = fifo_freq_max(w[4]),
+                    };
+                    // Until its inputs send values they read 0: each parameter
+                    // from an input starts at its min.
+                    pwm_apply(pin);
+                    printf("PWM on GPIO %d: options %02X, %d Hz\n", pin, p->options, p->freq_now);
 
-                //     uint32_t mappoint0 = multicore_fifo_pop_blocking();
-                //     uint16_t dc0 = (mappoint0>>24)&0xFF | (mappoint0>>16)&0xFF;
-                //     decop.val0 = (mappoint0>>8)&0xFF | mappoint0&0xFF;
+                    // Filed under the duty source below, as every output; and
+                    // under the frequency source here.
+                    decop.drives = PWM_DRIVES_DUTY;
+                    hwel freq_el = decop;
+                    freq_el.drives = PWM_DRIVES_FREQ;
+                    freq_el.source_id = fifo_ref_source(w[3]);
+                    if (freq_el.source_id) add_packet(freq_el);
+                    break;
+                }
 
-                //     uint32_t mappoint1 = multicore_fifo_pop_blocking();
-                //     uint16_t dc1 = (mappoint1>>24)&0xFF | (mappoint1>>16)&0xFF;
-                //     decop.val1 = (mappoint1>>8)&0xFF | mappoint1&0xFF;
-
-                //     pwm_set_clkdiv(slice_num, 100.0f);
-                //     decop.clksteps = ((clock_get_hz(clk_sys)/100)/freq);
-                //     // pwm freq = clock freq / (clkdiv*(wrap+1))
-                //     // the -1 below comes from the +1 after the wrap
-                //     pwm_set_wrap(slice_num, decop.clksteps-1);
-
-                //     decop.grad = (float)(dc1-dc0)/(decop.val1-decop.val0);
-                //     decop.offset = dc0;
-
-                //     if (valx < decop.val0) {valx = decop.val0;}
-                //     if (valx > decop.val1) {valx = decop.val1;}
-
-                //     float dcx = (valx-decop.val0)*decop.grad + decop.offset;
-                //     uint32_t lvl = (uint32_t)((dcx/100.0f)*decop.clksteps);
-
-                //     pwm_set_chan_level(slice_num, channel, lvl);
-                //     pwm_set_enabled(slice_num, true);
-                //     break;
-                
                 default:
                     break;
                 }
@@ -275,6 +357,7 @@ void core1_worker() {
 
             case FIFO_OP_CLEAN_SETUP:
                 delete_all_packets();
+                memset(pwm_outs, 0, sizeof pwm_outs);
                 for (uint gpio = 0; gpio < 30; gpio++) {
                     gpio_set_function(gpio, GPIO_FUNC_SIO);
                     gpio_set_dir(gpio, GPIO_IN);
@@ -308,26 +391,22 @@ void core1_worker() {
                         case MSG_HW_LED:
                             printf("switch LED, value:%i\n",decop.value);
                             push_to_core0(FIFO_TAG_LED);
-                            push_to_core0(decop.value);
+                            push_to_core0(decop.value >= VALUE_HALF);
                             break;
                         
                         case MSG_HW_GPO:
                             printf("switch GPO %d, value:%i\n",el.io, decop.value);
-                            gpio_put(el.io,decop.value);
+                            gpio_put(el.io, decop.value >= VALUE_HALF);
                             break;
                         
-                        // case MSG_HW_PWM:
-                        //     // printf("control PWM, value:%i\n",values[0]);
-                        //     if (values[0] < pkt->val0) {values[0] = pkt->val0;}
-                        //     if (values[0] > pkt->val1) {values[0] = pkt->val1;}
-                        //     float dcx = (values[0]-pkt->val0)*pkt->grad + pkt->offset;
-                        //     uint32_t lvl = (uint32_t)((dcx/100.0f)*pkt->clksteps);
-    
-                        //     uint slice_num = pwm_gpio_to_slice_num(pkt->io);
-                        //     uint channel = pwm_gpio_to_channel(pkt->io);
-                        //     pwm_set_chan_level(slice_num, channel, lvl);
-                        //     break;
-    
+                        case MSG_HW_PWM:
+                            printf("switch PWM %d, value:%i\n",el.io, decop.value);
+                            if (el.io >= PWM_PINS) break;
+                            if (el.drives == PWM_DRIVES_FREQ) pwm_outs[el.io].freq_in = decop.value;
+                            else pwm_outs[el.io].duty_in = decop.value;
+                            pwm_apply(el.io);
+                            break;
+
                         default:
                             break;
                         }

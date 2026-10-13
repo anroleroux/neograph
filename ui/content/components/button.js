@@ -36,14 +36,26 @@ class uiButton extends uiComponents {
         this.gElmHighlight = g.children[3];
     }
 
+    // In the Command view: a tile with the label, the state below it, and a
+    // light that is green while the button is on.
     buildUI(commandInterface) {
-        const controlButton = document.createElement('div');
-        controlButton.className = 'control-btn';
-        controlButton.addEventListener('click', (event) => {
-            this.handleClick(event);
+        const control = document.createElement('button');
+        control.type = 'button';
+        control.className = 'control-btn';
+        control.innerHTML = `<span class="light"></span><span class="name"></span><span class="state"></span>`;
+        control.querySelector('.name').textContent = this.label;
+        control.title = this.label;
+
+        const show = () => {
+            control.setAttribute('aria-pressed', String(this.value));
+            control.querySelector('.state').textContent = this.value ? 'On' : 'Off';
+        };
+        show();
+        control.addEventListener('click', () => {
+            this.handleClick();
+            show();
         });
-        controlButton.innerHTML = `<div></div><button>${this.label}</button>`;
-        commandInterface.appendChild(controlButton);
+        commandInterface.appendChild(control);
     }
 
     marshal() {
@@ -57,21 +69,9 @@ class uiButton extends uiComponents {
         return buffer;
     }
 
+    // Each click toggles the button: pressed sends 1, released 0.
     handleClick() {
-        this.value = this.value?false:true;
-
-        const cmdPkt = new Uint8Array(9);
-        cmdPkt[0] = PKT_COMMAND;
-        cmdPkt[1] = 0;
-        cmdPkt[2] = cmdPkt.length - PKT_HEADER_LEN;
-        cmdPkt[3] = this.tc;
-        cmdPkt[4] = 0;
-        cmdPkt[5] = (this.id >> 8) & 0xFF;
-        cmdPkt[6] = this.id & 0xFF;
-        cmdPkt[7] = 1;
-        cmdPkt[8] = this.value;
-
-        console.log(cmdPkt) //debug
-        socket.send(cmdPkt); //online
+        this.value = !this.value;
+        this.sendValue(this.value ? 1 : 0);
     }
 }
