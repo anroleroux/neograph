@@ -62,6 +62,12 @@ const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from h
 // Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical.
 const SLIDER_VERTICAL        = 0x01;
 
+// GPIO pins a GPO or PWM may use, bit n = GPIO n: GPIO 0-22 and 26-28, the ones on
+// the Pico 2 W's header. GPIO 23, 24, 25 and 29 drive the WiFi chip.
+const PIN_USABLE_MASK        = 0x1C7FFFFF;
+const pinUsable = (pin) => Number.isInteger(pin) && pin >= 0 && pin < 32 && (PIN_USABLE_MASK >> pin & 1) === 1;
+const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable);
+
 // PWM output (MSG_HW_PWM) payload limits and options.
 const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz
 const PWM_DUTY_MAX           = 100;   // duty cycle in percent

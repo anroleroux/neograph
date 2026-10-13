@@ -289,8 +289,18 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `02` Plot | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10). The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
-| `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, 0–28 (UI default 1) |
+| `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
 | `22` PWM | 15 | See below |
+
+#### GPIO pins
+
+A GPO or PWM may use **GPIO 0–22 and 26–28**, the pins on the Pico 2 W's header
+(`PIN_USABLE_MASK`, bit n for GPIO n). GPIO 23, 24, 25 and 29 drive the WiFi chip:
+changing them cuts the device off the network.
+
+- The UI offers only the usable pins, and keeps the default pin when a config names
+  another one.
+- Core 1 doesn't set up a GPO or PWM on another pin, and logs that it skipped it.
 
 A PWM has two parameters, its **duty cycle** and its **frequency**. Each is constant, or
 follows an input: a source element whose value maps linearly onto it, 0 → min and
@@ -299,7 +309,7 @@ follows an input: a source element whose value maps linearly onto it, 0 → min 
 | Bytes | Field | Range (UI default) |
 |---|---|---|
 | 0–1 | Duty source element ID, 0 = none | |
-| 2 | GPIO pin | 0–28 (2) |
+| 2 | GPIO pin | A [usable](#gpio-pins) one (2) |
 | 3–4 | Constant frequency, Hz | `PWM_FREQ_MIN` (10)–65535 (1000) |
 | 5 | Options: bit 0 `PWM_DUTY_INPUT`, bit 1 `PWM_FREQ_INPUT`: a set bit makes that parameter follow its source. Bit 2 `PWM_FREQ_LOG`: a frequency that follows its source goes from min to max logarithmically, not linearly. Other bits 0. | (0) |
 | 6 | Constant duty, % | 0–`PWM_DUTY_MAX` (100) (50) |
@@ -641,6 +651,8 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   constant value, or at its min if it follows an input. The PWM goes in the table
   under its duty source, and also under its frequency source, each entry marked
   with the parameter that source drives.
+  A GPO or PWM on a pin that isn't [usable](#gpio-pins) is skipped: it reads its
+  further words but doesn't touch the pin or go in the table.
 - **PWM clock:** the clock divider is the smallest whole number that fits one period
   in the 16-bit counter, so the duty cycle has at least ~2300 steps (at 65535 Hz) and
   the slowest frequency is ~9 Hz. A change of frequency reprograms the slice and

@@ -330,6 +330,15 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
 
+/* GPIO 0-22 and 26-28 are usable; 23, 24, 25 and 29 drive the WiFi chip. */
+void test_pin_usable(void)
+{
+    for (unsigned pin = 0; pin <= 255; pin++) {
+        int want = pin <= 22 || (pin >= 26 && pin <= 28);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(want, pin_usable((uint8_t)pin), "pin_usable");
+    }
+}
+
 /* ── FIFO words ───────────────────────────────────────────────────────── */
 
 /* The words core 0 sends for a config payload (unmarshal_controls in src/config.c): a clean
@@ -428,6 +437,7 @@ int main(void)
     RUN_TEST(test_graph_messages_belong_to_controls);
     RUN_TEST(test_wires_join_matching_types);
     RUN_TEST(test_element_type_bits);
+    RUN_TEST(test_pin_usable);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);

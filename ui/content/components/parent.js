@@ -108,6 +108,18 @@ function selectSetting(label, options, get, set) {
     return row;
 }
 
+// A GPIO pin a GPO or PWM may use (see PIN_USABLE_MASK), from a number or its
+// text; null if it is not one.
+function parsePin(pin) {
+    pin = String(pin).trim();
+    return /^\d+$/.test(pin) && pinUsable(Number(pin)) ? Number(pin) : null;
+}
+
+// A settings field that picks a GPIO pin from the usable ones.
+function pinSetting(get, set) {
+    return selectSetting('GPIO pin', USABLE_PINS.map(pin => [pin, `GPIO ${pin}`]), get, set);
+}
+
 class uiComponents {
     constructor(type,x, y) {
         this.type = type;

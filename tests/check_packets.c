@@ -85,12 +85,12 @@ static void check_config(const uint8_t *p, size_t len) {
             break;
         case MSG_HW_GPO:
             if (it.len != 3) fail("GPO message is not 3 bytes; the device would skip it");
-            else if (it.pay[2] > 28) fail("GPO pin is over 28");
+            else if (!pin_usable(it.pay[2])) fail("GPO pin is not in PIN_USABLE_MASK");
             else check_source(p, len, it.pay[0] << 8 | it.pay[1], MSG_UI_BUTTON, 0, "a GPO is wired from something other than a button");
             break;
         case MSG_HW_PWM:
             if (it.len != 15) fail("PWM message is not 15 bytes; the device would skip it");
-            else if (it.pay[2] > 28) fail("PWM pin is over 28");
+            else if (!pin_usable(it.pay[2])) fail("PWM pin is not in PIN_USABLE_MASK");
             else if ((it.pay[3] << 8 | it.pay[4]) < PWM_FREQ_MIN
                      || (it.pay[11] << 8 | it.pay[12]) < PWM_FREQ_MIN
                      || (it.pay[13] << 8 | it.pay[14]) < PWM_FREQ_MIN) fail("a PWM frequency is under PWM_FREQ_MIN");

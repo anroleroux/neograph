@@ -301,7 +301,9 @@ void core1_worker() {
             // printf("hw opp %d type %d, io %d\n",decop.operation, decop.control_type, decop.io);
             
             switch (decop.operation) {
-            case FIFO_OP_SETUP:
+            case FIFO_OP_SETUP: {
+                // An output on a pin it may not use (see PIN_USABLE_MASK) is not set up.
+                bool usable = true;
                 switch (decop.control_type) {
                 case MSG_HW_LED:
                     multicore_fifo_pop_timeout_us(1000, &op);
@@ -312,9 +314,11 @@ void core1_worker() {
                     multicore_fifo_pop_timeout_us(1000, &op);
                     decode_hwrf(op,&decop);
 
+                    usable = pin_usable(decop.io);
+                    if (!usable) break;
                     gpio_init(decop.io);
                     gpio_set_dir(decop.io, GPIO_OUT);
-                    if (decop.io < PWM_PINS) used_pins |= 1u << decop.io;
+                    used_pins |= 1u << decop.io;
                     break;
                 
                 case MSG_HW_PWM: {
@@ -325,7 +329,8 @@ void core1_worker() {
                     decode_hwrf(w[0], &decop);
 
                     uint pin = decop.io;
-                    if (pin >= PWM_PINS) break;
+                    usable = pin_usable(pin);
+                    if (!usable) break;
                     used_pins |= 1u << pin;
                     pwm_out *p = &pwm_outs[pin];
                     *p = (pwm_out){
@@ -356,9 +361,15 @@ void core1_worker() {
                     break;
                 }
 
+                if (!usable) {
+                    printf("hw man skipping control type %02X on ID %i: GPIO %d is not usable\n",
+                           decop.control_type, decop.id, decop.io);
+                    break;
+                }
                 add_packet(decop);
                 printf("hw man adding control type %02X on ID %i\n",decop.control_type,decop.id);
                 break;
+            }
 
             case FIFO_OP_CLEAN_SETUP:
                 delete_all_packets();

@@ -144,6 +144,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
     const rows = () => page.$$eval('#settings .editable .label', ls => ls.slice(2).map(l => l.textContent).join('|'));
+    const select = (label) => page.locator('#settings .editable.select', { has: page.locator(`.label:text-is("${label}:")`) })
+        .locator('select');
     const choice = (label, option) => page.locator('#settings .choice', { has: page.locator(`.label:text-is("${label}:")`) })
         .locator('button', { hasText: option }).dispatchEvent('click');
     expect(await rows() === 'Frequency:|Frequency (Hz):|Duty cycle:|Duty cycle (%):',
@@ -158,12 +160,27 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             || pwm.setFreqMin('9') !== false || pwm.setFreqMax('65536') !== false) {
             throw new Error('PWM settings out of range were accepted');
         }
+        // The pins that drive the WiFi chip, and those off the header, are refused.
+        for (const pin of ['23', '24', '25', '29', '30', '-1', '2.5', 'x']) {
+            if (pwm.setPin(pin) !== false || elements.n3.setPin(pin) !== false) {
+                throw new Error('GPIO pin ' + pin + ' was accepted');
+            }
+        }
         pwm.setPin('15');
         pwm.setFreq('20000');
         pwm.setDuty('75');
         pwm.setDutyMin('20');
         pwm.setDutyMax('80');
     });
+
+    // The pin is picked from the usable pins only.
+    const pins = await page.evaluate(() => [...document.querySelectorAll('#settings .editable.select')]
+        .find(row => row.querySelector('.label').textContent === 'GPIO pin:')
+        .querySelectorAll('option').length + '|' + USABLE_PINS.join());
+    expect(pins === '26|' + [...Array(23).keys(), 26, 27, 28].join(), 'the PWM offers GPIO pins ' + pins);
+    await select('GPIO pin').selectOption('26');
+    expect(await page.evaluate(() => elements.n4.pin) === 26, 'picking GPIO 26 did not set the PWM pin');
+    await page.evaluate(() => elements.n4.setPin('15'));
 
     // Add a slider, make it vertical from its settings, and wire it to the PWM.
     await page.locator('#add [title="Add a slider"]').dispatchEvent('click');
@@ -179,7 +196,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add [title="Add a slider"]').dispatchEvent('click');
     await page.evaluate(() => { elements.n6.setLabel('Pitch'); selectById(4); });
     await choice('Frequency', 'From input');
-    await page.locator('#settings .editable.select select').first().selectOption('n6');
+    await select('Input').first().selectOption('n6');      // the frequency's; the duty's follows
     await page.evaluate(() => { elements.n4.setFreqMin('200'); elements.n4.setFreqMax('2000'); });
     expect(await page.evaluate(() => elements.n4.freqLog) === false, 'a frequency from an input does not start linear');
     await choice('Scale', 'Logarithmic');
@@ -330,7 +347,9 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         selectById(10);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
-        const picks = [...document.querySelectorAll('#settings select option')].map(o => o.value).join();
+        const input = [...document.querySelectorAll('#settings .editable.select')]
+            .find(row => row.querySelector('.label').textContent === 'Input:');
+        const picks = [...input.querySelectorAll('option')].map(o => o.value).join();
         return {
             fromPwm,
             picks,

@@ -38,16 +38,15 @@ class uiGPO extends uiComponents {
     }
 
     setPin(pin) {
-        pin = String(pin).trim();
-        if (!/^\d+$/.test(pin) || Number(pin) > 28) return false;
-        this.pin = Number(pin);
+        pin = parsePin(pin);
+        if (pin === null) return false;
+        this.pin = pin;
     }
 
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        settings.appendChild(editableSetting('GPIO pin', () => this.pin, (pin) => this.setPin(pin),
-            {type: 'number', min: 0, max: 28, step: 1}));
+        settings.appendChild(pinSetting(() => this.pin, (pin) => this.setPin(pin)));
     }
 
     buildUI(commandInterface) {}
