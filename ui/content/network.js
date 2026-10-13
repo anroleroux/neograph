@@ -1,5 +1,6 @@
 let socket, gfig;
 let offlineConfig = null; //offline
+let offlineTelemetry = null; //offline
 
 function networkingTemplate(state) {
     const editableField = (obj, type, field, label, nindex=-1, secret=false, dindex=-1) => {
@@ -129,6 +130,7 @@ function toggleWebSocket(n,d) {
     if (dv.connected) {
         dv.connected = false;
         disconnectWebSocket(networks[n].devices[d]); //online
+        clearInterval(offlineTelemetry); //offline
     } else {
         dv.connected = true;
         connectWebSocket(networks[n].devices[d]); //online
@@ -147,6 +149,9 @@ function toggleWebSocket(n,d) {
         networks[0].devices[0].did = data.slice(9,17);
         gfig = data.slice(3);
         unmarshalConfigs(gfig);
+        // and a chip temperature drifting around 30 °C, as telemetry.
+        offlineTelemetry = setInterval(() => receiveTelemetry(
+            `core ${(30 + 4 * Math.sin(performance.now() / 20000) + Math.random() - 0.5).toFixed(2)}`), 1200);
         //offline-end
     }
 }
@@ -308,21 +313,7 @@ function connectWebSocket(device) {
             }
 
         } else {
-            // console.log("Received text data:", event.data);
-            // if (event.data.startsWith("core ")) {
-            //     document.getElementById("core").innerText = event.data.substring(5) + "°C";
-            // }
-
-            // if (event.data.startsWith("uptime ")) {
-            //     const uptime = parseInt(event.data.substring(7));
-            //     if (uptime < 60) {
-            //         document.getElementById("uptime").innerText = `${uptime} seconds`;
-            //     } else if (uptime < 3600) {
-            //         document.getElementById("uptime").innerText = `${Math.round(uptime / 60)}m${uptime % 60}s`;
-            //     } else {
-            //         document.getElementById("uptime").innerText = `${Math.round(uptime / 3600)}h${Math.round(uptime / 60) - 60 * Math.round(uptime / 3600)}m${uptime % 60}s`;
-            //     }
-            // }
+            receiveTelemetry(event.data);
         }
     };
 

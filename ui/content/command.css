@@ -16,10 +16,11 @@
     box-shadow: rgba(0, 0, 0, 0.1) 0px 4px 12px;
 }
 
-/* Buttons and sliders share a face: the name, with the state below it in small
-   capitals. A button also has a light in the corner, green while it is on. */
+/* Buttons, sliders and readings share a face: the name, with the state below it
+   in small capitals. A button also has a light in the corner, green while it is on. */
 #command > .control-btn,
-#command > .control-slider {
+#command > .control-slider,
+#command > .control-reading {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -120,6 +121,34 @@
     direction: rtl;
     width: auto;
     margin: 0.35em 0 0;
+}
+
+/* A plot: the name and value above the signal, three columns wide and two
+   rows tall. The trace is the tile's ink, over a faint grid. */
+#command > .control-plot {
+    grid-column: span 3;
+    grid-row: span 2;
+    height: calc(12em + var(--step-0));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25em;
+    padding: 0.6em 0.5em 0.5em;
+    color: #20202b;
+    text-align: center;
+}
+
+#command > .control-plot > .name {
+    -webkit-line-clamp: 1;
+}
+
+#command > .control-plot > canvas {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    margin-top: 0.35em;
+    cursor: crosshair;
+    touch-action: none;
 }
 
 @media (max-width: 3399px) {#command {grid-template-columns: repeat(8, 1fr)}}

@@ -34,7 +34,7 @@
 
 #define MSG_UI_GAUGE            0x00    /* reserved */
 #define MSG_UI_INDICATOR        0x01    /* reserved */
-#define MSG_UI_GRAPH            0x02    /* reserved */
+#define MSG_UI_GRAPH            0x02    /* a plot, drawn in the browser */
 #define MSG_UI_BUTTON           0x10
 #define MSG_UI_SWITCH           0x11    /* reserved */
 #define MSG_UI_SLIDER           0x12
@@ -45,7 +45,7 @@
 #define MSG_HW_LED              0x20
 #define MSG_HW_GPO              0x21
 #define MSG_HW_PWM              0x22
-#define MSG_HW_CORE             0x30    /* reserved */
+#define MSG_HW_CORE             0x30    /* the core temperature, from telemetry */
 #define MSG_HW_GPI              0x31    /* reserved */
 #define MSG_HW_ADC              0x32    /* reserved */
 

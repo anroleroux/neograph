@@ -5,3 +5,5 @@
 {{led-js}}:ui/content/components/led.js
 {{gpo-js}}:ui/content/components/gpo.js
 {{pwm-js}}:ui/content/components/pwm.js
+{{plot-js}}:ui/content/components/plot.js
+{{core-js}}:ui/content/components/core.js

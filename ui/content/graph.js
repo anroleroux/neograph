@@ -24,9 +24,11 @@ const NODE_CLASSES = {
     [MSG_HW_LED]: uiLED,
     [MSG_HW_GPO]: uiGPO,
     [MSG_HW_PWM]: uiPWM,
+    [MSG_UI_GRAPH]: uiPlot,
+    [MSG_HW_CORE]: uiCore,
 };
 
-// Rebuild the Command view from the graph's UI inputs.
+// Rebuild the Command view from the graph's UI inputs and outputs.
 function buildCommandInterface() {
     commandInterface = document.getElementById('command');
     commandInterface.innerHTML = '';
@@ -117,6 +119,7 @@ function restoreGraph(msgs) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
+        if (m.type === MSG_UI_GRAPH && m.len >= 3) elm.setWindow(m.pay[2]);
         if (m.type === MSG_HW_PWM && m.len >= 15) {
             const u16 = (i) => m.pay[i] << 8 | m.pay[i + 1];
             elm.setPin(m.pay[2]);

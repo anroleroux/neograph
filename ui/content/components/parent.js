@@ -134,20 +134,24 @@ class uiComponents {
     // Whether a wire can join this node and `other`: one must be a source (an
     // input such as a button, which feeds any number of outputs) and the other
     // an output with room for another wire (most take one, a PWM two), not
-    // already wired from that source. Their types must match: a boolean source
-    // (a button) drives a boolean output (an LED or GPO), and a floating one (a
-    // slider) a floating output (a PWM).
+    // already wired from that source, that takes it (see takesType).
     canTakeConn(other) {
         if (other === this || other.actDir === this.actDir) return false;
         const [output, source] = this.actDir === 'inputs' ? [this, other] : [other, this];
         const input = output.inputs[output.actNum];
-        return source.outputs[source.actNum].type === input.type
+        return output.takesType(source)
             && input.conns.length < input.max && !input.conns.some(c => c.start.node === source);
     }
 
-    // Whether `source` is of the type this output takes.
+    // Whether this output takes `source`. Their types must match: a boolean
+    // source (a button) drives a boolean output (an LED or GPO), and a floating
+    // one (a slider, the core temperature) a floating output (a PWM or a plot).
+    // A source whose values only reach the browser (the core temperature) drives
+    // only UI outputs: the device never has its values.
     takesType(source) {
-        return source.actDir === 'outputs' && source.outputs[source.actNum].type === this.inputs[this.actNum].type;
+        if (source.actDir !== 'outputs') return false;
+        const out = source.outputs[source.actNum];
+        return out.type === this.inputs[this.actNum].type && !(out.browserOnly && this.tc & MSG_HW_BIT);
     }
 
     // The wires into this node.
@@ -228,7 +232,20 @@ class uiComponents {
 
         console.log(cmdPkt) //debug
         socket.send(cmdPkt); //online
+
+        this.emit(value);
     }
+
+    // Hand a new value of this source to the nodes wired to it. UI outputs (a
+    // plot) show it in the browser; hardware outputs ignore it, as the device
+    // drives them. The value may be any number, not only 0 to 1.
+    emit(value) {
+        this.outputs.forEach(output => output.conns.forEach(conn => conn.end.node.receive(value)));
+    }
+
+    // A new value from the source wired into this node. Only UI outputs show it:
+    // hardware outputs get it on the device.
+    receive(value) {}
 
     // The label as a MSG_STRING message keyed by this node's ID (see PROTOCOL.md).
     marshalLabel() {
