@@ -93,8 +93,7 @@ function restoreGraph(msgs) {
     selected = null;
     selectedEdge = null;
 
-    // Nodes saved without a position are stacked: inputs left, outputs right.
-    const stacked = { inputs: 0, outputs: 0 };
+    // Nodes saved without a position go in the first free slot of their column.
     const decoder = new TextDecoder();
     const int16 = (hi, lo) => ((hi << 8 | lo) << 16) >> 16;
 
@@ -107,9 +106,7 @@ function restoreGraph(msgs) {
             elm.x = int16(layout.pay[0], layout.pay[1]);
             elm.y = int16(layout.pay[2], layout.pay[3]);
         } else {
-            const side = elm.actDir === 'outputs' ? 'inputs' : 'outputs';
-            elm.x = side === 'inputs' ? -200 : 150;
-            elm.y = -100 + 100 * stacked[side]++;
+            ({ x: elm.x, y: elm.y } = freeSlot(nodeColumn(elm), elm));
         }
         elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
 
@@ -174,16 +171,47 @@ function toggleAddMenu() {
     document.getElementById('add').classList.toggle('open');
 }
 
-// Add a node of a control message type in the middle of the view, and select it.
-// A node already there pushes the new one down and to the right.
-function addNode(type) {
-    let x = Math.round(viewBox.x + viewBox.w / 2);
-    let y = Math.round(viewBox.y + viewBox.h / 2);
-    while (Object.values(elements).some(e => e.x === x && e.y === y)) {
-        x += 30;
-        y += 30;
+// New nodes are laid out in two columns: the GUI inputs (buttons, sliders) on the
+// left, the hardware outputs (LED, GPO, PWM) on the right, each filled from the top.
+const COLUMN_X = { left: -200, right: 150 };
+const ROW_TOP = -100;
+const ROW_STEP = 100;
+
+// The column a node belongs in: left for a source, right for an output.
+function nodeColumn(elm) {
+    return elm.actDir === 'outputs' ? 'left' : 'right';
+}
+
+// The first slot from the top of a column that no other node overlaps. A node
+// covers about 120 × 80 units with its label, so nearer than that overlaps.
+function freeSlot(column, except) {
+    const x = COLUMN_X[column];
+    for (let y = ROW_TOP; ; y += ROW_STEP) {
+        const taken = Object.values(elements).some(e => e !== except
+            && Math.abs(e.x - x) < 120 && Math.abs(e.y - y) < 80);
+        if (!taken) return { x, y };
     }
-    const elm = new NODE_CLASSES[type](x, y);
+}
+
+// Bring a point into view, panning as little as needed, with a margin around it.
+function panTo(x, y) {
+    const m = 100;
+    if (x - m < viewBox.x) viewBox.x = x - m;
+    if (x + m > viewBox.x + viewBox.w) viewBox.x = x + m - viewBox.w;
+    if (y - m < viewBox.y) viewBox.y = y - m;
+    if (y + m > viewBox.y + viewBox.h) viewBox.y = y + m - viewBox.h;
+    setView();
+}
+
+// Add a node of a control message type in the first free slot of its column,
+// bring it into view, and select it.
+function addNode(type) {
+    const elm = new NODE_CLASSES[type]();
+    const { x, y } = freeSlot(nodeColumn(elm), elm);
+    elm.x = x;
+    elm.y = y;
+    elm.gElm.setAttribute('transform', `translate(${x} ${y}) rotate(${elm.r || 0})`);
+    panTo(x, y);
     selectById(elm.id);
 }
 

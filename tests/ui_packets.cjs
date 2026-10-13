@@ -178,6 +178,11 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await page.evaluate(() => elements.n4.freqLog) === false, 'a frequency from an input does not start linear');
     await choice('Scale', 'Logarithmic');
     expect(await page.evaluate(() => elements.n4.freqLog), 'the Scale choice did not make the frequency logarithmic');
+    // Added nodes go in two columns, each filled from its first free slot: the
+    // sliders on the left below the button, the PWM on the right below the GPO.
+    const placed = await page.evaluate(() => ['n4', 'n5', 'n6'].map(n => `${n}@${elements[n].x},${elements[n].y}`).join(' '));
+    expect(placed === 'n4@150,100 n5@-200,100 n6@-200,200', 'added nodes are not in their columns: ' + placed);
+
     const freqWire = await page.evaluate(() => [elements.n4.freqSource?.name,
         elements.n4.inConns().map(c => c.start.node.name).join()].join('|'));
     expect(freqWire === 'n6|n5,n6', 'picking the frequency input did not wire it: ' + freqWire);
