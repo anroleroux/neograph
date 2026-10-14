@@ -17,12 +17,19 @@ add_executable(twitcher
     src/config.c
     src/config/config_iterator.c
     src/hwman.c
+    src/keyboard.c
+    src/usb_descriptors.c
     src/networking/dhcpserver.c
     src/networking/ws_frame.c
 )
 
 target_compile_definitions(twitcher PRIVATE
     CYW43_COUNTRY_CODE=CYW43_COUNTRY_SOUTH_AFRICA
+    # The app links TinyUSB itself for the keyboard (src/keyboard.c) and supplies the
+    # descriptors (src/usb_descriptors.c); pico_stdio_usb still starts TinyUSB and
+    # runs its task in the background, as it does on its own.
+    PICO_STDIO_USB_ENABLE_TINYUSB_INIT=1
+    PICO_STDIO_USB_ENABLE_IRQ_BACKGROUND_TASK=1
 )
 
 target_include_directories(twitcher PRIVATE
@@ -37,10 +44,11 @@ target_link_libraries(twitcher
     pico_mbedtls
     pico_multicore
     pico_cyw43_arch_lwip_poll
+    tinyusb_device
     m
 )
 
-# Enable USB output, disable UART output
+# Enable USB output, disable UART output. The USB port is also a keyboard.
 pico_enable_stdio_usb(twitcher 1)
 pico_enable_stdio_uart(twitcher 0)
 

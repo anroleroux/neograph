@@ -10,6 +10,7 @@
 #include "hardware/flash.h"
 #include "config.h"
 #include "hwman.h"
+#include "keyboard.h"
 #include "config/config_iterator.h"
 
 #define PREFIX "neoGraph-"
@@ -343,6 +344,7 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
     // the config replaces the controls rather than adding to them.
     multicore_fifo_push_blocking(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0));
     printf("send hw clean setup\n");
+    keyboard_clear();
 
     // size_t offset = 0;
     // size_t capacity = 4;
@@ -404,6 +406,23 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             control_setup_msg = fifo_freq_word(itr.pay[11]<<8 | itr.pay[12], itr.pay[13]<<8 | itr.pay[14]);
             multicore_fifo_push_blocking(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
+            break;
+
+        case MSG_HW_KEYBOARD:
+            // Core 0 keeps the keystroke and types it; core 1 says when.
+            if (!keyboard_payload_valid(itr.pay, itr.len)) break;
+            if (!keyboard_add(itr.id, itr.pay + 2, itr.len - 2)) {
+                printf("skipping keyboard %d: too many keyboards\n", itr.id);
+                break;
+            }
+
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_KEYBOARD, itr.id, 0);
+            multicore_fifo_push_blocking(control_setup_msg);
+            printf("send hw keyboard setup %X\n",control_setup_msg);
+
+            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
+            multicore_fifo_push_blocking(control_setup_msg);
+            printf("send hw keyboard setup %X\n",control_setup_msg);
             break;
 
         case MSG_HW_ADC:

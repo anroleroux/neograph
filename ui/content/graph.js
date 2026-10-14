@@ -27,6 +27,7 @@ const NODE_CLASSES = {
     [MSG_UI_GRAPH]: uiPlot,
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
+    [MSG_HW_KEYBOARD]: uiKeyboard,
 };
 
 // Rebuild the Command view from the graph's UI inputs and outputs.
@@ -119,7 +120,9 @@ function restoreGraph(msgs) {
         if (m.type === MSG_UI_SLIDER && m.len >= 1) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
+        if (m.type === MSG_UI_BUTTON && m.len >= 1) elm.setAction(m.pay[0] & BUTTON_MOMENTARY ? 'momentary' : 'toggle');
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
+        if (m.type === MSG_HW_KEYBOARD && m.len >= 3) elm.setStroke(m.pay.slice(2));
         if (m.type === MSG_UI_GRAPH && m.len >= 3) {
             elm.setWindow(m.pay[2]);
             elm.setUnit(decoder.decode(m.pay.slice(3)));

@@ -59,10 +59,10 @@
 /* The add-node buttons, in four blocks across the canvas, sources on the left
    and outputs on the right:
 
-     +             (toolbar)          row 1
-     BTN SLD         LED GPO PWM      row 2: GUI inputs, HW outputs
-                                      row 3: the gap between the two pairs
-     TMP ADC                 PLT      row 4: HW inputs, GUI outputs
+     +               (toolbar)            row 1
+     BTN SLD         LED GPO PWM KEY      row 2: GUI inputs, HW outputs
+                                          row 3: the gap between the two pairs
+     TMP ADC                     PLT      row 4: HW inputs, GUI outputs
 
    Each button's --col and --row give its grid cell. The right-hand blocks sit at
    the right edge, under the toolbar's buttons.
@@ -71,7 +71,7 @@
    toggleAddMenu, as the right-hand blocks move with the canvas's width. */
 #graph > .buttons.add {
     display: grid;
-    grid-template-columns: repeat(2, max-content) 1fr repeat(3, max-content);
+    grid-template-columns: repeat(2, max-content) 1fr repeat(4, max-content);
     grid-template-rows: repeat(2, max-content) var(--step-3) max-content;
     gap: var(--step-0);
     align-items: start;

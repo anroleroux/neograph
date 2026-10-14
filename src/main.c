@@ -15,6 +15,7 @@
 #include "websockets.h"
 #include "config.h"
 #include "hwman.h"
+#include "keyboard.h"
 #include "protocol.h"
 #include "hardware/adc.h"
 #include "hardware/pwm.h"
@@ -79,8 +80,10 @@ int main() {
 
         cyw43_arch_poll();
         // Not longer than 10 ms: core 1 waits while its FIFO to core 0 is full,
-        // and the ADC inputs report several times a second.
-        cyw43_arch_wait_for_work_until(make_timeout_time_ms(10));
+        // and the ADC inputs report several times a second. While a keystroke is
+        // being typed, 1 ms: the PC takes a key down or up each millisecond.
+        bool typing = keyboard_task();
+        cyw43_arch_wait_for_work_until(make_timeout_time_ms(typing ? 1 : 10));
 
         // Each message from core 1 is a tag and a value (PROTOCOL.md, "Core 1 →
         // core 0"). Take all that are waiting.
@@ -104,6 +107,9 @@ int main() {
                 break;
             case FIFO_TAG_LED:
                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, value);
+                break;
+            case FIFO_TAG_KEYBOARD:
+                keyboard_press(value);
                 break;
             }
             if (!text[0]) continue;

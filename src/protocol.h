@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, PWM_, SLIDER_, VALUE_, PIN_ and ADC_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_ and KEYBOARD_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -45,6 +45,7 @@
 #define MSG_HW_LED              0x20
 #define MSG_HW_GPO              0x21
 #define MSG_HW_PWM              0x22
+#define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
 #define MSG_HW_CORE             0x30    /* the core temperature, from telemetry */
 #define MSG_HW_GPI              0x31    /* reserved */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
@@ -77,6 +78,10 @@
 /* Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical. */
 #define SLIDER_VERTICAL         0x01
 
+/* Button (MSG_UI_BUTTON) payload byte 0, bit 0: 0 = each click toggles it, 1 = it is on
+   while held. A button without the byte is a toggle. */
+#define BUTTON_MOMENTARY        0x01
+
 /* GPIO pins a GPO or PWM may use, bit n = GPIO n: GPIO 0-22 and 26-28, the ones on
    the Pico 2 W's header. GPIO 23, 24, 25 and 29 drive the WiFi chip. */
 #define PIN_USABLE_MASK         0x1C7FFFFF
@@ -87,6 +92,11 @@
 #define ADC_PIN_FIRST           26
 #define ADC_RAW_FULL            4095    /* a 12-bit reading at the reference voltage, 3.3 V */
 
+/* USB keyboard (MSG_HW_KEYBOARD) payload byte 2: what it types each time its input goes on. */
+#define KEYBOARD_COMBO          0x00    /* one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key */
+#define KEYBOARD_TEXT           0x01    /* text: bytes 3… printable ASCII, \t or \n, typed on a US layout */
+#define KEYBOARD_TEXT_MAX       64      /* characters in a text keystroke */
+
 /* PWM output (MSG_HW_PWM) payload limits and options. */
 #define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
 #define PWM_DUTY_MAX            100     /* duty cycle in percent */
@@ -95,6 +105,18 @@
 #define PWM_FREQ_LOG            0x04    /* options bit 2: a frequency from its input goes from min to max 0 = linearly, 1 = logarithmically */
 
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
+
+/* Whether a USB keyboard's payload is one the device types: source (2 bytes), mode,
+   then a key with its modifiers, or 1 to KEYBOARD_TEXT_MAX characters it can type. */
+static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len) {
+    if (len < 3) return 0;
+    if (pay[2] == KEYBOARD_COMBO) return len == 5;
+    if (pay[2] != KEYBOARD_TEXT || len < 4 || len > 3 + KEYBOARD_TEXT_MAX) return 0;
+    for (uint8_t i = 3; i < len; i++) {
+        if ((pay[i] < 0x20 || pay[i] > 0x7E) && pay[i] != '\t' && pay[i] != '\n') return 0;
+    }
+    return 1;
+}
 
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
@@ -108,6 +130,7 @@ static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK 
 #define FIFO_TAG_TEMPERATURE    1       /* value: float bits, degrees C */
 #define FIFO_TAG_LED            2       /* value: onboard LED state, 0 or 1 */
 #define FIFO_TAG_ADC            3       /* value: an ADC reading, see fifo_adc_word */
+#define FIFO_TAG_KEYBOARD       4       /* value: the ID of a USB keyboard whose input went on */
 
 /*
  * Operation word: [31:30] op · [29] unused · [28:24] type & 0x1F ·
@@ -131,7 +154,7 @@ static inline uint32_t fifo_adc_word(uint8_t channel, uint16_t raw) { return (ui
 static inline uint8_t fifo_adc_channel(uint32_t word) { return (word >> 16) & 0xFF; }
 static inline uint16_t fifo_adc_raw(uint32_t word) { return word & 0xFFFF; }
 
-/* Reference word, sent after a setup word for LED/GPO/PWM: [31:16] source element ID. */
+/* Reference word, sent after a setup word for LED/GPO/PWM/keyboard: [31:16] source element ID. */
 static inline uint32_t fifo_ref_word(uint16_t source_id) { return (uint32_t)source_id << 16; }
 static inline uint16_t fifo_ref_source(uint32_t word) { return (word >> 16) & 0xFFFF; }
 

@@ -33,6 +33,7 @@ const MSG_UI_TIMER           = 0x16;  // reserved
 const MSG_HW_LED             = 0x20;
 const MSG_HW_GPO             = 0x21;
 const MSG_HW_PWM             = 0x22;
+const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_CORE            = 0x30;  // the core temperature, from telemetry
 const MSG_HW_GPI             = 0x31;  // reserved
 const MSG_HW_ADC             = 0x32;  // an analog input pin
@@ -62,6 +63,10 @@ const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from h
 // Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical.
 const SLIDER_VERTICAL        = 0x01;
 
+// Button (MSG_UI_BUTTON) payload byte 0, bit 0: 0 = each click toggles it, 1 = it is on
+// while held. A button without the byte is a toggle.
+const BUTTON_MOMENTARY       = 0x01;
+
 // GPIO pins a GPO or PWM may use, bit n = GPIO n: GPIO 0-22 and 26-28, the ones on
 // the Pico 2 W's header. GPIO 23, 24, 25 and 29 drive the WiFi chip.
 const PIN_USABLE_MASK        = 0x1C7FFFFF;
@@ -73,6 +78,11 @@ const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable
 const ADC_CHANNELS           = 3;
 const ADC_PIN_FIRST          = 26;
 const ADC_RAW_FULL           = 4095;  // a 12-bit reading at the reference voltage, 3.3 V
+
+// USB keyboard (MSG_HW_KEYBOARD) payload byte 2: what it types each time its input goes on.
+const KEYBOARD_COMBO         = 0x00;  // one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key
+const KEYBOARD_TEXT          = 0x01;  // text: bytes 3… printable ASCII, \t or \n, typed on a US layout
+const KEYBOARD_TEXT_MAX      = 64;    // characters in a text keystroke
 
 // PWM output (MSG_HW_PWM) payload limits and options.
 const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz

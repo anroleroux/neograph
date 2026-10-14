@@ -273,6 +273,52 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(adc.forPwm, 'a PWM does not take the ADC');
     expect(adc.toPlot, 'the ADC was not wired to the plot');
 
+    // Add a USB keyboard typing Ctrl+Alt+Delete, set from its settings, and a
+    // momentary button to press it. A keyboard takes a button, not a slider.
+    await page.locator('#add [title="Add a USB keyboard"]').dispatchEvent('click');
+    const keyRows = () => page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
+    expect(await keyRows() === 'Label:|Types:|Hold:|Key:', 'a new keyboard does not show a key combo: ' + await keyRows());
+    await choice('Hold', 'Ctrl');
+    await choice('Hold', 'Alt');
+    await select('Key').selectOption(String(0x4C));
+    expect(await page.evaluate(() => elements.n12.describe()) === 'Ctrl+Alt+Delete',
+        'the keyboard settings made ' + await page.evaluate(() => elements.n12.describe()));
+    await choice('Types', 'Text');
+    expect(await keyRows() === 'Label:|Types:|Text:', 'text does not show its text: ' + await keyRows());
+    const text = await page.evaluate(() => {
+        const kb = elements.n12;
+        const rejected = kb.setText('') === false && kb.setText('é') === false && kb.setText('\r') === false
+            && kb.setText('x'.repeat(KEYBOARD_TEXT_MAX + 1)) === false && kb.setKey('256') === false;
+        kb.setText(keyboardUnescape('a\\tb\\\\'));
+        return { rejected, text: JSON.stringify(kb.text), shown: keyboardEscape(kb.text) };
+    });
+    expect(text.rejected, 'keystrokes the keyboard cannot type were accepted');
+    expect(text.text === '"a\\tb\\\\"' && text.shown === 'a\\tb\\\\', 'escaped text reads as ' + JSON.stringify(text));
+    await choice('Types', 'Key');
+    await page.locator('#add [title="Add a button"]').dispatchEvent('click');
+    await choice('Action', 'Momentary');
+    await page.locator('#add [title="Add a USB keyboard"]').dispatchEvent('click');
+    const keyboard = await page.evaluate(() => {
+        elements.n12.setLabel('Lock');
+        elements.n13.setLabel('Press');
+        elements.n14.setLabel('Greeting');
+        elements.n14.setMode(KEYBOARD_TEXT);
+        elements.n14.setText('hello\n');
+        return {
+            momentary: elements.n13.momentary,
+            fromSlider: createEdge('n5', 'n12') === null,
+            fromButton: createEdge('n13', 'n12') !== null && elements.n12.sourceID() === 13,
+            fromToggle: createEdge('n1', 'n14') !== null,
+            marshal: [elements.n12, elements.n13, elements.n14, elements.n1].map(n => n.marshal()),
+        };
+    });
+    expect(keyboard.momentary, 'the Action choice did not make the button momentary');
+    expect(keyboard.fromSlider, 'a slider was wired to the keyboard');
+    expect(keyboard.fromButton && keyboard.fromToggle, 'the buttons were not wired to the keyboards');
+    const marshalled = keyboard.marshal.map(hex).join();
+    expect(marshalled === '2300000c05000d00054c,1000000d0101,2300000e09000101' + '68656c6c6f0a,1000000100',
+        'the keyboards and buttons marshal as ' + marshalled);
+
     // A plot shows its source's unit, unless it is given its own.
     const units = await page.evaluate(() => {
         const [speed, temp, level] = [elements.n7, elements.n9, elements.n11];
@@ -311,6 +357,22 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(commands.length === 2 && commands.every(p => p[0] === 0x01), 'pressing the button did not send two commands');
     expect(commands[0][8] === 0xFF && commands[1][8] === 0x00, 'the button did not send 1 then 0');
     packets.push(...commands);
+
+    // ── Hold the momentary button: on while held, with the mouse, then Space ──
+    await toCommandView(page);
+    await page.waitForTimeout(500);     // the view slides in
+    const held = page.locator('#command .control-btn').nth(1);
+    const box = await held.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    expect(await held.getAttribute('aria-pressed') === 'true', 'the momentary button is not on while held');
+    await page.mouse.up();
+    expect(await held.getAttribute('aria-pressed') === 'false', 'the momentary button is not off when let go');
+    await held.press(' ');
+    const holds = await sent(page);
+    expect(holds.map(hex).join() === ['0100061000000d01ff', '0100061000000d0100', '0100061000000d01ff', '0100061000000d0100'].join(),
+        'holding the momentary button sent ' + holds.map(hex));
+    packets.push(...holds);
 
     // ── Move the slider: 0.75, the same again (no command), then 0 ──
     const slider = page.locator('#command .control-slider input').first();
@@ -392,15 +454,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
-        const pwm = new uiPWM(400, 300);      // n12, no wires yet
-        new uiButton(-400, 300);              // n13
+        const pwm = new uiPWM(400, 300);      // n15, no wires yet
+        new uiButton(-400, 300);              // n16
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
-        selectById(12);
+        selectById(15);
         const fromPwm = marked();
         clearSelection();
         toggleConnectMode();
-        selectById(12);
+        selectById(15);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
         const input = [...document.querySelectorAll('#settings .editable.select')]
@@ -410,7 +472,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
-            buttonToPwm: createEdge('n13', 'n12') === null && pwm.setSource('duty', elements.n13) === false
+            buttonToPwm: createEdge('n16', 'n15') === null && pwm.setSource('duty', elements.n16) === false
                 && pwm.inConns().length === 0,
         };
     });
@@ -421,14 +483,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n13', 'n2');
+        createEdge('n16', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n13' && replaced.button === 'n3' && replaced.wires === 1,
+    expect(replaced.led === 'n16' && replaced.button === 'n3,n14' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
@@ -451,12 +513,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         wires: gEdges.length,
         pwmSources: [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join(),
         buttons: document.querySelectorAll('#command .control-btn').length,
+        keyboards: [elements.n12.describe(), elements.n12.sourceID(), elements.n13.momentary, elements.n1.momentary,
+            JSON.stringify(elements.n14.text), elements.n14.sourceID()].join(),
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 7
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 9
         && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 3 && restored.readings === 2
         && restored.pwmSources === 'n5,n6'
-        && restored.buttons === 1,
+        && restored.buttons === 2
+        && restored.keyboards === 'Ctrl+Alt+Delete,13,true,false,"hello\\n",1',
         'graph not restored: ' + JSON.stringify(restored));
 
     await page.locator('#graph .write svg').dispatchEvent('click');

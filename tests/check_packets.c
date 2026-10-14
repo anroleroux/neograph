@@ -45,7 +45,7 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
 }
 
 /* A source reference must name a source the output takes (PROTOCOL.md, "Wire
-   types"): a button for an LED or GPO, a slider or an ADC for a PWM, and those or
+   types"): a button for an LED, GPO or keyboard, a slider or an ADC for a PWM, and those or
    the core temperature for a plot. `types` lists the types it may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, 0 };
 static const uint8_t FLOATING_HW[] = { MSG_UI_SLIDER, MSG_HW_ADC, 0 };
@@ -80,6 +80,11 @@ static void check_config(const uint8_t *p, size_t len) {
             else check_source(p, len, it.pay[0] << 8 | it.pay[1], FLOATING,
                               "a plot is wired from something other than a slider, an ADC or the core temperature");
             break;
+        case MSG_UI_BUTTON:
+            /* The device ignores it; the UI restores the options byte. */
+            if (it.len > 1) fail("button message is longer than 1 byte");
+            else if (it.len == 1 && (it.pay[0] & ~BUTTON_MOMENTARY)) fail("button options set an unknown bit");
+            break;
         case MSG_HW_CORE:
             if (it.len != 0) fail("core temperature message is not empty");
             break;
@@ -96,6 +101,10 @@ static void check_config(const uint8_t *p, size_t len) {
             if (it.len != 3) fail("GPO message is not 3 bytes; the device would skip it");
             else if (!pin_usable(it.pay[2])) fail("GPO pin is not in PIN_USABLE_MASK");
             else check_source(p, len, it.pay[0] << 8 | it.pay[1], BOOLEAN, "a GPO is wired from something other than a button");
+            break;
+        case MSG_HW_KEYBOARD:
+            if (!keyboard_payload_valid(it.pay, it.len)) fail("keyboard payload is not one the device types; it would skip it");
+            else check_source(p, len, it.pay[0] << 8 | it.pay[1], BOOLEAN, "a keyboard is wired from something other than a button");
             break;
         case MSG_HW_PWM:
             if (it.len != 15) fail("PWM message is not 15 bytes; the device would skip it");

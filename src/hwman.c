@@ -42,6 +42,7 @@ typedef struct {
     };
     uint16_t source_id;
     uint8_t drives;     // PWM: the parameter this source drives, PWM_DRIVES_DUTY or _FREQ
+    bool on;            // keyboard: whether its input is on, to type once each time it goes on
 } hwel;
 
 typedef struct {
@@ -61,6 +62,7 @@ hwel decode_hwel(uint32_t op) {
     result.id           = fifo_op_id(op);
     result.value        = fifo_op_value(op);
     result.drives       = 0;
+    result.on           = false;
 
     return result;
 }
@@ -278,6 +280,7 @@ static bool drive_outputs(uint16_t source_id, uint8_t value, bool log) {
     hwel_sources *hw_srcs = find_packet(source_id);
     if (!hw_srcs) return false;
 
+    bool on = value >= VALUE_HALF;     // for the on/off outputs
     for (size_t i = 0; i < hw_srcs->len; i++) {
         hwel el = hw_srcs->hwels[i];
 
@@ -285,12 +288,22 @@ static bool drive_outputs(uint16_t source_id, uint8_t value, bool log) {
         case MSG_HW_LED:
             if (log) printf("switch LED, value:%i\n", value);
             push_to_core0(FIFO_TAG_LED);
-            push_to_core0(value >= VALUE_HALF);
+            push_to_core0(on);
             break;
 
         case MSG_HW_GPO:
             if (log) printf("switch GPO %d, value:%i\n", el.io, value);
-            gpio_put(el.io, value >= VALUE_HALF);
+            gpio_put(el.io, on);
+            break;
+
+        case MSG_HW_KEYBOARD:
+            // Core 0 types the keystroke, once each time the input goes on.
+            if (on && !el.on) {
+                if (log) printf("keyboard %d pressed\n", el.id);
+                push_to_core0(FIFO_TAG_KEYBOARD);
+                push_to_core0(el.id);
+            }
+            hw_srcs->hwels[i].on = on;
             break;
 
         case MSG_HW_PWM:
@@ -454,6 +467,11 @@ void core1_worker() {
                 bool usable = true;
                 switch (decop.control_type) {
                 case MSG_HW_LED:
+                    multicore_fifo_pop_timeout_us(1000, &op);
+                    decode_hwrf(op,&decop);
+                    break;
+
+                case MSG_HW_KEYBOARD:
                     multicore_fifo_pop_timeout_us(1000, &op);
                     decode_hwrf(op,&decop);
                     break;
