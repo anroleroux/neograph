@@ -50,10 +50,17 @@ async function open(browser) {
                 this.url = url;
                 this.readyState = FakeWebSocket.CONNECTING;
                 window.__ws = this;
+                // window.__wsRefuse: the device can't be reached, as the browser
+                // reports it: a close with code 1006 and no open.
                 setTimeout(() => {
+                    if (window.__wsRefuse) {
+                        this.readyState = FakeWebSocket.CLOSED;
+                        if (this.onclose) this.onclose({ code: 1006 });
+                        return;
+                    }
                     this.readyState = FakeWebSocket.OPEN;
                     if (this.onopen) this.onopen();
-                }, 0);
+                }, 50);
             }
             send(data) {
                 if (this.readyState !== FakeWebSocket.OPEN) throw new Error('send while not open');
@@ -64,7 +71,7 @@ async function open(browser) {
             }
             close() {
                 this.readyState = FakeWebSocket.CLOSED;
-                if (this.onclose) this.onclose();
+                if (this.onclose) this.onclose({ code: 1005 });
             }
             // The device's side: a binary frame, or a text frame for a string.
             receive(data) {
@@ -89,6 +96,12 @@ async function connect(page, config) {
         window.__ws.receive(cfg);
         window.__ws.receive('uptime 5');     // telemetry text frame
     }, [DEVICE_ID, config]);
+}
+
+// Show the Network view, once it has slid in.
+async function toNetworkView(page) {
+    await page.evaluate(() => toNetwork());
+    await page.waitForTimeout(500);
 }
 
 // Show the Command view, and give the plots a frame to draw.
@@ -594,6 +607,31 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             + '|' + [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join();
     });
     expect(mixed === 'n2>n4|,n2', 'restoring mismatched wires gave ' + mixed);
+
+    // ── The connection switch: on while connected, off with no message when
+    // switched off, pulsing while connecting, and a message when it fails or drops ──
+    await toNetworkView(page);
+    const toggle = page.locator('.device-connect');
+    const switchState = () => page.evaluate(() => [
+        document.querySelector('.device-connect').className.replace('device-connect ', ''),
+        document.querySelector('.device-message')?.textContent ?? ''].join('|'));
+    expect(await switchState() === 'connected|', 'the switch is not on while connected: ' + await switchState());
+    await toggle.dispatchEvent('click');
+    expect(await switchState() === 'disconnected|', 'switching off left ' + await switchState());
+    await page.evaluate(() => { window.__wsRefuse = true; });
+    await toggle.dispatchEvent('click');
+    const connecting = await switchState();
+    const pulse = await page.evaluate(() => getComputedStyle(document.querySelector('.device-connect .light')).animationName);
+    await page.waitForFunction(() => document.querySelector('.device-connect.disconnected'));
+    const unreachable = await switchState();
+    expect(connecting === 'connecting|' && pulse === 'connecting-pulse', `connecting shows ${connecting}, animation ${pulse}`);
+    expect(unreachable.startsWith("disconnected|Couldn't connect to "), 'an unreachable device shows ' + unreachable);
+    await page.evaluate(() => { window.__wsRefuse = false; });
+    await toggle.dispatchEvent('click');
+    await page.waitForFunction(() => document.querySelector('.device-connect.connected'));
+    expect(await switchState() === 'connected|', 'connecting again did not clear the message: ' + await switchState());
+    await page.evaluate(() => window.__ws.close());       // the device goes away
+    expect((await switchState()).startsWith('disconnected|Lost the connection to '), 'a dropped connection shows ' + await switchState());
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

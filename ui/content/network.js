@@ -1,6 +1,9 @@
 let socket, gfig;
 let offlineConfig = null; //offline
 let offlineTelemetry = null; //offline
+let offlineConnect = null; //offline
+
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
 function networkingTemplate(state) {
     // `placeholder` is shown while the field has no value.
@@ -35,16 +38,22 @@ function networkingTemplate(state) {
         }
     }
 
+    // The connection switch: red and off when disconnected, pulsing between red and
+    // green with the knob halfway while connecting, green and on when connected. A
+    // failed or lost connection leaves a message below the device.
+    const SWITCH_TITLES = {disconnected: "Connect", connecting: "Connecting… (click to cancel)", connected: "Disconnect"};
+    const KNOB = {disconnected: "translate(0 3)", connecting: "translate(2.9 3)", connected: "translate(5.8 3)"};
     const deviceElement = (nindex,dindex,device) => `
         <div class="device-elm">
             <div>
                 <h4>Device: ${device.name}</h4>
                 <p>IP: ${device.ip}</p>
+                ${device.message ? `<p class="device-message" role="alert">${escapeHtml(device.message)}</p>` : ""}
             </div>
-            <div class="device-connect" onclick="toggleWebSocket(${nindex},${dindex})">
+            <div class="device-connect ${device.state}" title="${SWITCH_TITLES[device.state]}" onclick="toggleWebSocket(${nindex},${dindex})">
                 <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path opacity="0.8" stroke="#BFCDE7" fill=${device.connected?"#4CAF5080":"#E7BFBF80"} stroke-width="1.5" d="M2 12C2 7.28595 2 4.92893 3.46447 3.46447C4.92893 2 7.28595 2 12 2C16.714 2 19.0711 2 20.5355 3.46447C22 4.92893 22 7.28595 22 12C22 16.714 22 19.0711 20.5355 20.5355C19.0711 22 16.714 22 12 22C7.28595 22 4.92893 22 3.46447 20.5355C2 19.0711 2 16.714 2 12Z"/>
-                    <g transform="${device.connected?"translate(5.8 3) scale(0.745)":"translate(0 3) scale(0.745)"}">
+                    <path class="light" opacity="0.8" stroke="#BFCDE7" fill=${device.state === "connected"?"#4CAF5080":"#E7BFBF80"} stroke-width="1.5" d="M2 12C2 7.28595 2 4.92893 3.46447 3.46447C4.92893 2 7.28595 2 12 2C16.714 2 19.0711 2 20.5355 3.46447C22 4.92893 22 7.28595 22 12C22 16.714 22 19.0711 20.5355 20.5355C19.0711 22 16.714 22 12 22C7.28595 22 4.92893 22 3.46447 20.5355C2 19.0711 2 16.714 2 12Z"/>
+                    <g transform="${KNOB[device.state]} scale(0.745)">
                         <path stroke="#BFCDE7" fill="#2d2f34C0" stroke-width="1.5" d="M6 8C6 5.17157 6 3.75736 6.87868 2.87868C7.75736 2 9.17157 2 12 2C14.8284 2 16.2426 2 17.1213 2.87868C18 3.75736 18 5.17157 18 8V16C18 18.8284 18 20.2426 17.1213 21.1213C16.2426 22 14.8284 22 12 22C9.17157 22 7.75736 22 6.87868 21.1213C6 20.2426 6 18.8284 6 16V8Z"/>
                     </g>
                 </svg>
@@ -105,8 +114,8 @@ const networks = mount(document.getElementById("network"), [
             {
                 name:"unknown",
                 ip:location.host,
-                connected:false,
-                socket:null
+                state:"disconnected",   // "connecting", "connected"
+                message:""              // why the last connection failed or ended
             }
         ],
         fields:{options:FIELD_NETWORK_OPTIONS, name:FIELD_NETWORK_NAME, ssid:FIELD_NETWORK_SSID, password:FIELD_NETWORK_PASSWORD,
@@ -188,39 +197,45 @@ function configSetField(payload, msg) {
 
 function toggleWebSocket(n,d) {
     const dv = networks[n].devices[d];
-    if (dv.connected) {
-        dv.connected = false;
-        disconnectWebSocket(networks[n].devices[d]); //online
+    dv.message = "";
+    if (dv.state !== "disconnected") {
+        // Disconnect, or give up connecting.
+        dv.state = "disconnected";
+        disconnectWebSocket(dv); //online
         clearInterval(offlineTelemetry); //offline
+        clearTimeout(offlineConnect); //offline
     } else {
-        dv.connected = true;
-        connectWebSocket(networks[n].devices[d]); //online
+        dv.state = "connecting";
+        connectWebSocket(dv); //online
         //offline-start
-        // No controller to talk to: feed in the last saved config, or a canned
-        // first-boot config, as if the device sent it.
-        const data = offlineConfig || new Uint8Array([
-            PKT_CONFIG, 0, 58,
-            0xB0, 0, 0, 0, 9, 0, 189, 252, 234, 193, 78, 30, 121, 77,
-            0xB1, 0, 0, 0, 5, 1, 76, 56, 83, 71,
-            0xB1, 0, 0, 0, 3, 2, 0, 0,
-            0xB2, 0, 0, 0, 2, 0, 1,
-            0xB3, 0, 0, 0, 5, 1, 76, 56, 83, 71,
-            0xB3, 0, 0, 0, 4, 2, 76, 82, 88,
-        ]);
-        networks[0].devices[0].did = data.slice(9,17);
-        gfig = data.slice(3);
-        unmarshalConfigs(gfig);
-        // and a chip temperature drifting around 30 °C, as telemetry.
-        // and ADC readings: a slow wave on each channel.
-        let tick = 0;
-        offlineTelemetry = setInterval(() => {
-            const t = performance.now() / 1000;
-            if (tick++ % 6 === 0) receiveTelemetry(`core ${(30 + 4 * Math.sin(t / 20) + Math.random() - 0.5).toFixed(2)}`);
-            for (let ch = 0; ch < ADC_CHANNELS; ch++) {
-                const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * ch)) + 0.01 * (Math.random() - 0.5);
-                receiveTelemetry(`adc ${ch} ${Math.round(level * ADC_RAW_FULL)}`);
-            }
-        }, 200);
+        // No controller to talk to: after a moment, as if connecting, feed in the
+        // last saved config, or a canned first-boot config, as if the device sent it.
+        offlineConnect = setTimeout(() => {
+            dv.state = "connected";
+            const data = offlineConfig || new Uint8Array([
+                PKT_CONFIG, 0, 58,
+                0xB0, 0, 0, 0, 9, 0, 189, 252, 234, 193, 78, 30, 121, 77,
+                0xB1, 0, 0, 0, 5, 1, 76, 56, 83, 71,
+                0xB1, 0, 0, 0, 3, 2, 0, 0,
+                0xB2, 0, 0, 0, 2, 0, 1,
+                0xB3, 0, 0, 0, 5, 1, 76, 56, 83, 71,
+                0xB3, 0, 0, 0, 4, 2, 76, 82, 88,
+            ]);
+            networks[0].devices[0].did = data.slice(9,17);
+            gfig = data.slice(3);
+            unmarshalConfigs(gfig);
+            // and a chip temperature drifting around 30 °C, as telemetry.
+            // and ADC readings: a slow wave on each channel.
+            let tick = 0;
+            offlineTelemetry = setInterval(() => {
+                const t = performance.now() / 1000;
+                if (tick++ % 6 === 0) receiveTelemetry(`core ${(30 + 4 * Math.sin(t / 20) + Math.random() - 0.5).toFixed(2)}`);
+                for (let ch = 0; ch < ADC_CHANNELS; ch++) {
+                    const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * ch)) + 0.01 * (Math.random() - 0.5);
+                    receiveTelemetry(`adc ${ch} ${Math.round(level * ADC_RAW_FULL)}`);
+                }
+            }, 200);
+        }, 800);
         //offline-end
     }
 }
@@ -365,19 +380,44 @@ function areByteArraysEqual(arr1, arr2) {
 }
 
 //online-start
-function connectWebSocket(device) {
-    // const socket = device.socket;
+// The connection being made or in use; a socket's events count only while it is
+// this one, so a cancelled or replaced connection can't change the switch.
+let currentSocket = null;
+let connectTimer = null;
+const CONNECT_TIMEOUT_MS = 10000;
 
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        console.log("WebSocket already connected.");
+function connectWebSocket(device) {
+    const where = device.ip || "the device";
+    const ended = (message) => {
+        clearTimeout(connectTimer);
+        currentSocket = null;
+        device.state = "disconnected";
+        device.message = message;
+    };
+
+    try {
+        socket = new WebSocket("ws://" + device.ip);
+    } catch (error) {
+        ended(`Can't connect to ${where}: ${error.message}`);
         return;
     }
+    const ws = socket;
+    currentSocket = ws;
+    let opened = false;
 
-    socket = new WebSocket("ws://" + device.ip);
+    // A host that doesn't answer can take a minute to fail on its own.
+    connectTimer = setTimeout(() => {
+        if (ws !== currentSocket) return;
+        ended(`No answer from ${where} after ${CONNECT_TIMEOUT_MS / 1000} s. `
+            + "Is this computer or phone on the device's WiFi network, and is the device on?");
+        ws.close();
+    }, CONNECT_TIMEOUT_MS);
 
     socket.onopen = function () {
-        // document.getElementById("status").textContent = "Connected";
-        // document.getElementById("status").className = "connected";
+        if (ws !== currentSocket) return;
+        clearTimeout(connectTimer);
+        opened = true;
+        device.state = "connected";
         console.log("WebSocket connected.");
     };
 
@@ -402,12 +442,15 @@ function connectWebSocket(device) {
         }
     };
 
-    socket.onclose = function () {
-        // document.getElementById("status").textContent = "Disconnected";
-        // document.getElementById("status").className = "disconnected";
-        // clearConfigInterface();
-        // clearControlInterface();
-        console.log("WebSocket disconnected.");
+    // The browser says why a connection ended only in the close code: 1006 for
+    // both a host that can't be reached and a connection that dropped.
+    socket.onclose = function (event) {
+        console.log("WebSocket disconnected.", event.code);
+        if (ws !== currentSocket) return;
+        ended(opened
+            ? `Lost the connection to ${where}. Click the switch to connect again.`
+            : `Couldn't connect to ${where}. `
+                + "Is this computer or phone on the device's WiFi network, and is the device on?");
     };
 
     socket.onerror = function (error) {
@@ -415,13 +458,10 @@ function connectWebSocket(device) {
     };
 }
 
+// Close the connection, or stop making it. Its close event then counts for nothing.
 function disconnectWebSocket(device) {
-    // const socket = device.socket;
-
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close();
-        // clearConfigInterface();
-        // clearControlInterface();
-    }
+    clearTimeout(connectTimer);
+    currentSocket = null;
+    if (socket && socket.readyState !== WebSocket.CLOSED) socket.close();
 }
 //online-end
