@@ -25,11 +25,6 @@ add_executable(twitcher
 
 target_compile_definitions(twitcher PRIVATE
     CYW43_COUNTRY_CODE=CYW43_COUNTRY_SOUTH_AFRICA
-    # The app links TinyUSB itself for the keyboard (src/keyboard.c) and supplies the
-    # descriptors (src/usb_descriptors.c); pico_stdio_usb still starts TinyUSB and
-    # runs its task in the background, as it does on its own.
-    PICO_STDIO_USB_ENABLE_TINYUSB_INIT=1
-    PICO_STDIO_USB_ENABLE_IRQ_BACKGROUND_TASK=1
 )
 
 target_include_directories(twitcher PRIVATE
@@ -44,12 +39,19 @@ target_link_libraries(twitcher
     pico_mbedtls
     pico_multicore
     pico_cyw43_arch_lwip_poll
-    tinyusb_device
     m
 )
 
-# Enable USB output, disable UART output. The USB port is also a keyboard.
+# Enable USB output, disable UART output.
 pico_enable_stdio_usb(twitcher 1)
 pico_enable_stdio_uart(twitcher 0)
+
+# The USB port is also a keyboard (src/keyboard.c). pico_stdio_usb starts TinyUSB and
+# runs its task, as long as the app doesn't link tinyusb_device itself (SDK 2.0 to
+# 2.1 then leave both to the app), so TinyUSB comes in through pico_stdio_usb, with
+# src/tusb_config.h, and only its descriptors are replaced by src/usb_descriptors.c:
+# its descriptors file skips them when it sees LIB_TINYUSB_DEVICE.
+set_source_files_properties(${PICO_SDK_PATH}/src/rp2_common/pico_stdio_usb/stdio_usb_descriptors.c
+    PROPERTIES COMPILE_DEFINITIONS LIB_TINYUSB_DEVICE=1)
 
 pico_add_extra_outputs(twitcher)
