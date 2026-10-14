@@ -153,8 +153,27 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         gEdges[0].start.mvfunc();
     });
 
-    // Add a PWM output from the add menu, set it up and wire the button to it.
+    // The add menu: the plus shows the four groups; a group shows its nodes, one
+    // group at a time, and the plus folds it all.
+    const menu = () => page.evaluate(() => {
+        const showing = (sel) => [...document.querySelectorAll(sel)]
+            .filter(b => getComputedStyle(b).pointerEvents !== 'none').map(b => b.textContent.trim()).join(' ');
+        return showing('#add .group') + ' | ' + showing('#add .node');
+    });
+    expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO | ', 'the plus shows ' + await menu());
+    const groups = [];
+    for (const g of ['uii', 'hwo', 'hwi', 'uio']) {
+        await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
+        groups.push((await menu()).split(' | ')[1]);
+    }
+    expect(groups.join(', ') === 'BTN SLD, LED GPO PWM KEY, TMP ADC, PLT', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO | ', 'clicking the open group again left ' + await menu());
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+
+    // Add a PWM output from the add menu, set it up and wire the button to it.
     await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
     const rows = () => page.$$eval('#settings .editable .label', ls => ls.slice(2).map(l => l.textContent).join('|'));
     const select = (label) => page.locator('#settings .editable.select', { has: page.locator(`.label:text-is("${label}:")`) })

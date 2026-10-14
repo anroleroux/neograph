@@ -56,27 +56,26 @@
     margin-left: var(--step-0);
 }
 
-/* The add-node buttons, in four blocks across the canvas, sources on the left
-   and outputs on the right:
+/* The add-node menu. The plus opens the four groups under it; a group opens its
+   nodes beside it, on its row, one group at a time:
 
-     +               (toolbar)            row 1
-     BTN SLD         LED GPO PWM KEY      row 2: GUI inputs, HW outputs
-                                          row 3: the gap between the two pairs
-     TMP ADC                     PLT      row 4: HW inputs, GUI outputs
+     +                            row 1
+     UII HWO  BTN SLD / LED GPO PWM KEY   row 2: UI inputs, HW outputs
+     HWI UIO  TMP ADC / PLT               row 3: HW inputs, UI outputs
 
-   Each button's --col and --row give its grid cell. The right-hand blocks sit at
-   the right edge, under the toolbar's buttons.
-   Folded, they hide behind the plus; open, each slides out to its place.
-   --dx and --dy, each button's offset from the plus, are measured by
-   toggleAddMenu, as the right-hand blocks move with the canvas's width. */
+   On a narrow screen the nodes go in a row 4 under the groups instead.
+
+   Each button's --col and --row give its grid cell. Folded, a button hides behind
+   the one that opens it (the plus, or its group) and slides out to its place;
+   toggleAddMenu and toggleAddGroup measure --dx and --dy, its offset from there. */
 #graph > .buttons.add {
     display: grid;
-    grid-template-columns: repeat(2, max-content) 1fr repeat(4, max-content);
-    grid-template-rows: repeat(2, max-content) var(--step-3) max-content;
+    grid-template-columns: repeat(6, max-content);
+    grid-template-rows: repeat(3, max-content);
     gap: var(--step-0);
     align-items: start;
     left: 0;
-    right: 0;
+    right: auto;
     /* the folded buttons must not block the canvas */
     pointer-events: none;
 }
@@ -85,21 +84,40 @@
     margin: 0;
     grid-column: var(--col);
     grid-row: var(--row);
+    background-color: var(--clr-pane);      /* solid over the graph */
     pointer-events: auto;
-    transition: transform 0.25s ease, opacity 0.25s ease;
+    transition: transform 0.25s ease, opacity 0.25s ease, background-color 0.25s ease;
 }
 
+/* Stacked so each folds behind the button that opens it. */
 #graph > .buttons.add > .toggle {
     position: relative;
+    z-index: 2;
+}
+
+#graph > .buttons.add > .group {
+    position: relative;
     z-index: 1;
-    background-color: var(--clr-pane);
+}
+
+#graph > .buttons.add > .group.sel {
+    background-color: #BFCDE740;
 }
 
 #graph > .buttons.add.open > .toggle {
     transform: rotate(45deg);
 }
 
-#graph > .buttons.add:not(.open) > div:not(.toggle) {
+/* Narrow screens have no room beside the groups: the nodes go in a row under them. */
+@media (max-width: 600px) {
+    #graph > .buttons.add > .node {
+        grid-row: 4;
+        grid-column: calc(var(--col) - 2);
+    }
+}
+
+#graph > .buttons.add:not(.open) > div:not(.toggle),
+#graph > .buttons.add > .node:not(.shown) {
     transform: translate(var(--dx, 0), var(--dy, 0));
     opacity: 0;
     pointer-events: none;
