@@ -57,21 +57,23 @@
 }
 
 /* The add-node menu. The plus opens the four groups under it; a group opens its
-   nodes beside it, on its row, one group at a time:
+   nodes in a row under the groups, one group at a time:
 
-     +                            row 1
-     UII HWO  BTN SLD / LED GPO PWM KEY   row 2: UI inputs, HW outputs
-     HWI UIO  TMP ADC / PLT               row 3: HW inputs, UI outputs
-
-   On a narrow screen the nodes go in a row 4 under the groups instead.
+     +                    row 1
+     UII HWO              row 2: UI inputs, HW outputs
+     HWI UIO              row 3: HW inputs, UI outputs
+     BTN SLD              row 4: the open group's nodes,
+     LED GPO PWM KEY             e.g. UII's or HWO's
+     TMP ADC
+     PLT
 
    Each button's --col and --row give its grid cell. Folded, a button hides behind
    the one that opens it (the plus, or its group) and slides out to its place;
    toggleAddMenu and toggleAddGroup measure --dx and --dy, its offset from there. */
 #graph > .buttons.add {
     display: grid;
-    grid-template-columns: repeat(6, max-content);
-    grid-template-rows: repeat(3, max-content);
+    grid-template-columns: repeat(4, max-content);
+    grid-template-rows: repeat(4, max-content);
     gap: var(--step-0);
     align-items: start;
     left: 0;
@@ -106,14 +108,6 @@
 
 #graph > .buttons.add.open > .toggle {
     transform: rotate(45deg);
-}
-
-/* Narrow screens have no room beside the groups: the nodes go in a row under them. */
-@media (max-width: 600px) {
-    #graph > .buttons.add > .node {
-        grid-row: 4;
-        grid-column: calc(var(--col) - 2);
-    }
 }
 
 #graph > .buttons.add:not(.open) > div:not(.toggle),
