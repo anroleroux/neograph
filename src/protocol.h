@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_ and KEYBOARD_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_ and KEYBOARD_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -67,9 +67,30 @@
 #define FIELD_NETWORK_NAME      0x01
 #define FIELD_NETWORK_SSID      0x02
 #define FIELD_NETWORK_PASSWORD  0x03    /* secrets store only */
+#define FIELD_NETWORK_AP_ADDRESS     0x04    /* access point: its IPv4 address, 4 bytes */
+#define FIELD_NETWORK_STATIC_ADDRESS 0x05    /* joining: a fixed IPv4 address, 4 bytes */
+#define FIELD_NETWORK_GATEWAY        0x06    /* joining with a fixed address: the gateway, 4 bytes */
 
 /* Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network. */
 #define NET_OPT_JOIN            0x01
+
+/* IPv4 address fields: 4 bytes, most significant first; 0.0.0.0 = not set. The access
+   point's network is its address's /24, and its DHCP server leases the
+   NET_LEASE_COUNT addresses from host NET_LEASE_FIRST, so the access point may not
+   take one of those. */
+#define NET_LEASE_FIRST         16
+#define NET_LEASE_COUNT         8
+
+/* Whether an address field's value is one the device uses: a unicast address that
+   isn't loopback, the network (.0) or the broadcast (.255) of its /24. */
+static inline int net_address_usable(const uint8_t a[4]) {
+    return a[0] != 0 && a[0] != 127 && a[0] < 224 && a[3] != 0 && a[3] != 255;
+}
+
+/* Whether an access point may take an address: usable, and not one it leases. */
+static inline int net_ap_address_usable(const uint8_t a[4]) {
+    return net_address_usable(a) && (a[3] < NET_LEASE_FIRST || a[3] >= NET_LEASE_FIRST + NET_LEASE_COUNT);
+}
 
 /* Command values: one byte, a fraction of full scale, 0x00 = 0 to 0xFF = 1. */
 #define VALUE_FULL              0xFF    /* 1: a pressed button, a slider at its end */

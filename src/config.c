@@ -161,13 +161,20 @@ void update_config(const uint8_t* new_buf, size_t new_len) {
     uint16_t data_length = stored_length(header_buffer, FLASH_SIZE);
     read_config(config_buffer,data_length+3);
 
+    // A password belongs in the secrets store: the config is sent to the UI.
+    if (new_len >= 6 && new_buf[0] == MSG_NETWORK_FIELD && new_buf[5] == FIELD_NETWORK_PASSWORD) {
+        printf("a password goes in the secrets store, not the config; nothing written\n");
+        return;
+    }
+
+    // A field the device or network doesn't have yet is added.
     size_t assem_len = data_length
-        ? config_replace_field(config_buffer, data_length+3, new_buf, new_len, assem_buf, sizeof(assem_buf))
+        ? config_set_field(config_buffer, data_length+3, new_buf, new_len, assem_buf, sizeof(assem_buf))
         : 0;
     if (assem_len) {
         program_region(FLASH_TARGET_OFFSET, FLASH_SIZE, assem_buf, assem_len);
     } else {
-        printf("no matching field stored, or it would not fit; nothing written\n");
+        printf("no such device or network stored, or it would not fit; nothing written\n");
     }
 
     printf("done updating config\n");
@@ -635,6 +642,22 @@ int unmarshal_network_config(
                 // printf("match network ssid\n");
                 memcpy(out->network.ssid, itr.pay+1, itr.len-1);
                 // printf("debug ssid:%s\n", out->network.ssid);
+                continue;
+            }
+
+            // Addresses are 4 bytes; 0.0.0.0, or anything else, leaves them unset.
+            if (field_number == FIELD_NETWORK_AP_ADDRESS && itr.len == 5) {
+                memcpy(out->network.ap_address, itr.pay+1, 4);
+                continue;
+            }
+
+            if (field_number == FIELD_NETWORK_STATIC_ADDRESS && itr.len == 5) {
+                memcpy(out->network.static_address, itr.pay+1, 4);
+                continue;
+            }
+
+            if (field_number == FIELD_NETWORK_GATEWAY && itr.len == 5) {
+                memcpy(out->network.gateway, itr.pay+1, 4);
                 continue;
             }
 

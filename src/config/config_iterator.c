@@ -6,6 +6,7 @@
 // #include <stddef.h>
 
 #include "config_iterator.h"
+#include "protocol.h"
 
 // bool next_config_element(config_element_iterator *elms) {
 //     // if (elms->pos >= elms->size) return false;
@@ -121,6 +122,39 @@ size_t config_replace_field(
         return total;
     }
     return 0;
+}
+
+size_t config_set_field(
+    const uint8_t *packet, size_t packet_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t *out, size_t out_size
+) {
+    size_t replaced = config_replace_field(packet, packet_len, msg, msg_len, out, out_size);
+    if (replaced || packet_len < 3 || msg_len < 6 || msg[4] == 0 || (size_t)5 + msg[4] > msg_len)
+        return replaced;
+    /* Fields are added only as B1 or B3 messages; B0 and B2 declare the element. */
+    if (msg[0] != MSG_DEVICE_FIELD && msg[0] != MSG_NETWORK_FIELD)
+        return 0;
+    size_t new_len = 5 + msg[4];
+    uint16_t id = (uint16_t)msg[2] << 8 | msg[3];
+
+    /* The end of the element's last message: B0 and B1, or B2 and B3, differ in bit 0. */
+    size_t at = 0;
+    config_element_iterator it;
+    config_element_iterator_init(&it, packet + 3, packet_len - 3);
+    while (it.next(&it))
+        if ((it.type | 1) == (msg[0] | 1) && it.id == id) at = 3 + it.pos;
+    if (at == 0) return 0;
+
+    size_t total = packet_len + new_len;
+    if (total > out_size || total - 3 > 0xFFFF)
+        return 0;
+    memcpy(out, packet, at);
+    memcpy(out + at, msg, new_len);
+    memcpy(out + at + new_len, packet + at, packet_len - at);
+    out[1] = ((total - 3) >> 8) & 0xFF;
+    out[2] = (total - 3) & 0xFF;
+    return total;
 }
 
 int packet_data_length(const uint8_t *packet, size_t len)

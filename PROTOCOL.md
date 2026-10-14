@@ -176,9 +176,15 @@ The device looks through the stored messages for one with the **same type, eleme
 ID and field ID** (first payload byte), and replaces that message with the new one.
 `0B` edits the config store; `0C` edits the secrets store.
 
-- If no stored message matches, or the result would not fit its flash region,
-  nothing changes, and nothing is reported. These packets can change a field but
-  cannot add one.
+- **`0B` adds a field** the device or network doesn't have yet (a `B1` or `B3`): the
+  message goes after the element's last message, so fields added later, such as
+  the [addresses](#network-addresses), can be set on a device configured before them.
+  `0C` only replaces.
+- **A password is never stored by `0B`:** the config store is sent to the UI.
+- If the element isn't stored (`0B`) or no stored message matches (`0C`), or the
+  result would not fit its flash region, nothing changes, and nothing is reported.
+- The UI applies each `0B` to its copy of the config too, so saving the graph, which
+  sends the networking messages back, keeps the change.
 - The change is only written to flash. Networking reads it at the next boot.
 
 ```hex example=update-ssid
@@ -189,6 +195,11 @@ B3 00 00 00 03  02 58 59    # network 0, field SSID = "XY"
 ```hex example=update-options
 0B 00 07                    # Update config field, 7 bytes
 B2 00 00 00 02  00 00       # network 0, field options = 0 (access point)
+```
+
+```hex example=update-ap-address
+0B 00 0A                    # Update config field, 10 bytes
+B3 00 00 00 05  04 0A 00 00 01   # network 0, field access point address = 10.0.0.1
 ```
 
 ```hex example=update-password
@@ -603,10 +614,35 @@ Four element types describe devices and networks. The payload of each starts wit
 | | `01` name | `FIELD_NETWORK_NAME` | ASCII, up to 31 bytes | config |
 | | `02` SSID | `FIELD_NETWORK_SSID` | ASCII, up to 31 bytes | config |
 | | `03` password | `FIELD_NETWORK_PASSWORD` | ASCII, up to 31 bytes | **secrets** |
+| | `04` access point address | `FIELD_NETWORK_AP_ADDRESS` | 4 bytes, IPv4 | config |
+| | `05` fixed address | `FIELD_NETWORK_STATIC_ADDRESS` | 4 bytes, IPv4 | config |
+| | `06` gateway | `FIELD_NETWORK_GATEWAY` | 4 bytes, IPv4 | config |
 
 Network options, bit 0 (`NET_OPT_JOIN`): `0` = start an access point (with a DHCP
 server) using the SSID and password; `1` = join an existing network. Other bits are
 unused.
+
+#### Network addresses
+
+Address fields hold an IPv4 address as 4 bytes, most significant first
+(`C0 A8 04 01` is 192.168.4.1). A network without the field, or with `00 00 00 00`,
+hasn't set it. The UI shows the field for the mode the network is in; each mode keeps
+its own.
+
+- **Access point** (`04`): the device's address on its own network, and the gateway
+  and DNS server its DHCP server hands out. The network is the address's /24; the
+  DHCP server leases hosts `NET_LEASE_FIRST` (16) to 23 of it, so the access point
+  can't take one of those, or .0 or .255. Not set: 192.168.4.1. Phones that join
+  the access point open `http://<address>`.
+- **Joining, fixed address** (`05`): the device joins with DHCP as before, then
+  releases the lease and takes this address, keeping the lease's netmask. Not set:
+  it keeps the DHCP address. The address must be free on that network: the device
+  doesn't check.
+- **Joining, gateway** (`06`): with a fixed address, the network's gateway. Not set:
+  the one DHCP gave. The UI shows it only when a fixed address is set.
+- **Usable addresses** (`net_address_usable` in `src/protocol.h`, `addressUsable` in
+  the UI): unicast, not loopback (127), and not .0 or .255. The device ignores a field
+  that isn't usable, and the UI refuses it.
 
 At boot, the device finds the `B0` whose DID matches its own, reads that device's
 fields, then reads the fields of the network it points to. It reads the config store
@@ -861,8 +897,8 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 1. **Only the latest connection is tracked.** Every new TCP connection takes
    `clients[0]`, so only the most recent client receives telemetry.
-2. **`0B`/`0C` fail silently** when no stored message matches, and the UI has no way
-   to tell.
+2. **`0B`/`0C` fail silently** when nothing can be changed (see
+   [`0B`](#0b-update-config-field-0c-update-secret-field)), and the UI has no way to tell.
 
 **Config and graph**
 

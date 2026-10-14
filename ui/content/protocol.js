@@ -55,6 +55,9 @@ const FIELD_NETWORK_OPTIONS  = 0x00;
 const FIELD_NETWORK_NAME     = 0x01;
 const FIELD_NETWORK_SSID     = 0x02;
 const FIELD_NETWORK_PASSWORD = 0x03;  // secrets store only
+const FIELD_NETWORK_AP_ADDRESS     = 0x04;  // access point: its IPv4 address, 4 bytes
+const FIELD_NETWORK_STATIC_ADDRESS = 0x05;  // joining: a fixed IPv4 address, 4 bytes
+const FIELD_NETWORK_GATEWAY        = 0x06;  // joining with a fixed address: the gateway, 4 bytes
 
 // Command values: one byte, a fraction of full scale, 0x00 = 0 to 0xFF = 1.
 const VALUE_FULL             = 0xFF;  // 1: a pressed button, a slider at its end
@@ -93,3 +96,22 @@ const PWM_FREQ_LOG           = 0x04;  // options bit 2: a frequency from its inp
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;
+
+// IPv4 address fields: 4 bytes, most significant first; 0.0.0.0 = not set. The access
+// point's network is its address's /24, and its DHCP server leases the
+// NET_LEASE_COUNT addresses from host NET_LEASE_FIRST, so the access point may not
+// take one of those.
+const NET_LEASE_FIRST        = 16;
+const NET_LEASE_COUNT        = 8;
+const NET_AP_ADDRESS_DEFAULT = '192.168.4.1';   // the access point's address when none is set
+
+// An IPv4 address from its text, as 4 bytes; null if it isn't one.
+function parseAddress(text) {
+    const parts = String(text).trim().split('.');
+    if (parts.length !== 4 || !parts.every(p => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return null;
+    return parts.map(Number);
+}
+// A unicast address that isn't loopback, the network (.0) or the broadcast (.255) of its /24.
+const addressUsable = (a) => a[0] !== 0 && a[0] !== 127 && a[0] < 224 && a[3] !== 0 && a[3] !== 255;
+// An address an access point may take: usable, and not one its DHCP server leases.
+const apAddressUsable = (a) => addressUsable(a) && (a[3] < NET_LEASE_FIRST || a[3] >= NET_LEASE_FIRST + NET_LEASE_COUNT);

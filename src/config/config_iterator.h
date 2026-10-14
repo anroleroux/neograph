@@ -52,4 +52,17 @@ size_t config_replace_field(
     uint8_t *out, size_t out_size
 );
 
+/*
+ * As config_replace_field, but a field the element doesn't have yet is added: msg's
+ * first message is inserted after the element's last message (a device's B0/B1, a
+ * network's B2/B3, with msg's element ID); only a B1 or B3 is added. Returns 0 if
+ * the element isn't in the packet at all, msg is not a field message, or the result
+ * would not fit out_size.
+ */
+size_t config_set_field(
+    const uint8_t *packet, size_t packet_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t *out, size_t out_size
+);
+
 #endif

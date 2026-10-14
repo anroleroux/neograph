@@ -160,7 +160,19 @@ static void check_update(const uint8_t *p, size_t len, bool secret) {
     config_element_iterator it;
     config_element_iterator_init(&it, p + 3, len - 3);
     int n = 0;
-    while (it.next(&it)) n++;
+    while (it.next(&it)) {
+        n++;
+        if (it.type != MSG_NETWORK_FIELD || it.len == 0) continue;
+        uint8_t field = it.pay[0];
+        if (field == FIELD_NETWORK_PASSWORD && !secret) fail("a password sent to the config store, which the UI reads back");
+        if (field == FIELD_NETWORK_AP_ADDRESS || field == FIELD_NETWORK_STATIC_ADDRESS || field == FIELD_NETWORK_GATEWAY) {
+            static const uint8_t unset[4];
+            if (it.len != 5) fail("address field is not 4 bytes; the device would ignore it");
+            else if (memcmp(it.pay + 1, unset, 4) == 0) continue;
+            else if (field == FIELD_NETWORK_AP_ADDRESS ? !net_ap_address_usable(it.pay + 1) : !net_address_usable(it.pay + 1))
+                fail("address field holds an address the device would not use");
+        }
+    }
     if (n != 1) fail("field update does not hold exactly one message");
 
     const uint8_t *target = secret ? stored_secrets : stored;
@@ -169,11 +181,18 @@ static void check_update(const uint8_t *p, size_t len, bool secret) {
         fail("field update before any config was sent");
         return;
     }
-    /* what update_config / update_secrets would write */
+    /* what update_config / update_secrets would write: the config store also adds a
+       field the network doesn't have yet */
     uint8_t out[PKT_CONFIG_MAX];
     size_t region = secret ? SECRETS_REGION : PKT_CONFIG_MAX;
-    if (config_replace_field(target, target_len, p + 3, len - 3, out, region) == 0)
-        fail("field update matches no stored field; the device would ignore it");
+    size_t updated = secret ? config_replace_field(target, target_len, p + 3, len - 3, out, region)
+                            : config_set_field(target, target_len, p + 3, len - 3, out, region);
+    if (updated == 0) fail("field update matches no stored field or element; the device would ignore it");
+    else if (!secret) {
+        /* later updates and saves build on it */
+        memcpy(stored, out, updated);
+        stored_len = updated;
+    }
 }
 
 int main(int argc, char **argv) {

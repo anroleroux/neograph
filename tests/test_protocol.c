@@ -344,6 +344,40 @@ void test_pin_usable(void)
     }
 }
 
+/* ── Network addresses ────────────────────────────────────────────────── */
+
+void test_update_ap_address(void)
+{
+    config_element_iterator it;
+    messages(&it, example("update-ap-address"));
+    assert_message(&it, MSG_NETWORK_FIELD, 0, 5);
+    TEST_ASSERT_EQUAL_HEX8(FIELD_NETWORK_AP_ADDRESS, it.pay[0]);
+    TEST_ASSERT_TRUE(net_ap_address_usable(it.pay + 1));
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
+void test_net_address_usable(void)
+{
+    const uint8_t ok[][4] = { {192, 168, 4, 1}, {10, 0, 0, 1}, {172, 16, 5, 254}, {192, 168, 4, 15}, {192, 168, 4, 24} };
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++) {
+        TEST_ASSERT_TRUE(net_address_usable(ok[i]));
+        TEST_ASSERT_TRUE(net_ap_address_usable(ok[i]));
+    }
+    const uint8_t bad[][4] = { {0, 0, 0, 0}, {127, 0, 0, 1}, {224, 0, 0, 1}, {255, 255, 255, 255},
+                               {192, 168, 4, 0}, {192, 168, 4, 255} };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        TEST_ASSERT_FALSE(net_address_usable(bad[i]));
+        TEST_ASSERT_FALSE(net_ap_address_usable(bad[i]));
+    }
+    /* the access point's DHCP server leases .16 to .23: a fixed address on a joined
+       network may be one of those, the access point may not */
+    for (uint8_t host = NET_LEASE_FIRST; host < NET_LEASE_FIRST + NET_LEASE_COUNT; host++) {
+        const uint8_t leased[4] = { 192, 168, 4, host };
+        TEST_ASSERT_TRUE(net_address_usable(leased));
+        TEST_ASSERT_FALSE(net_ap_address_usable(leased));
+    }
+}
+
 /* ── USB keyboards ────────────────────────────────────────────────────── */
 
 void test_keyboard_config(void)
@@ -509,6 +543,8 @@ int main(void)
     RUN_TEST(test_wires_join_matching_types);
     RUN_TEST(test_element_type_bits);
     RUN_TEST(test_pin_usable);
+    RUN_TEST(test_update_ap_address);
+    RUN_TEST(test_net_address_usable);
     RUN_TEST(test_keyboard_config);
     RUN_TEST(test_keyboard_payload_valid);
     RUN_TEST(test_fifo_setup_words_match_save_config);

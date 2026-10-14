@@ -451,6 +451,46 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         'field updates are not 4 config and 1 secret');
     packets.push(...updates);
 
+    // ── Addresses: joining, a fixed address and its gateway; as an access point,
+    // its address, refusing one its DHCP server leases. The first-boot config has
+    // none of them, so the device adds each. ──
+    const editField = async (label, field, value) => {
+        await page.locator('.editable', { has: page.locator(`text=${label}:`) }).locator('svg').first().dispatchEvent('click');
+        await page.locator(`#input-0-${field}`).fill(value);
+        await page.locator('.editable', { has: page.locator(`#input-0-${field}`) }).locator('svg').first().dispatchEvent('click');
+    };
+    expect(await page.locator('.editable', { has: page.locator('text=Gateway:') }).count() === 0,
+        'the gateway shows without a fixed address');
+    await editField('Static IP', 'staticAddress', ' 192.168.1.50 ');
+    await editField('Gateway', 'gateway', '192.168.1.1');
+    await page.locator('.netconn-buttons > div').nth(0).dispatchEvent('click');
+    expect(await page.locator('.editable .value', { hasText: '192.168.4.1 (default)' }).count() === 1,
+        'the access point does not show its default address');
+    await editField('IP address', 'apAddress', '192.168.4.20');
+    const refused = await page.locator('#input-0-apAddress').getAttribute('aria-invalid');
+    await page.locator('#input-0-apAddress').fill('10.0.0.1');
+    await page.locator('.editable', { has: page.locator('#input-0-apAddress') }).locator('svg').first().dispatchEvent('click');
+    const addresses = await sent(page);
+    expect(refused === 'true', 'an address the access point leases was not refused');
+    expect(addresses.map(hex).join() === [
+        '0b000ab300000005' + '05c0a80132',     // fixed address 192.168.1.50
+        '0b000ab300000005' + '06c0a80101',     // gateway 192.168.1.1
+        '0b0007b200000002' + '0000',           // access point
+        '0b000ab300000005' + '040a000001',     // access point address 10.0.0.1
+    ].join(), 'the address updates were ' + addresses.map(hex));
+    packets.push(...addresses);
+    expect(await page.locator('.editable .value', { hasText: '10.0.0.1' }).count() === 1,
+        'the access point does not show its new address');
+
+    // Saving the graph sends the networking messages back: with the updates in them.
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const withAddresses = await sent(page);
+    const fields = hex(withAddresses[0]);
+    expect(withAddresses.length === 1 && fields.includes('b300000005' + '05c0a80132')
+        && fields.includes('b300000005' + '06c0a80101') && fields.includes('b300000005' + '040a000001')
+        && fields.includes('b2000000020000'), 'saving the graph lost the network updates: ' + fields);
+    packets.push(...withAddresses);
+
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
@@ -528,6 +568,17 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const resaved = await sent(page);
     expect(resaved.length === 1 && hex(resaved[0]) === hex(saved), 'saving the restored graph changed the config');
     packets.push(...resaved);
+
+    // A config with addresses shows them; one without shows none, not the last one's.
+    const shown = await page.evaluate(([cfg, firstBoot]) => {
+        const read = () => [networks[0].options, networks[0].apAddress, networks[0].staticAddress, networks[0].gateway].join('|');
+        unmarshalConfigs(Uint8Array.from(cfg).slice(3));
+        const withAddresses = read();
+        unmarshalConfigs(Uint8Array.from(firstBoot).slice(3));
+        return [withAddresses, read()];
+    }, [withAddresses[0], FIRST_BOOT_CONFIG]);
+    expect(shown[0] === '0|10.0.0.1|192.168.1.50|192.168.1.1' && shown[1] === '1|||',
+        'the addresses read from configs are ' + JSON.stringify(shown));
 
     // A config saved before wire types were checked may wire a slider to an LED or a
     // button to a PWM: restoring it drops those wires and keeps the matching one.

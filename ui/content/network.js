@@ -3,17 +3,17 @@ let offlineConfig = null; //offline
 let offlineTelemetry = null; //offline
 
 function networkingTemplate(state) {
-    const editableField = (obj, type, field, label, nindex=-1, secret=false, dindex=-1) => {
+    // `placeholder` is shown while the field has no value.
+    const editableField = (obj, type, field, label, nindex=-1, secret=false, dindex=-1, placeholder='') => {
         const value = obj[field];
         const editing = obj._editing === field;
         const packettype = secret?PKT_UPDATE_SECRET:PKT_UPDATE_CONFIG;
-        const callback = `updateNetworkFields(${packettype},${type}, ${nindex}, '${field}')`;
 
         if (!editing) {
             return `
             <div class="editable">
                 <span class="label">${label}:</span>
-                <span class="value">${value}</span>
+                <span class="value">${value || placeholder}</span>
                 <svg onclick="networks[${nindex}]._draft='${value}';networks[${nindex}]._editing='${field}'" viewBox="0 0 24 24" fill="none" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
                     <path stroke="#BFCDE7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15.4998 5.49994L18.3282 8.32837M3 20.9997L3.04745 20.6675C3.21536 19.4922 3.29932 18.9045 3.49029 18.3558C3.65975 17.8689 3.89124 17.4059 4.17906 16.9783C4.50341 16.4963 4.92319 16.0765 5.76274 15.237L17.4107 3.58896C18.1918 2.80791 19.4581 2.80791 20.2392 3.58896C21.0202 4.37001 21.0202 5.63634 20.2392 6.41739L8.37744 18.2791C7.61579 19.0408 7.23497 19.4216 6.8012 19.7244C6.41618 19.9932 6.00093 20.2159 5.56398 20.3879C5.07171 20.5817 4.54375 20.6882 3.48793 20.9012L3 20.9997Z"/>
                 </svg>
@@ -24,7 +24,7 @@ function networkingTemplate(state) {
             <div class="editable">
                 <span class="label">${label}:</span>
                 <input id="input-${nindex}-${field}" value="${networks[nindex]._draft}" type="text" autofocus />
-                <svg onclick="networks[${nindex}]._editing='';networks[${nindex}]['${field}']=networks[${nindex}]._draft;${callback}" viewBox="0 0 24 24" fill="none" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+                <svg onclick="confirmNetworkField(${packettype},${type},${nindex},'${field}')" viewBox="0 0 24 24" fill="none" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
                     <path stroke="#BFCDE7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 12.6111L8.92308 17.5L20 6.5"/>
                 </svg>
                 <svg onclick="networks[${nindex}]._editing=''" viewBox="0 0 24 24" fill="none" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
@@ -74,6 +74,13 @@ function networkingTemplate(state) {
                     ${editableField(network,MSG_NETWORK_FIELD,"name","Name",nindex)}
                     ${editableField(network,MSG_NETWORK_FIELD,"ssid","SSID",nindex)}
                     ${editableField(network,MSG_NETWORK_FIELD,"password","Password",nindex,true)}
+                    ${(network.options & NET_OPT_JOIN) === 0
+                        ? editableField(network,MSG_NETWORK_FIELD,"apAddress","IP address",nindex,false,-1,`${NET_AP_ADDRESS_DEFAULT} (default)`)
+                        : editableField(network,MSG_NETWORK_FIELD,"staticAddress","Static IP",nindex,false,-1,"DHCP")
+                          + (network.staticAddress
+                              ? editableField(network,MSG_NETWORK_FIELD,"gateway","Gateway",nindex,false,-1,"from DHCP")
+                              : "")}
+                    <p class="network-note">Network changes take effect when the device restarts.</p>
                 </div>
             </div>
             <div class="device-box">
@@ -91,6 +98,9 @@ const networks = mount(document.getElementById("network"), [
         ssid:"unknown",
         password:"••••••••",
         options:0,
+        apAddress:"",           // IPv4 addresses as text; "" = not set
+        staticAddress:"",
+        gateway:"",
         devices:[
             {
                 name:"unknown",
@@ -99,7 +109,8 @@ const networks = mount(document.getElementById("network"), [
                 socket:null
             }
         ],
-        fields:{options:FIELD_NETWORK_OPTIONS, name:FIELD_NETWORK_NAME, ssid:FIELD_NETWORK_SSID, password:FIELD_NETWORK_PASSWORD}
+        fields:{options:FIELD_NETWORK_OPTIONS, name:FIELD_NETWORK_NAME, ssid:FIELD_NETWORK_SSID, password:FIELD_NETWORK_PASSWORD,
+            apAddress:FIELD_NETWORK_AP_ADDRESS, staticAddress:FIELD_NETWORK_STATIC_ADDRESS, gateway:FIELD_NETWORK_GATEWAY}
     }
 ], networkingTemplate);
 
@@ -108,11 +119,40 @@ const networks = mount(document.getElementById("network"), [
 //     socket.send(data);
 // }
 
+const ADDRESS_FIELDS = ['apAddress', 'staticAddress', 'gateway'];
+
+// Confirm an edited field: an address must be one the device can use, or empty to
+// unset it; a rejected one keeps the field open, outlined in red.
+function confirmNetworkField(pt, type, netID, field) {
+    const net = networks[netID];
+    if (ADDRESS_FIELDS.includes(field)) {
+        const text = net._draft.trim();
+        const bytes = parseAddress(text);
+        const usable = field === 'apAddress' ? apAddressUsable : addressUsable;
+        if (text && !(bytes && usable(bytes))) {
+            const input = document.getElementById(`input-${netID}-${field}`);
+            input.setAttribute('aria-invalid', 'true');
+            input.title = field === 'apAddress'
+                ? `An address like ${NET_AP_ADDRESS_DEFAULT}; it may not end in 0, 255 or `
+                    + `${NET_LEASE_FIRST}–${NET_LEASE_FIRST + NET_LEASE_COUNT - 1}, which its phones and computers get`
+                : 'An address like 192.168.1.50, not ending in 0 or 255; empty for none';
+            input.focus();
+            return;
+        }
+        net._draft = bytes ? bytes.join('.') : '';
+    }
+    net._editing = '';
+    net[field] = net._draft;
+    updateNetworkFields(pt, type, netID, field);
+}
+
 function updateNetworkFields(pt,type,netID,field) {
     const encoder = new TextEncoder();
 
     const value = [];
-    if (typeof(networks[netID][field]) == "number") {
+    if (ADDRESS_FIELDS.includes(field)) {
+        value.push(...(parseAddress(networks[netID][field]) ?? [0, 0, 0, 0]));     // 0.0.0.0 unsets it
+    } else if (typeof(networks[netID][field]) == "number") {
         value.push(networks[netID][field]);
     } else if (typeof(networks[netID][field]) == "string") {
         value.push(...encoder.encode(networks[netID][field]));
@@ -123,6 +163,27 @@ function updateNetworkFields(pt,type,netID,field) {
     const data = new Uint8Array([pt, 0, pcktlen, type, 0, (netID >> 8) & 0xFF, netID & 0xFF, value.length + 1, networks[netID].fields[field], ...value]);
     console.log(data); //debug
     socket.send(data); //online
+
+    // Keep the config in step with the device's, as saving the graph sends its
+    // networking messages back: an old copy would undo this change.
+    if (pt === PKT_UPDATE_CONFIG && gfig) gfig = configSetField(gfig, data.slice(PKT_HEADER_LEN));
+}
+
+// A config payload with one field message set, as the device sets it
+// (config_set_field in src/config/config_iterator.c): it replaces the message with
+// the same type, ID and field, or is added after the element's last message.
+function configSetField(payload, msg) {
+    const msgs = configMessages(payload);
+    const id = msg[2] << 8 | msg[3];
+    const same = msgs.findIndex(m => m.type === msg[0] && m.id === id && m.len > 0 && m.pay[0] === msg[5]);
+    let at = same;
+    if (same < 0) {
+        at = msgs.findLastIndex(m => (m.type | 1) === (msg[0] | 1) && m.id === id) + 1;
+        if (at === 0) return payload;
+    }
+    const bytes = msgs.map(m => m.bytes);
+    bytes.splice(at, same < 0 ? 0 : 1, msg);
+    return Uint8Array.from(bytes.flatMap(b => Array.from(b)));
 }
 
 function toggleWebSocket(n,d) {
@@ -255,6 +316,10 @@ function unmarshalConfigs(binary) {
                 configs[MSG_NETWORK].splice(iElm,1);
             }
 
+            // Addresses not in the config are not set.
+            networks[0].apAddress = networks[0].staticAddress = networks[0].gateway = "";
+            const address = (pay) => pay.length === 5 && pay.slice(1).some(b => b) ? Array.from(pay.slice(1)).join('.') : "";
+
             iElm = 0;
             while (iElm < configs[MSG_NETWORK_FIELD].length) {
                 const netParam = configs[MSG_NETWORK_FIELD][iElm];
@@ -271,6 +336,18 @@ function unmarshalConfigs(binary) {
                 
                     case FIELD_NETWORK_SSID:
                         networks[0].ssid = decoder.decode(netParam.pay.slice(1));
+                        break;
+
+                    case FIELD_NETWORK_AP_ADDRESS:
+                        networks[0].apAddress = address(netParam.pay);
+                        break;
+
+                    case FIELD_NETWORK_STATIC_ADDRESS:
+                        networks[0].staticAddress = address(netParam.pay);
+                        break;
+
+                    case FIELD_NETWORK_GATEWAY:
+                        networks[0].gateway = address(netParam.pay);
                         break;
                 
                     default:
