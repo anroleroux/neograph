@@ -368,6 +368,11 @@ changing them cuts the device off the network.
   uses, and an ADC only the channels whose pin (GPIO 26–28) no other node uses. A new
   node takes its default pin (GPO 1, PWM 2, GPIO input 3) if it is free, otherwise the
   lowest free one; a new ADC the first free channel.
+- **One PWM per slice.** The pins of a PWM slice share its counter, so its frequency:
+  GPIO *n* is on slice (*n* >> 1) & 7, so GPIO 0, 1, 16 and 17 are slice 0, GPIO 2, 3,
+  18 and 19 slice 1, and so on. A PWM is not offered any pin on another PWM's slice,
+  and a new one takes a free pin on a free slice. A GPO or GPIO input may still use
+  them: it doesn't use the slice.
 - Core 1 doesn't set up a GPO or PWM on another pin, and logs that it skipped it.
 
 A PWM has two parameters, its **duty cycle** and its **frequency**. Each is constant, or
@@ -1151,9 +1156,10 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 **Hardware**
 
-12. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
-    at one frequency. Two PWM outputs on the same slice both run at the frequency of
-    the one set up last; the UI doesn't warn about it.
+12. **A config can still put two PWMs on one slice.** The UI offers a PWM no pin on
+    another PWM's slice (see [GPIO pins](#gpio-pins)), but a config saved before it did
+    is restored as it was. Both PWMs then run at the frequency of the one set up last,
+    and two on the same channel (GPIO 0 and 16) at the same duty cycle too.
 13. **A config can still give two nodes one pin.** The UI offers each node only free
     pins, but a config saved before it did is restored as it was. Core 1 sets up the
     first node on a pin and skips the others (it logs each), and the UI doesn't flag

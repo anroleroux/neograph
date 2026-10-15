@@ -747,6 +747,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const types = await page.evaluate(() => {
         const pwm = new uiPWM(400, 300);      // n21, no wires yet
         new uiButton(-400, 300);              // n22
+        // Its pin is free and on a slice no other PWM uses: not the slices of
+        // the PWMs on GPIO 15 (14, 15) and GPIO 2 (2, 3, 18, 19).
+        selectById(21);
+        const pwmPins = pwm.pin + '|' + [...[...document.querySelectorAll('#settings .editable.select')]
+            .find(row => row.querySelector('.label').textContent === 'GPIO pin:')
+            .querySelectorAll('option')].map(o => o.value).join();
+        clearSelection();
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
         selectById(21);
@@ -760,6 +767,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             .find(row => row.querySelector('.label').textContent === 'Input:');
         const picks = [...input.querySelectorAll('option')].map(o => o.value).join();
         return {
+            pwmPins,
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
@@ -767,6 +775,9 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
                 && pwm.inConns().length === 0,
         };
     });
+    // Less those other nodes use: the GPO's 7, the GPIO input's 8 and the ADC's 27.
+    expect(types.pwmPins === '0|' + [...Array(23).keys(), 26, 28].filter(p => ![2, 3, 7, 8, 14, 15, 18, 19].includes(p)).join(),
+        'a new PWM, with PWMs on GPIO 15 and 2, takes and offers ' + types.pwmPins);
     expect(types.fromPwm === 'n5,n6,n10,n15', 'wire mode from a PWM marks ' + types.fromPwm);
     expect(types.picks === ',n5:0,n6:0,n10:0,n15:0,n15:1', 'the PWM offers inputs ' + types.picks);
     expect(types.sliderToLed, 'a slider was wired to the LED');

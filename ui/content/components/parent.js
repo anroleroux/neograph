@@ -115,9 +115,21 @@ function parsePin(pin) {
     return /^\d+$/.test(pin) && pinUsable(Number(pin)) ? Number(pin) : null;
 }
 
-// The GPIO pins the graph's nodes use (see usedPins), but `node`'s own.
+// The PWM slice a GPIO pin is on. The pins of a slice share its counter, so its
+// frequency: GPIO 0, 1, 16 and 17 are slice 0, 2, 3, 18 and 19 slice 1, and so on.
+const pwmSlice = (pin) => (pin >> 1) & 7;
+
+// The GPIO pins `node` may not take: those the graph's other nodes use (see
+// usedPins) and, for a PWM, every pin on another PWM's slice, which would run at
+// that PWM's frequency.
 function pinsInUse(node) {
-    return new Set(Object.values(elements).filter(e => e !== node).flatMap(e => e.usedPins()));
+    const others = Object.values(elements).filter(e => e !== node);
+    const used = new Set(others.flatMap(e => e.usedPins()));
+    if (node instanceof uiPWM) {
+        const slices = new Set(others.filter(e => e instanceof uiPWM).map(e => pwmSlice(e.pin)));
+        USABLE_PINS.filter(pin => slices.has(pwmSlice(pin))).forEach(pin => used.add(pin));
+    }
+    return used;
 }
 
 // A usable pin no node but `node` uses: `preferred` if it is free, else the
