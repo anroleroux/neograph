@@ -132,7 +132,7 @@ class uiPlot extends uiComponents {
     // Wired: the plot starts from the source's current value.
     addEdge(e) {
         super.addEdge(e);
-        if (e.end.node === this) this.receive(Number(e.start.node.value));
+        if (e.end.node === this) this.receive(Number(e.start.node.outputValue(e.start.output)));
     }
 
     edgeRemoved(e) {
@@ -255,11 +255,11 @@ class uiPlot extends uiComponents {
 
     // The source, the window, then the unit if one is set: none means the source's.
     marshal() {
-        const sourceID = this.sourceID();
+        const source = this.sourceRef();
         const unit = new TextEncoder().encode(this.unitOverride ?? '');
         return [
-            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 3 + unit.length,
-            (sourceID >> 8) & 0xFF, sourceID & 0xFF, this.window, ...unit,
+            this.tc, MSG_FLAG_OUTPUT, (this.id >> 8) & 0xFF, this.id & 0xFF, source.length + 1 + unit.length,
+            ...source, this.window, ...unit,
         ];
     }
 }

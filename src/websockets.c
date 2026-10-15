@@ -14,6 +14,7 @@
 
 #include "websockets.h"
 #include "tcpserver.h"
+#include "hwman.h"
 #include "config.h"
 #include "config/config_iterator.h"
 #include "networking/ws_frame.h"
@@ -218,17 +219,11 @@ static void handle_packet(uint8_t *payload, size_t length) {
         config_element_iterator itr;
         config_element_iterator_init(&itr, payload+3, data_length);
 
+        // One action word per payload byte: byte i is the new value of the element's output i.
         while (itr.next(&itr)) {
-            printf("command from element %u, value %u: sending to core 1\n", itr.id, itr.len ? itr.pay[0] : 0);
-            uint32_t hwop_buf = fifo_op_word(FIFO_OP_CONTROL_ACTION, itr.type, itr.id, itr.pay[0]);
-            multicore_fifo_push_blocking(hwop_buf);
-
-            for (size_t i = 1; i < itr.len; i+=4) {
-                uint32_t value = itr.pay[i] << 24
-                    | itr.pay[i+1] << 16
-                    | itr.pay[i+2] << 8
-                    | itr.pay[i+3];
-                multicore_fifo_push_blocking(value);
+            for (uint8_t i = 0; i < itr.len && i < FIFO_OUTPUTS_MAX; i++) {
+                printf("command from element %u, output %u, value %u: sending to core 1\n", itr.id, i, itr.pay[i]);
+                push_to_core1(fifo_action_word(itr.id, i, itr.pay[i]));
             }
         }
     }

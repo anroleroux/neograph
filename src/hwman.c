@@ -40,13 +40,13 @@ typedef struct {
         uint8_t io;
         uint8_t value;
     };
-    uint16_t source_id;
+    uint32_t source;    // the output driving it, as source_key
     uint8_t drives;     // PWM: the parameter this source drives, PWM_DRIVES_DUTY or _FREQ
     bool on;            // keyboard: whether its input is on, to type once each time it goes on
 } hwel;
 
 typedef struct {
-    uint16_t id;
+    uint32_t key;       // source_key: the source's element ID and output
     uint8_t len;
     uint8_t size;
     hwel *hwels;
@@ -67,8 +67,12 @@ hwel decode_hwel(uint32_t op) {
     return result;
 }
 
+// Outputs are kept by the output of a source that drives them: its element ID,
+// and which of its outputs (a 2D slider has two).
+static uint32_t source_key(uint16_t id, uint8_t output) { return (uint32_t)id << 8 | output; }
+
 void decode_hwrf(uint32_t rf,hwel *decop) {
-    decop->source_id = fifo_ref_source(rf);
+    decop->source = source_key(fifo_ref_source(rf), fifo_ref_output(rf));
 }
 
 static hwel_sources *hwel_source_table = NULL;
@@ -214,10 +218,53 @@ static void push_to_core0(uint32_t word) {
     multicore_fifo_push_blocking(word);
 }
 
+// ── Core 0's side of the FIFO ──
+// Neither core may wait for room in the other's FIFO while the other waits for
+// room in its own: neither would ever drain the other's. Core 1 never does (see
+// push_to_core0, which also answers park requests); core 0, while it waits to
+// send, takes core 1's messages and keeps them, in order, for its main loop. A
+// message is a tag and a value, sent one after the other, so once the tag is
+// taken the value comes at once. Up to CORE1_HELD messages are kept; more, which
+// would take core 1 sending for a long while as core 0 waits, are dropped.
+#define CORE1_HELD 64
+
+static uint32_t held[CORE1_HELD][2];
+static uint8_t held_first = 0, held_count = 0;
+
+void push_to_core1(uint32_t word) {
+    while (!multicore_fifo_wready()) {
+        if (!multicore_fifo_rvalid()) continue;
+        uint32_t tag = multicore_fifo_pop_blocking();
+        uint32_t value = multicore_fifo_pop_blocking();
+        if (held_count == CORE1_HELD) {
+            printf("core 1 message with tag %lu dropped: %d are waiting\n", (unsigned long)tag, CORE1_HELD);
+            continue;
+        }
+        uint8_t i = (held_first + held_count++) % CORE1_HELD;
+        held[i][0] = tag;
+        held[i][1] = value;
+    }
+    multicore_fifo_push_blocking(word);
+}
+
+bool take_from_core1(uint32_t *tag, uint32_t *value) {
+    if (held_count) {
+        *tag = held[held_first][0];
+        *value = held[held_first][1];
+        held_first = (held_first + 1) % CORE1_HELD;
+        held_count--;
+        return true;
+    }
+    if (!multicore_fifo_rvalid()) return false;
+    *tag = multicore_fifo_pop_blocking();
+    *value = multicore_fifo_pop_blocking();
+    return true;
+}
+
 void add_packet(hwel el) {
     // First check if one with the same ID already exists
     hwel_sources *existing = NULL;
-    HASH_FIND(hh, hwel_source_table, &el.source_id, sizeof(uint16_t), existing);
+    HASH_FIND(hh, hwel_source_table, &el.source, sizeof(uint32_t), existing);
     if (existing) {
         if (existing->len == existing->size) {
             existing->size += 5;
@@ -230,14 +277,14 @@ void add_packet(hwel el) {
             existing->hwels = temp;
 
         }
-        printf("adding another hwel allocation to src_id:%d, type:%02X, id:%d\n",existing->id, el.control_type,el.id);
+        printf("adding another hwel allocation to src:%lX, type:%02X, id:%d\n",(unsigned long)existing->key, el.control_type,el.id);
         existing->len++;
         existing->hwels[existing->len-1] = el;
 
         return;
     }
 
-    printf("new hwel_sources allocation, src_id:%d\n",el.source_id);
+    printf("new hwel_sources allocation, src:%lX\n",(unsigned long)el.source);
     hwel_sources *new_srcsel = malloc(sizeof(hwel_sources));
     if (new_srcsel == NULL) {
         printf("hwel_sources allocation failed\n");
@@ -253,14 +300,14 @@ void add_packet(hwel el) {
         return;
     }
     new_srcsel->hwels[0] = el;
-    new_srcsel->id = el.source_id;
+    new_srcsel->key = el.source;
 
-    HASH_ADD(hh, hwel_source_table, id, sizeof(uint16_t), new_srcsel);
+    HASH_ADD(hh, hwel_source_table, key, sizeof(uint32_t), new_srcsel);
 }
 
-hwel_sources *find_packet(uint16_t id) {
+hwel_sources *find_packet(uint32_t key) {
     hwel_sources *srcsel = NULL;
-    HASH_FIND(hh, hwel_source_table, &id, sizeof(uint16_t), srcsel);
+    HASH_FIND(hh, hwel_source_table, &key, sizeof(uint32_t), srcsel);
     return srcsel;
 }
 
@@ -273,11 +320,11 @@ void delete_all_packets() {
     }
 }
 
-// Drive the outputs wired to a source with its new value, 0 to VALUE_FULL.
-// Returns false if nothing is wired to it. `log` prints each output driven: a
-// command from the browser logs, an ADC reading, which changes often, doesn't.
-static bool drive_outputs(uint16_t source_id, uint8_t value, bool log) {
-    hwel_sources *hw_srcs = find_packet(source_id);
+// Drive the outputs wired to an output of a source with its new value, 0 to
+// VALUE_FULL. Returns false if nothing is wired to it. `log` prints each output
+// driven: a command from the browser logs, an ADC reading, which changes often, doesn't.
+static bool drive_outputs(uint16_t source_id, uint8_t output, uint8_t value, bool log) {
+    hwel_sources *hw_srcs = find_packet(source_key(source_id, output));
     if (!hw_srcs) return false;
 
     bool on = value >= VALUE_HALF;     // for the on/off outputs
@@ -379,7 +426,7 @@ static void adc_poll(void) {
         in->drive = false;
         in->value = value;
         for (uint8_t i = 0; i < adc_node_count; i++) {
-            if (adc_nodes[i].channel == ch) drive_outputs(adc_nodes[i].id, value, false);
+            if (adc_nodes[i].channel == ch) drive_outputs(adc_nodes[i].id, 0, value, false);
         }
     }
 }
@@ -419,6 +466,91 @@ static bool adc_setup(uint16_t id, uint8_t channel) {
     return true;
 }
 
+// ── GPIO inputs ──
+// Each GPIO input node's pin is read every GPI_SAMPLE_MS. A new state, held for
+// GPI_DEBOUNCE reads in a row so a bouncing switch changes it once, drives the
+// outputs wired to the node (VALUE_FULL on, 0 off), as a command from the browser
+// would, and is reported to core 0 for the browser. The state is also reported
+// every GPI_REPORT_MS, so a browser that connects later learns it.
+#define GPI_SAMPLE_MS       10
+#define GPI_DEBOUNCE        3
+#define GPI_REPORT_MS       1000
+#define GPI_NODES_MAX       16
+
+typedef struct {
+    uint16_t id;
+    uint8_t pin;
+    bool invert;                // on while the pin is low
+    bool on;                    // the debounced state
+    uint8_t differ;             // reads in a row that differ from it
+    bool drive;                 // drive the outputs at the next read, whatever the state
+    absolute_time_t reported_at;
+} gpi_node;
+
+static gpi_node gpi_nodes[GPI_NODES_MAX];
+static uint8_t gpi_node_count = 0;
+
+static void gpi_report(gpi_node *in, absolute_time_t now) {
+    push_to_core0(FIFO_TAG_GPI);
+    push_to_core0(fifo_gpi_word(in->pin, in->on));
+    in->reported_at = now;
+}
+
+// Read a GPIO input's pin with its input buffer on only for the read. On the
+// RP2350's A2 stepping (erratum RP2350-E9), a pad with its input buffer on leaks
+// enough current to hold a released pin near mid-rail against the internal
+// pull-down, so it would read high long after it was let go. With the buffer
+// off between reads, the pull-down brings the pin low.
+static bool gpi_read(uint8_t pin) {
+    gpio_set_input_enabled(pin, true);
+    busy_wait_us_32(1);         // through the input synchronizer
+    bool high = gpio_get(pin);
+    gpio_set_input_enabled(pin, false);
+    return high;
+}
+
+static void gpi_poll(absolute_time_t now) {
+    for (uint8_t i = 0; i < gpi_node_count; i++) {
+        gpi_node *in = &gpi_nodes[i];
+        bool on = gpi_read(in->pin) != in->invert;
+        if (on == in->on) {
+            in->differ = 0;
+        } else if (++in->differ >= GPI_DEBOUNCE) {
+            in->on = on;
+            in->differ = 0;
+            in->drive = true;
+            gpi_report(in, now);
+        }
+        if (in->drive) {
+            in->drive = false;
+            drive_outputs(in->id, 0, in->on ? VALUE_FULL : 0, false);
+        }
+        if (absolute_time_diff_us(in->reported_at, now) >= GPI_REPORT_MS * 1000) gpi_report(in, now);
+    }
+}
+
+// Set up a GPIO input node on its pin, with its pull. Returns false if it can't
+// be: the pin isn't usable or is in use, or there are GPI_NODES_MAX nodes.
+static bool gpi_setup(uint16_t id, uint8_t pin, uint8_t options) {
+    if (!pin_usable(pin) || (used_pins & (1u << pin)) || gpi_node_count == GPI_NODES_MAX) return false;
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_IN);
+    switch (options & GPI_PULL_MASK) {
+    case GPI_PULL_UP: gpio_pull_up(pin); break;
+    case GPI_PULL_DOWN: gpio_pull_down(pin); break;
+    default: gpio_disable_pulls(pin); break;
+    }
+    used_pins |= 1u << pin;
+
+    // Reported and driven at the first read.
+    gpi_node *in = &gpi_nodes[gpi_node_count++];
+    *in = (gpi_node){ .id = id, .pin = pin, .invert = options & GPI_INVERT, .drive = true,
+                      .reported_at = from_us_since_boot(0) };
+    in->on = gpi_read(pin) != in->invert;      // leaves the input buffer off (see gpi_read)
+    printf("GPI on GPIO %d for ID %d, options %02X\n", pin, id, options);
+    return true;
+}
+
 void core1_worker() {
     printf("(core1) started\n");
     
@@ -430,6 +562,7 @@ void core1_worker() {
     uint64_t next_coretm_timeout = 6;
     absolute_time_t next_adc_sample = start;
     absolute_time_t next_adc_report = start;
+    absolute_time_t next_gpi_sample = start;
 
     core1_running = true;
     __dmb();
@@ -453,6 +586,10 @@ void core1_worker() {
         if (time_reached(next_adc_report)) {
             adc_report(now);
             next_adc_report = delayed_by_ms(now, ADC_REPORT_MS);
+        }
+        if (time_reached(next_gpi_sample)) {
+            gpi_poll(now);
+            next_gpi_sample = delayed_by_ms(now, GPI_SAMPLE_MS);
         }
 
         uint32_t op;
@@ -518,8 +655,8 @@ void core1_worker() {
                     decop.drives = PWM_DRIVES_DUTY;
                     hwel freq_el = decop;
                     freq_el.drives = PWM_DRIVES_FREQ;
-                    freq_el.source_id = fifo_ref_source(w[3]);
-                    if (freq_el.source_id) add_packet(freq_el);
+                    decode_hwrf(w[3], &freq_el);
+                    if (fifo_ref_source(w[3])) add_packet(freq_el);
                     break;
                 }
 
@@ -532,11 +669,20 @@ void core1_worker() {
                     }
                     break;
 
+                case MSG_HW_GPI:
+                    // A source, as an ADC: its options word follows.
+                    multicore_fifo_pop_timeout_us(1000, &op);
+                    if (!gpi_setup(decop.id, decop.io, fifo_gpi_options(op))) {
+                        printf("hw man skipping GPI on ID %i: GPIO %d is not usable or in use\n",
+                               decop.id, decop.io);
+                    }
+                    break;
+
                 default:
                     break;
                 }
 
-                if (decop.control_type == MSG_HW_ADC) break;
+                if (decop.control_type == MSG_HW_ADC || decop.control_type == MSG_HW_GPI) break;
                 if (!usable) {
                     printf("hw man skipping control type %02X on ID %i: GPIO %d is not usable or in use\n",
                            decop.control_type, decop.id, decop.io);
@@ -545,9 +691,10 @@ void core1_worker() {
                 add_packet(decop);
                 printf("hw man adding control type %02X on ID %i\n",decop.control_type,decop.id);
 
-                // An output set up after its ADC source was sampled gets the
-                // source's value at the next sample, not at its next change.
+                // An output set up after its ADC or GPI source was read gets the
+                // source's value at the next read, not at its next change.
                 for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) adc_inputs[ch].drive = true;
+                for (uint8_t i = 0; i < gpi_node_count; i++) gpi_nodes[i].drive = true;
                 break;
             }
 
@@ -556,6 +703,7 @@ void core1_worker() {
                 memset(pwm_outs, 0, sizeof pwm_outs);
                 memset(adc_inputs, 0, sizeof adc_inputs);
                 adc_node_count = 0;
+                gpi_node_count = 0;
                 for (uint gpio = 0; gpio < PWM_PINS; gpio++) {
                     if (!(used_pins & (1u << gpio))) continue;
                     if (gpio_get_function(gpio) == GPIO_FUNC_PWM) {
@@ -572,8 +720,8 @@ void core1_worker() {
 
             case FIFO_OP_CONTROL_ACTION:
                 printf("hw man buffer %02X %02X %02X %02X\n",op>>24&0xFF,op>>16&0xFF,op>>8&0xFF,op&0xFF);
-                if (!drive_outputs(decop.id, decop.value, true)) {
-                    printf("hw sources with ID %d not found\n",decop.id);
+                if (!drive_outputs(decop.id, fifo_op_output(op), decop.value, true)) {
+                    printf("hw sources with ID %d, output %d not found\n",decop.id,fifo_op_output(op));
                 }
                 break;
             }

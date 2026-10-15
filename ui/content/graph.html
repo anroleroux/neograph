@@ -26,6 +26,11 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">UIO</text>
             </svg>
         </div>
+        <div class="group" data-group="usb" style="--col: 3; --row: 2" title="USB" onclick="toggleAddGroup('usb')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">USB</text>
+            </svg>
+        </div>
         <!-- UI inputs, under the groups -->
         <div class="node" data-group="uii" style="--col: 1; --row: 4" title="Add a button" onclick="addNode(MSG_UI_BUTTON)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -35,6 +40,11 @@
         <div class="node" data-group="uii" style="--col: 2; --row: 4" title="Add a slider" onclick="addNode(MSG_UI_SLIDER)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">SLD</text>
+            </svg>
+        </div>
+        <div class="node" data-group="uii" style="--col: 3; --row: 4" title="Add a 2D slider" onclick="addNode(MSG_UI_SLIDER_2D)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">XY</text>
             </svg>
         </div>
         <!-- HW outputs, under the groups -->
@@ -53,7 +63,8 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">PWM</text>
             </svg>
         </div>
-        <div class="node" data-group="hwo" style="--col: 4; --row: 4" title="Add a USB keyboard" onclick="addNode(MSG_HW_KEYBOARD)">
+        <!-- USB, under the groups -->
+        <div class="node" data-group="usb" style="--col: 1; --row: 4" title="Add a USB keyboard" onclick="addNode(MSG_HW_KEYBOARD)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">KEY</text>
             </svg>
@@ -69,10 +80,20 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">ADC</text>
             </svg>
         </div>
+        <div class="node" data-group="hwi" style="--col: 3; --row: 4" title="Add a GPIO input" onclick="addNode(MSG_HW_GPI)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">GPI</text>
+            </svg>
+        </div>
         <!-- UI outputs, under the groups -->
         <div class="node" data-group="uio" style="--col: 1; --row: 4" title="Add a plot" onclick="addNode(MSG_UI_GRAPH)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">PLT</text>
+            </svg>
+        </div>
+        <div class="node" data-group="uio" style="--col: 2; --row: 4" title="Add a light" onclick="addNode(MSG_UI_INDICATOR)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">LGT</text>
             </svg>
         </div>
     </div>

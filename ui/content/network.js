@@ -253,6 +253,7 @@ function configMessages(binary) {
 
         msgs.push({
             type: binary[offset],
+            flags: binary[offset + 1],
             id: binary[offset + 2] << 8 | binary[offset + 3],
             len: len,
             pay: binary.slice(offset + MSG_HEADER_LEN, end),

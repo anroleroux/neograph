@@ -349,7 +349,7 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
 
     // Core 1 adds each setup to what it already has, so clear its table first:
     // the config replaces the controls rather than adding to them.
-    multicore_fifo_push_blocking(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0));
+    push_to_core1(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0));
     printf("send hw clean setup\n");
     keyboard_clear();
 
@@ -361,82 +361,101 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
 
         switch (itr.type) {
         case MSG_HW_LED:
-            if (itr.len != 2) break;
+            if (itr.len != msg_ref_len(itr.flags)) break;
 
             control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_LED, itr.id, 0);
 
-            multicore_fifo_push_blocking(control_setup_msg);
+            push_to_core1(control_setup_msg);
             printf("send hw LED setup %X\n",control_setup_msg);
             
-            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_ref_word(msg_ref_at(itr.pay, itr.flags));
+            push_to_core1(control_setup_msg);
             printf("send hw LED setup %X\n",control_setup_msg);
             break;
         
-        case MSG_HW_GPO:
-            if (itr.len != 3) break;
+        case MSG_HW_GPO: {
+            uint8_t r = msg_ref_len(itr.flags);
+            if (itr.len != r + 1) break;
 
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPO, itr.id, itr.pay[2]);
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPO, itr.id, itr.pay[r]);
 
-            multicore_fifo_push_blocking(control_setup_msg);
+            push_to_core1(control_setup_msg);
             printf("send hw GPO setup %X\n",control_setup_msg);
 
-            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
+            control_setup_msg = fifo_ref_word(msg_ref_at(itr.pay, itr.flags));
 
-            multicore_fifo_push_blocking(control_setup_msg);
+            push_to_core1(control_setup_msg);
             printf("send hw GPO setup %X\n",control_setup_msg);
             break;
+        }
 
-        case MSG_HW_PWM:
-            if (itr.len != 15) break;
+        case MSG_HW_PWM: {
+            pwm_payload pwm;
+            if (!pwm_payload_read(itr.pay, itr.len, itr.flags, &pwm)) break;
 
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_PWM, itr.id, itr.pay[2]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_PWM, itr.id, pwm.pin);
+            push_to_core1(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
 
-            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_ref_word(pwm.duty_source);
+            push_to_core1(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
 
-            control_setup_msg = fifo_pwm_word(itr.pay[3]<<8 | itr.pay[4], itr.pay[5]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_pwm_word(pwm.freq, pwm.options);
+            push_to_core1(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
 
-            control_setup_msg = fifo_duty_word(itr.pay[6], itr.pay[7], itr.pay[8]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_duty_word(pwm.duty, pwm.duty_min, pwm.duty_max);
+            push_to_core1(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
 
-            control_setup_msg = fifo_ref_word(itr.pay[9]<<8 | itr.pay[10]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_ref_word(pwm.freq_source);
+            push_to_core1(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
 
-            control_setup_msg = fifo_freq_word(itr.pay[11]<<8 | itr.pay[12], itr.pay[13]<<8 | itr.pay[14]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_freq_word(pwm.freq_min, pwm.freq_max);
+            push_to_core1(control_setup_msg);
             printf("send hw PWM setup %X\n",control_setup_msg);
             break;
+        }
 
-        case MSG_HW_KEYBOARD:
+        case MSG_HW_KEYBOARD: {
             // Core 0 keeps the keystroke and types it; core 1 says when.
-            if (!keyboard_payload_valid(itr.pay, itr.len)) break;
-            if (!keyboard_add(itr.id, itr.pay + 2, itr.len - 2)) {
+            uint8_t r = msg_ref_len(itr.flags);
+            if (!keyboard_payload_valid(itr.pay, itr.len, itr.flags)) break;
+            if (!keyboard_add(itr.id, itr.pay + r, itr.len - r)) {
                 printf("skipping keyboard %d: too many keyboards\n", itr.id);
                 break;
             }
 
             control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_KEYBOARD, itr.id, 0);
-            multicore_fifo_push_blocking(control_setup_msg);
+            push_to_core1(control_setup_msg);
             printf("send hw keyboard setup %X\n",control_setup_msg);
 
-            control_setup_msg = fifo_ref_word(itr.pay[0]<<8 | itr.pay[1]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            control_setup_msg = fifo_ref_word(msg_ref_at(itr.pay, itr.flags));
+            push_to_core1(control_setup_msg);
             printf("send hw keyboard setup %X\n",control_setup_msg);
+            break;
+        }
+
+        case MSG_HW_GPI:
+            // Core 1 reads the pin; the options word follows.
+            if (itr.len != 2) break;
+
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPI, itr.id, itr.pay[0]);
+            push_to_core1(control_setup_msg);
+            printf("send hw GPI setup %X\n",control_setup_msg);
+
+            control_setup_msg = fifo_gpi_options_word(itr.pay[1]);
+            push_to_core1(control_setup_msg);
+            printf("send hw GPI setup %X\n",control_setup_msg);
             break;
 
         case MSG_HW_ADC:
             if (itr.len != 1 || itr.pay[0] >= ADC_CHANNELS) break;
 
             control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_ADC, itr.id, itr.pay[0]);
-            multicore_fifo_push_blocking(control_setup_msg);
+            push_to_core1(control_setup_msg);
             printf("send hw ADC setup %X\n",control_setup_msg);
             break;
 
@@ -444,6 +463,18 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             printf("skipping control type %02X\n",itr.type);
             break;
         }
+    }
+
+    // A 2D slider starts at its home: drive its outputs there, now that they are set up.
+    itr.reset(&itr);
+    while (itr.next(&itr)) {
+        if (itr.type != MSG_UI_SLIDER_2D) continue;
+        uint8_t home[2];
+        slider_2d_home(itr.pay, itr.len, home);
+        for (uint8_t i = 0; i < 2; i++) {
+            push_to_core1(fifo_action_word(itr.id, i, home[i]));
+        }
+        printf("send 2D slider %d home %u, %u\n", itr.id, home[0], home[1]);
     }
 
     // while (offset + 4 <= length) {

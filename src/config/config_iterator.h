@@ -15,6 +15,7 @@ typedef struct config_element_iterator {
     size_t pos;
     
     uint8_t  type;
+    uint8_t  flags;     /* header byte 1, e.g. MSG_FLAG_OUTPUT */
     uint16_t id;
     uint8_t  len;
     const uint8_t *pay;

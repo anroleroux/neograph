@@ -39,15 +39,7 @@ class uiLED extends uiComponents {
     buildUI(commandInterface) {}
 
     marshal() {
-        const buffer = [];
-        const sourceID = this.sourceID();
-
-        buffer.push(this.tc);
-        buffer.push(0x00);
-        buffer.push((this.id >> 8) & 0xFF, this.id & 0xFF);
-        buffer.push(0x02);
-        buffer.push((sourceID >> 8) & 0xFF, sourceID & 0xFF);
-
-        return buffer;
+        const source = this.sourceRef();
+        return [this.tc, MSG_FLAG_OUTPUT, (this.id >> 8) & 0xFF, this.id & 0xFF, source.length, ...source];
     }
 }

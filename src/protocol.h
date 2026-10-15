@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_ and KEYBOARD_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_ and KEYBOARD_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -26,19 +26,29 @@
 
 /* ── Messages (the body of a packet) ──────────────────────────────────── */
 
-#define MSG_HEADER_LEN          5       /* type (1), reserved (1), element ID (2, BE), payload length (1) */
+#define MSG_HEADER_LEN          5       /* type (1), flags (1), element ID (2, BE), payload length (1) */
+
+/* Message header byte 1, bit 0: each source reference in the payload is 3 bytes, the
+   element ID then the index of its output (MSG_FLAG_OUTPUT). Without it, a reference
+   is the 2-byte element ID, and means the element's output 0: messages saved before
+   sources had several outputs. */
+#define MSG_FLAG_OUTPUT         0x01
+
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) shows
+   a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
+#define MSG_FLAG_SHOWN          0x02
 
 /* Control element types (0x00-0x3F): bit 5 set = HW, bit 4 set = input. */
 #define MSG_HW_BIT              0x20
 #define MSG_INPUT_BIT           0x10
 
 #define MSG_UI_GAUGE            0x00    /* reserved */
-#define MSG_UI_INDICATOR        0x01    /* reserved */
+#define MSG_UI_INDICATOR        0x01    /* a light, drawn in the browser */
 #define MSG_UI_GRAPH            0x02    /* a plot, drawn in the browser */
 #define MSG_UI_BUTTON           0x10
 #define MSG_UI_SWITCH           0x11    /* reserved */
 #define MSG_UI_SLIDER           0x12
-#define MSG_UI_SLIDER_2D        0x13    /* reserved */
+#define MSG_UI_SLIDER_2D        0x13    /* two outputs: X (0) and Y (1) */
 #define MSG_UI_MULTI_SLIDER     0x14    /* reserved */
 #define MSG_UI_DIAL             0x15    /* reserved */
 #define MSG_UI_TIMER            0x16    /* reserved */
@@ -47,7 +57,7 @@
 #define MSG_HW_PWM              0x22
 #define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
 #define MSG_HW_CORE             0x30    /* the core temperature, from telemetry */
-#define MSG_HW_GPI              0x31    /* reserved */
+#define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 
 /* Supporting and networking element types. */
@@ -99,6 +109,16 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 /* Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical. */
 #define SLIDER_VERTICAL         0x01
 
+/* 2D slider (MSG_UI_SLIDER_2D) payload byte 0, bit 0: 0 = it stays where it is let go,
+   1 = it returns to the centre (VALUE_HALF on both outputs). Bits 1-2: how it returns.
+   Byte 1: its return speed, 1-255 % of its range per second. Bytes 2-3: its home, X then
+   Y as values (0 to VALUE_FULL): where it starts, and where it returns to. */
+#define SLIDER_RETURN           0x01
+#define SLIDER_EASE_MASK        0x06
+#define SLIDER_EASE_IMMEDIATE   0x00    /* at once */
+#define SLIDER_EASE_LINEAR      0x02    /* at a steady speed */
+#define SLIDER_EASE_SIGMOID     0x04    /* speeding up, then slowing down (smoothstep) */
+
 /* Button (MSG_UI_BUTTON) payload byte 0, bit 0: 0 = each click toggles it, 1 = it is on
    while held. A button without the byte is a toggle. */
 #define BUTTON_MOMENTARY        0x01
@@ -112,6 +132,15 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ADC_CHANNELS            3
 #define ADC_PIN_FIRST           26
 #define ADC_RAW_FULL            4095    /* a 12-bit reading at the reference voltage, 3.3 V */
+
+/* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
+   options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
+   is high, 1 = on while it is low. */
+#define GPI_PULL_MASK           0x03
+#define GPI_PULL_NONE           0x00
+#define GPI_PULL_UP             0x01
+#define GPI_PULL_DOWN           0x02
+#define GPI_INVERT              0x04
 
 /* USB keyboard (MSG_HW_KEYBOARD) payload byte 2: what it types each time its input goes on. */
 #define KEYBOARD_COMBO          0x00    /* one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key */
@@ -127,15 +156,73 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
 
-/* Whether a USB keyboard's payload is one the device types: source (2 bytes), mode,
+/* A source reference: an output of a source element. ID 0 is "not connected". */
+typedef struct {
+    uint16_t id;
+    uint8_t output;
+} msg_ref;
+
+/* The length of a source reference in a message with these header flags. */
+static inline uint8_t msg_ref_len(uint8_t flags) { return flags & MSG_FLAG_OUTPUT ? 3 : 2; }
+
+/* The source reference at p, in a message with these header flags. */
+static inline msg_ref msg_ref_at(const uint8_t *p, uint8_t flags) {
+    msg_ref ref = { (uint16_t)(p[0] << 8 | p[1]), 0 };
+    if (flags & MSG_FLAG_OUTPUT) ref.output = p[2];
+    return ref;
+}
+
+/* Whether a USB keyboard's payload is one the device types: a source reference, mode,
    then a key with its modifiers, or 1 to KEYBOARD_TEXT_MAX characters it can type. */
-static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len) {
-    if (len < 3) return 0;
-    if (pay[2] == KEYBOARD_COMBO) return len == 5;
-    if (pay[2] != KEYBOARD_TEXT || len < 4 || len > 3 + KEYBOARD_TEXT_MAX) return 0;
-    for (uint8_t i = 3; i < len; i++) {
-        if ((pay[i] < 0x20 || pay[i] > 0x7E) && pay[i] != '\t' && pay[i] != '\n') return 0;
+static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len, uint8_t flags) {
+    uint8_t r = msg_ref_len(flags);
+    if (len < r + 1) return 0;
+    const uint8_t *k = pay + r;     /* the keystroke: mode, then its key or text */
+    len -= r;
+    if (k[0] == KEYBOARD_COMBO) return len == 3;
+    if (k[0] != KEYBOARD_TEXT || len < 2 || len > 1 + KEYBOARD_TEXT_MAX) return 0;
+    for (uint8_t i = 1; i < len; i++) {
+        if ((k[i] < 0x20 || k[i] > 0x7E) && k[i] != '\t' && k[i] != '\n') return 0;
     }
+    return 1;
+}
+
+/* A 2D slider's home, X then Y as values: payload bytes 2-3, or without them the centre. */
+static inline void slider_2d_home(const uint8_t *pay, uint8_t len, uint8_t home[2]) {
+    home[0] = len >= 4 ? pay[2] : VALUE_HALF;
+    home[1] = len >= 4 ? pay[3] : VALUE_HALF;
+}
+
+/* A PWM (MSG_HW_PWM) payload, read by pwm_payload_read. */
+typedef struct {
+    msg_ref duty_source;
+    uint8_t pin;
+    uint16_t freq;
+    uint8_t options;
+    uint8_t duty, duty_min, duty_max;
+    msg_ref freq_source;
+    uint16_t freq_min, freq_max;
+} pwm_payload;
+
+/* The payload length of a PWM message with these header flags: 15, or 17 with outputs. */
+static inline uint8_t pwm_payload_len(uint8_t flags) { return 11 + 2 * msg_ref_len(flags); }
+
+/* Read a PWM payload. Returns 0 if it is not the length a PWM's is. */
+static inline int pwm_payload_read(const uint8_t *pay, uint8_t len, uint8_t flags, pwm_payload *out) {
+    if (len != pwm_payload_len(flags)) return 0;
+    uint8_t r = msg_ref_len(flags);
+    const uint8_t *q = pay + r;     /* after the duty source */
+    const uint8_t *f = q + 7 + r;   /* after the frequency source */
+    out->duty_source = msg_ref_at(pay, flags);
+    out->pin = q[0];
+    out->freq = q[1] << 8 | q[2];
+    out->options = q[3];
+    out->duty = q[4];
+    out->duty_min = q[5];
+    out->duty_max = q[6];
+    out->freq_source = msg_ref_at(q + 7, flags);
+    out->freq_min = f[0] << 8 | f[1];
+    out->freq_max = f[2] << 8 | f[3];
     return 1;
 }
 
@@ -152,10 +239,15 @@ static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len) {
 #define FIFO_TAG_LED            2       /* value: onboard LED state, 0 or 1 */
 #define FIFO_TAG_ADC            3       /* value: an ADC reading, see fifo_adc_word */
 #define FIFO_TAG_KEYBOARD       4       /* value: the ID of a USB keyboard whose input went on */
+#define FIFO_TAG_GPI            5       /* value: a GPIO input's state, see fifo_gpi_word */
+
+/* An action word carries an output index in the 5 bits a setup word carries a type in. */
+#define FIFO_OUTPUTS_MAX        32
 
 /*
- * Operation word: [31:30] op · [29] unused · [28:24] type & 0x1F ·
- * [23:8] element ID · [7:0] value (action), or GPIO pin or ADC channel (setup)
+ * Operation word: [31:30] op · [29] unused · [28:24] type & 0x1F (setup), or output
+ * index (action) · [23:8] element ID · [7:0] GPIO pin or ADC channel (setup), or
+ * value (action)
  */
 static inline uint32_t fifo_op_word(uint8_t op, uint8_t type, uint16_t id, uint8_t value) {
     return (uint32_t)(op & 0x03) << 30
@@ -170,14 +262,34 @@ static inline uint8_t fifo_op_type(uint32_t word) { return ((word >> 24) & 0x1F)
 static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
 static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
 
+/* Action word: the new value of one output of a source, from a command. */
+static inline uint32_t fifo_action_word(uint16_t id, uint8_t output, uint8_t value) {
+    return (uint32_t)FIFO_OP_CONTROL_ACTION << 30
+        | (uint32_t)(output & 0x1F) << 24
+        | (uint32_t)id << 8
+        | value;
+}
+static inline uint8_t fifo_op_output(uint32_t word) { return (word >> 24) & 0x1F; }
+
 /* ADC word, the value after FIFO_TAG_ADC: [31:16] channel · [15:0] reading, 0 to ADC_RAW_FULL. */
 static inline uint32_t fifo_adc_word(uint8_t channel, uint16_t raw) { return (uint32_t)channel << 16 | raw; }
 static inline uint8_t fifo_adc_channel(uint32_t word) { return (word >> 16) & 0xFF; }
 static inline uint16_t fifo_adc_raw(uint32_t word) { return word & 0xFFFF; }
 
-/* Reference word, sent after a setup word for LED/GPO/PWM/keyboard: [31:16] source element ID. */
-static inline uint32_t fifo_ref_word(uint16_t source_id) { return (uint32_t)source_id << 16; }
+/* GPI options word, sent after a GPIO input's setup word: [7:0] its options (GPI_). */
+static inline uint32_t fifo_gpi_options_word(uint8_t options) { return options; }
+static inline uint8_t fifo_gpi_options(uint32_t word) { return word & 0xFF; }
+
+/* GPI word, the value after FIFO_TAG_GPI: [31:16] the pin · [0] 1 = on (after GPI_INVERT). */
+static inline uint32_t fifo_gpi_word(uint8_t pin, int on) { return (uint32_t)pin << 16 | (on ? 1 : 0); }
+static inline uint8_t fifo_gpi_pin(uint32_t word) { return (word >> 16) & 0xFF; }
+static inline int fifo_gpi_on(uint32_t word) { return word & 1; }
+
+/* Reference word, sent after a setup word for LED/GPO/PWM/keyboard: [31:16] source
+   element ID · [7:0] the source's output index. */
+static inline uint32_t fifo_ref_word(msg_ref ref) { return (uint32_t)ref.id << 16 | ref.output; }
 static inline uint16_t fifo_ref_source(uint32_t word) { return (word >> 16) & 0xFFFF; }
+static inline uint8_t fifo_ref_output(uint32_t word) { return word & 0xFF; }
 
 /* PWM word, sent after the reference word for PWM: [31:16] frequency in Hz · [7:0] options (PWM_DUTY_INPUT). */
 static inline uint32_t fifo_pwm_word(uint16_t freq, uint8_t options) { return (uint32_t)freq << 16 | options; }

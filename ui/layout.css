@@ -82,6 +82,7 @@ input {
 .editable > input {
     margin-right: var(--step--2);
     width: 100%;
+    min-width: 5em;     /* room to type, however long the label */
 }
 
 /* A value the setting rejected; cleared on the next edit. */

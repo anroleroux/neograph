@@ -162,15 +162,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD, LED GPO PWM KEY, TMP ADC, PLT', 'the groups show ' + groups.join(', '));
-    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO | ', 'clicking the open group again left ' + await menu());
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO USB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.
@@ -205,11 +205,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         pwm.setDutyMax('80');
     });
 
-    // The pin is picked from the usable pins only.
-    const pins = await page.evaluate(() => [...document.querySelectorAll('#settings .editable.select')]
+    // The pin is picked from the usable pins only, less those another node uses:
+    // the GPO is on GPIO 7.
+    const pinOptions = () => page.evaluate(() => [...[...document.querySelectorAll('#settings .editable.select')]
         .find(row => row.querySelector('.label').textContent === 'GPIO pin:')
-        .querySelectorAll('option').length + '|' + USABLE_PINS.join());
-    expect(pins === '26|' + [...Array(23).keys(), 26, 27, 28].join(), 'the PWM offers GPIO pins ' + pins);
+        .querySelectorAll('option')].map(o => o.value).join());
+    const pins = await pinOptions();
+    expect(pins === [...Array(23).keys(), 26, 27, 28].filter(p => p !== 7).join(), 'the PWM offers GPIO pins ' + pins);
     await select('GPIO pin').selectOption('26');
     expect(await page.evaluate(() => elements.n4.pin) === 26, 'picking GPIO 26 did not set the PWM pin');
     await page.evaluate(() => elements.n4.setPin('15'));
@@ -228,7 +230,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add [title="Add a slider"]').dispatchEvent('click');
     await page.evaluate(() => { elements.n6.setLabel('Pitch'); selectById(4); });
     await choice('Frequency', 'From input');
-    await select('Input').first().selectOption('n6');      // the frequency's; the duty's follows
+    await select('Input').first().selectOption('n6:0');    // the frequency's; the duty's follows
     await page.evaluate(() => { elements.n4.setFreqMin('200'); elements.n4.setFreqMax('2000'); });
     expect(await page.evaluate(() => elements.n4.freqLog) === false, 'a frequency from an input does not start linear');
     await choice('Scale', 'Logarithmic');
@@ -258,6 +260,11 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Add the core temperature and a second plot for it. Its values reach only
     // the browser, so it drives a plot but no hardware output.
     await page.locator('#add [title="Add the core temperature"]').dispatchEvent('click');
+    // A hardware input's tile is hidden until its settings show it.
+    const coreRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
+    expect(coreRows === 'Label:|Command view:' && await page.evaluate(() => elements.n8.shown === false),
+        'the core temperature does not start hidden: ' + coreRows);
+    await choice('Command view', 'Show');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
     const core = await page.evaluate(() => {
         elements.n9.setLabel('Temperature');
@@ -286,6 +293,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         .map(o => o.textContent).join('|'));
     expect(channels === 'ADC0 · GPIO 26|ADC1 · GPIO 27|ADC2 · GPIO 28', 'the ADC offers channels ' + channels);
     await select('Channel').selectOption('1');
+    await choice('Command view', 'Show');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
     const adc = await page.evaluate(() => {
         const adc = elements.n10;
@@ -307,6 +315,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
     // Add a USB keyboard typing Ctrl+Alt+Delete, set from its settings, and a
     // momentary button to press it. A keyboard takes a button, not a slider.
+    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
     await page.locator('#add [title="Add a USB keyboard"]').dispatchEvent('click');
     const keyRows = () => page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
     expect(await keyRows() === 'Label:|Types:|Hold:|Key:', 'a new keyboard does not show a key combo: ' + await keyRows());
@@ -347,9 +356,164 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(keyboard.momentary, 'the Action choice did not make the button momentary');
     expect(keyboard.fromSlider, 'a slider was wired to the keyboard');
     expect(keyboard.fromButton && keyboard.fromToggle, 'the buttons were not wired to the keyboards');
+    // A source reference is the source's ID, then its output (MSG_FLAG_OUTPUT).
     const marshalled = keyboard.marshal.map(hex).join();
-    expect(marshalled === '2300000c05000d00054c,1000000d0101,2300000e09000101' + '68656c6c6f0a,1000000100',
+    expect(marshalled === '2301000c06000d0000054c,1000000d0101,2301000e0a00010001' + '68656c6c6f0a,1000000100',
         'the keyboards and buttons marshal as ' + marshalled);
+
+    // Add a 2D slider that returns to the centre, wire its Y to a plot, and drive
+    // a PWM's duty from its X and frequency from its Y: two wires from one node.
+    await page.locator('#add .group[data-group="uii"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a 2D slider"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:', 'a 2D slider does not show its settings: ' + await keyRows());
+    // Its home: where it starts and returns to. The centre unless set.
+    const home = await page.evaluate(() => {
+        const s = elements.n15;
+        const centre = s.home.join() + '|' + s.values.map(v => v.toFixed(2)).join();
+        const rejected = s.setHome(0, '1.1') === false && s.setHome(1, '-0.1') === false && s.setHome(0, 'x') === false;
+        s.setHome(0, '0.25');
+        s.setHome(1, '.75');
+        s.createSettings();
+        const shown = [...document.querySelectorAll('#settings .editable')].slice(2, 4)
+            .map(row => row.querySelector('.value').textContent).join();
+        return { centre, rejected, home: s.home.join(), shown };
+    });
+    expect(home.centre === '128,128|0.50,0.50' && home.rejected && home.home === '64,191' && home.shown === '0.25,0.75',
+        'the home settings gave ' + JSON.stringify(home));
+    await choice('When let go', 'Return home');
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:|Speed (%/s):',
+        'returning to the centre does not show its shape and speed: ' + await keyRows());
+    // The speed's input has room to type in.
+    await page.locator('#settings .editable', { has: page.locator('.label:text-is("Speed (%/s):")') })
+        .locator('svg').first().dispatchEvent('click');
+    const speedInput = await page.locator('#settings .editable input').evaluate(i => [i.value, i.getBoundingClientRect().width]);
+    expect(speedInput[0] === '100' && speedInput[1] >= 50, 'the speed input is ' + JSON.stringify(speedInput));
+    await page.locator('#settings .editable input').fill('120');
+    await page.locator('#settings .editable input').press('Enter');
+    await page.evaluate(() => { document.body.scrollLeft = 0; });     // typing scrolled the settings into view
+    const speeds = await page.evaluate(() => {
+        const s = elements.n15;
+        const typed = s.returnSpeed;
+        const rejected = s.setReturnSpeed('256') === false && s.setReturnSpeed('0') === false && s.setReturnSpeed('-1') === false
+            && s.setReturnSpeed('1.5') === false && s.setReturnSpeed('x') === false && s.setReturnEase('bounce') === false;
+        return { typed, rejected, ease: s.returnEase };
+    });
+    expect(speeds.typed === 120 && speeds.rejected && speeds.ease === 'linear', 'the return settings gave ' + JSON.stringify(speeds));
+    await choice('Return', 'Immediate');        // for the exact commands below
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:', 'an immediate return shows ' + await keyRows());
+    await choice('Wire from', 'Y');
+    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
+    const pad = await page.evaluate(() => {
+        elements.n15.setLabel('Stick');
+        elements.n16.setLabel('Stick Y');
+        const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
+        clearSelection();
+        toggleConnectMode();
+        selectById(15);
+        const fromY = marked();
+        clearSelection();
+        toggleConnectMode();
+        return {
+            returns: elements.n15.returns,
+            output: elements.n15.actNum,
+            fromY,
+            toLed: createEdge('n15', 'n2') === null,
+            toPlot: createEdge('n15', 'n16') !== null && hex(elements.n16.sourceRef()) === '000f01',
+            next: elements.n15.actNum,      // wired from Y, the next wire is from X
+            again: createEdge('n15', 'n16', 0) !== null && hex(elements.n16.sourceRef()) === '000f00'
+                && createEdge('n15', 'n16') !== null && hex(elements.n16.sourceRef()) === '000f01',
+            label: gEdges.at(-1).outputName.textContent,
+        };
+        function hex(bytes) { return bytes.map(b => b.toString(16).padStart(2, '0')).join(''); }
+    });
+    expect(pad.returns, 'the When let go choice did not make the 2D slider return');
+    expect(pad.output === 1, 'the Wire from choice did not pick Y');
+    expect(pad.next === 0, 'a wire from Y did not turn Wire from to X');
+    expect(pad.fromY === 'n16', 'wire mode from the 2D slider\'s Y marks ' + pad.fromY);
+    expect(pad.toLed, 'the 2D slider was wired to an LED');
+    expect(pad.toPlot && pad.again, 'the 2D slider\'s Y was not wired to the plot, or X did not replace it');
+    expect(pad.label === 'Y', 'the wire from Y is labelled ' + pad.label);
+
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
+    await choice('Duty cycle', 'From input');
+    const inputs = await page.$$eval('#settings .editable.select', rows => rows
+        .filter(row => row.querySelector('.label').textContent === 'Input:')
+        .map(row => [...row.querySelectorAll('option')].map(o => o.value + '=' + o.textContent).join(',')));
+    expect(inputs[0] === '=None,n5:0=Speed (n5),n6:0=Pitch (n6),n10:0=Level sensor (n10),n15:0=Stick X (n15),n15:1=Stick Y (n15)',
+        'the PWM offers inputs ' + inputs[0]);
+    await select('Input').first().selectOption('n15:0');
+    await choice('Frequency', 'From input');
+    await select('Input').first().selectOption('n15:1');       // the frequency's
+    const xy = await page.evaluate(() => {
+        const pwm = elements.n17;
+        pwm.setLabel('Motor');
+        return {
+            sources: [pwm.dutySource?.name, pwm.dutyOutput, pwm.freqSource?.name, pwm.freqOutput].join(),
+            wires: pwm.inConns().map(c => c.start.node.name + ':' + c.outputName.textContent).join(),
+            marshal: pwm.marshal().map(b => b.toString(16).padStart(2, '0')).join(''),
+        };
+    });
+    expect(xy.sources === 'n15,0,n15,1', 'the PWM\'s sources are ' + xy.sources);
+    expect(xy.wires === 'n15:X,n15:Y', 'the PWM\'s wires are ' + xy.wires);
+    expect(xy.marshal === '22010011' + '11' + '000f00' + '02' + '03e8' + '03' + '320064' + '000f01' + '00642710',
+        'the PWM marshals as ' + xy.marshal);
+
+    // Add a light, and wire the momentary button to it. A light takes a button,
+    // not a slider.
+    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a light"]').dispatchEvent('click');
+    const light = await page.evaluate(() => {
+        const light = elements.n18;
+        const unwired = light.on;
+        return {
+            unwired,
+            fromSlider: createEdge('n5', 'n18') === null,
+            fromButton: createEdge('n13', 'n18') !== null && light.sourceID() === 13,
+            wired: light.on,
+            marshal: light.marshal().map(b => b.toString(16).padStart(2, '0')).join(''),
+        };
+    });
+    expect(light.unwired === null && light.fromSlider && light.fromButton && light.wired === false,
+        'the light was wired as ' + JSON.stringify(light));
+    expect(light.marshal === '01010012' + '03' + '000d00', 'the light marshals as ' + light.marshal);
+
+    // Add a GPIO input on GPIO 8, pulled up and on while low, and a second light
+    // for it. A GPIO input is boolean: it drives a light, not a PWM.
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a GPIO input"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|GPIO pin:|Pull:|On when:|Command view:', 'a GPIO input does not show its settings: ' + await keyRows());
+    // Its default, GPIO 3, is free; the pins of the GPO (7), the PWMs (15 and 2)
+    // and the ADC (ADC1, GPIO 27) are not offered.
+    const gpiPins = await pinOptions();
+    expect(await page.evaluate(() => elements.n19.pin) === 3
+        && gpiPins === [...Array(23).keys(), 26, 28].filter(p => ![2, 7, 15].includes(p)).join(),
+        'the GPIO input offers GPIO pins ' + gpiPins);
+    await select('GPIO pin').selectOption('8');
+    await choice('Pull', 'Up');
+    await choice('On when', 'Low');
+    await choice('Command view', 'Show');
+    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a light"]').dispatchEvent('click');
+    const gpi = await page.evaluate(() => {
+        const [input, light] = [elements.n19, elements.n20];
+        light.setLabel('Door');
+        return {
+            settings: [input.pin, input.pull, input.invert].join(),
+            rejected: input.setPin('23') === false && input.setPull(3) === false && input.setActive('x') === false,
+            // A new node takes its default pin if free, else the lowest free one.
+            free: [freePin(null, 4), freePin(null, 7), freePin(null, 2)].join(),
+            toPwm: createEdge('n19', 'n4') === null,
+            toLight: createEdge('n19', 'n20') !== null && light.sourceID() === 19 && light.on === null,
+            marshal: input.marshal().map(b => b.toString(16).padStart(2, '0')).join(''),
+        };
+    });
+    expect(gpi.settings === '8,1,true' && gpi.rejected, 'the GPIO input settings gave ' + JSON.stringify(gpi));
+    expect(gpi.free === '4,0,0', 'free pins are ' + JSON.stringify(gpi));
+    expect(gpi.toPwm, 'a GPIO input was wired to a PWM');
+    expect(gpi.toLight, 'the GPIO input was not wired to the light, or the light shows a state before any reading');
+    expect(gpi.marshal === '31020013' + '02' + '0805', 'the GPIO input marshals as ' + gpi.marshal);
 
     // A plot shows its source's unit, unless it is given its own.
     const units = await page.evaluate(() => {
@@ -396,10 +560,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const held = page.locator('#command .control-btn').nth(1);
     const box = await held.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const lamp = () => page.locator('#command .control-light').first().evaluate(l => l.dataset.on + ' ' + l.querySelector('.state').textContent);
+    expect(await lamp() === 'false Off', 'the light does not start off: ' + await lamp());
     await page.mouse.down();
     expect(await held.getAttribute('aria-pressed') === 'true', 'the momentary button is not on while held');
+    expect(await lamp() === 'true On', 'the light is not on while the button is held: ' + await lamp());
     await page.mouse.up();
     expect(await held.getAttribute('aria-pressed') === 'false', 'the momentary button is not off when let go');
+    expect(await lamp() === 'false Off', 'the light is not off when the button is let go: ' + await lamp());
     await held.press(' ');
     const holds = await sent(page);
     expect(holds.map(hex).join() === ['0100061000000d01ff', '0100061000000d0100', '0100061000000d01ff', '0100061000000d0100'].join(),
@@ -424,7 +592,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // The plot took each value the slider sent, after the 0 it started from, and shows the latest.
     const trace = await page.evaluate(() => elements.n7.samples.map(([, v]) => v.toFixed(2)).join());
     expect(trace === '0.00,0.75,0.00', 'the plot did not follow the slider: ' + trace);
-    expect(await page.locator('#command .control-plot canvas').count() === 3, 'the Command view has no plot');
+    expect(await page.locator('#command .control-plot canvas').count() === 4, 'the Command view has no plot');
     await toCommandView(page);
     expect(await page.locator('#command .control-plot .state').first().textContent() === '0 rpm', 'the plot does not show its value and unit');
 
@@ -446,6 +614,53 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(anyRange.flat === '2.6 2.8 3.0 3.2 3.4', 'the axis for a flat 3 is ' + anyRange.flat);
     expect(anyRange.none === '0.0 0.5 1.0', 'the axis with no values is ' + anyRange.none);
 
+    // ── Drag the 2D slider: from the middle out past its top-right corner (1, 1),
+    // and let go: it returns home. Then nudge it right with a key. ──
+    const padEl = page.locator('#command .control-pad .pad');
+    expect(await page.locator('#command .control-pad .state').textContent() === '0.25, 0.75', 'the 2D slider does not start at home');
+    const padBox = await padEl.boundingBox();
+    await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(padBox.x + padBox.width + 40, padBox.y - 40);
+    const corner = await page.locator('#command .control-pad .state').textContent();
+    await page.mouse.up();
+    await padEl.press('ArrowRight');
+    const drags = await sent(page);
+    const values = drags.map(p => hex(p).slice(0, 16) === '0100071300000f02' ? hex(p).slice(16) : hex(p));
+    expect(corner === '1.00, 1.00', 'dragging past the corner shows ' + corner);
+    expect(values.length === 5 && values.slice(1).join() === 'ffff,40bf,41bf,40bf',
+        'dragging and nudging the 2D slider sent ' + values);
+    expect(await page.locator('#command .control-pad .state').textContent() === '0.25, 0.75', 'the 2D slider did not return home');
+    packets.push(...drags);
+    const yTrace = await page.evaluate(() => elements.n16.samples.slice(-4).map(([, v]) => v.toFixed(2)).join());
+    expect(yTrace === '1.00,0.75,0.75,0.75', 'the plot did not follow Y: ' + yTrace);
+
+    // A linear or sigmoid return takes it back home in steps, each nearer than
+    // the last. Linear steps are even; sigmoid ones grow, then shrink.
+    for (const ease of ['linear', 'sigmoid']) {
+        await page.evaluate((ease) => { elements.n15.setReturnEase(ease); elements.n15.setReturnSpeed('100'); }, ease);
+        await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(padBox.x - 40, padBox.y + padBox.height + 40);     // past the bottom-left corner: 0, 0
+        const released = await page.evaluate(() => performance.now());
+        await page.mouse.up();
+        await page.waitForFunction(() => elements.n15.values.every((v, i) => v === elements.n15.home[i] / VALUE_FULL));
+        const took = await page.evaluate((t) => performance.now() - t, released);
+        const glides = await sent(page);
+        const glide = glides.map(p => [p[8], p[9]]);
+        const back = glide.slice(glide.findIndex(([x, y]) => x === 0 && y === 0));
+        const nearer = back.every(([x, y], i) => i === 0 || (x >= back[i - 1][0] && y >= back[i - 1][1]));
+        expect(back.length > 3 && nearer && back.at(-1).join() === '64,191',
+            `the ${ease} return sent ` + JSON.stringify(glide));
+        // From the corner to (0.25, 0.75) at 100 %/s: about 0.8 s, whatever the shape.
+        expect(took > 500 && took < 1500, `the ${ease} return took ${took} ms`);
+        const third = Math.floor(back.length / 3);
+        const gain = (a, b) => back[b][1] - back[a][1];      // Y, the longer way
+        const [start, middle, end] = [gain(0, third), gain(third, 2 * third), gain(2 * third, back.length - 1)];
+        if (ease === 'sigmoid') expect(middle > start && middle > end, `the sigmoid return moved ${start}, ${middle}, ${end} by thirds`);
+        packets.push(...glides);
+    }
+
     // The device's temperature telemetry reaches the core node, its tile and its plot.
     await page.evaluate(() => window.__ws.receive('core 31.27'));
     const temperature = await page.evaluate(() => ({
@@ -462,10 +677,21 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         plot: elements.n11.samples.map(([, v]) => v === null ? '' : v.toFixed(4)).join(),
     }));
     expect(reading.tile === '1.65 V', 'the ADC tile shows ' + reading.tile);
+
+    // GPIO input states reach the GPIO input on their pin only, its tile and its light.
+    const door = () => page.evaluate(() => [
+        [...document.querySelectorAll('#command .control-reading')].find(t => t.title.startsWith('GPIO input')).querySelector('.state').textContent,
+        document.querySelectorAll('#command .control-light')[1].querySelector('.state').textContent,
+        document.querySelectorAll('#command .control-light')[1].dataset.on].join(' '));
+    expect(await door() === '– – false', 'before any reading the GPIO input and its light show ' + await door());
+    await page.evaluate(() => { window.__ws.receive('gpi 8 1'); window.__ws.receive('gpi 9 0'); });
+    expect(await door() === 'On On true', 'pin 8 on shows ' + await door());
+    await page.evaluate(() => window.__ws.receive('gpi 8 0'));
+    expect(await door() === 'Off Off false', 'pin 8 off shows ' + await door());
     expect(reading.plot === ',1.6504', 'the ADC plot holds ' + reading.plot);
     await toCommandView(page);
     const plotStates = await page.$$eval('#command .control-plot .state', ss => ss.map(s => s.textContent).join('|'));
-    expect(plotStates.endsWith('|31.27 °C|1.65 V'), 'the plots show ' + plotStates);
+    expect(plotStates.endsWith('|31.27 °C|1.65 V|0.749'), 'the plots show ' + plotStates);
 
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {
@@ -526,44 +752,67 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
-        const pwm = new uiPWM(400, 300);      // n15, no wires yet
-        new uiButton(-400, 300);              // n16
+        const pwm = new uiPWM(400, 300);      // n21, no wires yet
+        new uiButton(-400, 300);              // n22
+        // Its pin is free and on a slice no other PWM uses: not the slices of
+        // the PWMs on GPIO 15 (14, 15) and GPIO 2 (2, 3, 18, 19).
+        selectById(21);
+        const pwmPins = pwm.pin + '|' + [...[...document.querySelectorAll('#settings .editable.select')]
+            .find(row => row.querySelector('.label').textContent === 'GPIO pin:')
+            .querySelectorAll('option')].map(o => o.value).join();
+        clearSelection();
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
-        selectById(15);
+        selectById(21);
         const fromPwm = marked();
         clearSelection();
         toggleConnectMode();
-        selectById(15);
+        selectById(21);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
         const input = [...document.querySelectorAll('#settings .editable.select')]
             .find(row => row.querySelector('.label').textContent === 'Input:');
         const picks = [...input.querySelectorAll('option')].map(o => o.value).join();
         return {
+            pwmPins,
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
-            buttonToPwm: createEdge('n16', 'n15') === null && pwm.setSource('duty', elements.n16) === false
+            buttonToPwm: createEdge('n22', 'n21') === null && pwm.setSource('duty', elements.n22) === false
                 && pwm.inConns().length === 0,
         };
     });
-    expect(types.fromPwm === 'n5,n6,n10', 'wire mode from a PWM marks ' + types.fromPwm);
-    expect(types.picks === ',n5,n6,n10', 'the PWM offers inputs ' + types.picks);
+    // Less those other nodes use: the GPO's 7, the GPIO input's 8 and the ADC's 27.
+    expect(types.pwmPins === '0|' + [...Array(23).keys(), 26, 28].filter(p => ![2, 3, 7, 8, 14, 15, 18, 19].includes(p)).join(),
+        'a new PWM, with PWMs on GPIO 15 and 2, takes and offers ' + types.pwmPins);
+    expect(types.fromPwm === 'n5,n6,n10,n15', 'wire mode from a PWM marks ' + types.fromPwm);
+    expect(types.picks === ',n5:0,n6:0,n10:0,n15:0,n15:1', 'the PWM offers inputs ' + types.picks);
     expect(types.sliderToLed, 'a slider was wired to the LED');
     expect(types.buttonToPwm, 'a button was wired to a PWM');
 
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n16', 'n2');
+        createEdge('n22', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n16' && replaced.button === 'n3,n14' && replaced.wires === 1,
+    expect(replaced.led === 'n22' && replaced.button === 'n3,n14' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
+    // An ADC channel is a pin too: with a GPO on GPIO 26, the ADC (on ADC1) is
+    // not offered ADC0.
+    const channelsLeft = await page.evaluate(() => {
+        const gpo = new uiGPO(400, 400);
+        gpo.setPin('26');
+        selectById(10);
+        const offered = [...document.querySelectorAll('#settings .editable.select option')].map(o => o.value).join();
+        gpo.remove();
+        clearSelection();
+        return offered;
+    });
+    expect(channelsLeft === '1,2', 'with GPIO 26 in use the ADC offers channels ' + channelsLeft);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
 
@@ -587,10 +836,16 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         buttons: document.querySelectorAll('#command .control-btn').length,
         keyboards: [elements.n12.describe(), elements.n12.sourceID(), elements.n13.momentary, elements.n1.momentary,
             JSON.stringify(elements.n14.text), elements.n14.sourceID()].join(),
+        pad: [elements.n15.home.join(':'), elements.n15.returns, elements.n15.returnEase, elements.n15.returnSpeed, elements.n16.sourceRef().join(':'), elements.n17.dutySource?.name, elements.n17.dutyOutput,
+            elements.n17.freqSource?.name, elements.n17.freqOutput, elements.n17.inConns().map(c => c.outputName.textContent).join('')].join(),
+        pads: document.querySelectorAll('#command .control-pad').length,
+        light: [elements.n18.sourceID(), elements.n18.on, document.querySelectorAll('#command .control-light').length].join(),
+        gpi: [elements.n19.pin, elements.n19.pull, elements.n19.invert, elements.n20.sourceID()].join(),
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 9
-        && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 3 && restored.readings === 2
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting|Stick|Stick Y|Motor|Light|GPIO input|Door', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 14
+        && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 4 && restored.readings === 3
+        && restored.pad === '64:191,true,immediate,120,0:15:1,n15,0,n15,1,XY' && restored.pads === 1 && restored.light === '13,false,2' && restored.gpi === '8,1,true,19'
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 2
         && restored.keyboards === 'Ctrl+Alt+Delete,13,true,false,"hello\\n",1',
@@ -600,6 +855,16 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const resaved = await sent(page);
     expect(resaved.length === 1 && hex(resaved[0]) === hex(saved), 'saving the restored graph changed the config');
     packets.push(...resaved);
+
+    // Hiding a hardware input takes its tile out of the Command view at once.
+    const tilesShown = await page.evaluate(() => [elements.n8.shown, elements.n10.shown, elements.n19.shown].join());
+    const tiles = () => page.evaluate(() => document.querySelectorAll('#command .control-reading').length);
+    await page.evaluate(() => selectById(10));
+    await page.locator('#settings .choice', { has: page.locator('.label:text-is("Command view:")') })
+        .locator('button', { hasText: 'Hide' }).dispatchEvent('click');
+    expect(tilesShown === 'true,true,true' && await tiles() === 2 && await page.evaluate(() => elements.n10.shown === false),
+        `restored shown ${tilesShown}; hiding the ADC left ${await tiles()} reading tiles`);
+    await page.evaluate(() => clearSelection());
 
     // A config with addresses shows them; one without shows none, not the last one's.
     const shown = await page.evaluate(([cfg, firstBoot]) => {

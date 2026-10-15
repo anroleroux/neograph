@@ -14,19 +14,29 @@ const PKT_DEVICE_ID          = 0x0D;  // HW -> UI
 const PKT_CONFIG_MAX         = 4096;  // largest 0A packet, header included: the flash config region
 
 // ── Messages (the body of a packet)
-const MSG_HEADER_LEN         = 5;     // type (1), reserved (1), element ID (2, BE), payload length (1)
+const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE), payload length (1)
+
+// Message header byte 1, bit 0: each source reference in the payload is 3 bytes, the
+// element ID then the index of its output (MSG_FLAG_OUTPUT). Without it, a reference
+// is the 2-byte element ID, and means the element's output 0: messages saved before
+// sources had several outputs.
+const MSG_FLAG_OUTPUT        = 0x01;
+
+// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) shows
+// a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
+const MSG_FLAG_SHOWN         = 0x02;
 
 // Control element types (0x00-0x3F): bit 5 set = HW, bit 4 set = input.
 const MSG_HW_BIT             = 0x20;
 const MSG_INPUT_BIT          = 0x10;
 
 const MSG_UI_GAUGE           = 0x00;  // reserved
-const MSG_UI_INDICATOR       = 0x01;  // reserved
+const MSG_UI_INDICATOR       = 0x01;  // a light, drawn in the browser
 const MSG_UI_GRAPH           = 0x02;  // a plot, drawn in the browser
 const MSG_UI_BUTTON          = 0x10;
 const MSG_UI_SWITCH          = 0x11;  // reserved
 const MSG_UI_SLIDER          = 0x12;
-const MSG_UI_SLIDER_2D       = 0x13;  // reserved
+const MSG_UI_SLIDER_2D       = 0x13;  // two outputs: X (0) and Y (1)
 const MSG_UI_MULTI_SLIDER    = 0x14;  // reserved
 const MSG_UI_DIAL            = 0x15;  // reserved
 const MSG_UI_TIMER           = 0x16;  // reserved
@@ -35,7 +45,7 @@ const MSG_HW_GPO             = 0x21;
 const MSG_HW_PWM             = 0x22;
 const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_CORE            = 0x30;  // the core temperature, from telemetry
-const MSG_HW_GPI             = 0x31;  // reserved
+const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
 
 // Supporting and networking element types.
@@ -66,6 +76,16 @@ const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from h
 // Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical.
 const SLIDER_VERTICAL        = 0x01;
 
+// 2D slider (MSG_UI_SLIDER_2D) payload byte 0, bit 0: 0 = it stays where it is let go,
+// 1 = it returns to the centre (VALUE_HALF on both outputs). Bits 1-2: how it returns.
+// Byte 1: its return speed, 1-255 % of its range per second. Bytes 2-3: its home, X then
+// Y as values (0 to VALUE_FULL): where it starts, and where it returns to.
+const SLIDER_RETURN          = 0x01;
+const SLIDER_EASE_MASK       = 0x06;
+const SLIDER_EASE_IMMEDIATE  = 0x00;  // at once
+const SLIDER_EASE_LINEAR     = 0x02;  // at a steady speed
+const SLIDER_EASE_SIGMOID    = 0x04;  // speeding up, then slowing down (smoothstep)
+
 // Button (MSG_UI_BUTTON) payload byte 0, bit 0: 0 = each click toggles it, 1 = it is on
 // while held. A button without the byte is a toggle.
 const BUTTON_MOMENTARY       = 0x01;
@@ -81,6 +101,15 @@ const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable
 const ADC_CHANNELS           = 3;
 const ADC_PIN_FIRST          = 26;
 const ADC_RAW_FULL           = 4095;  // a 12-bit reading at the reference voltage, 3.3 V
+
+// GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pinUsable). Byte 1:
+// options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
+// is high, 1 = on while it is low.
+const GPI_PULL_MASK          = 0x03;
+const GPI_PULL_NONE          = 0x00;
+const GPI_PULL_UP            = 0x01;
+const GPI_PULL_DOWN          = 0x02;
+const GPI_INVERT             = 0x04;
 
 // USB keyboard (MSG_HW_KEYBOARD) payload byte 2: what it types each time its input goes on.
 const KEYBOARD_COMBO         = 0x00;  // one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key

@@ -19,6 +19,7 @@ class uiCore extends uiComponents {
 
         this.value = NaN;       // °C; no reading yet
         this.unit = '°C';
+        this.shown = false;     // a tile in the Command view
 
         this.buildGraphElement();
     }
@@ -52,8 +53,14 @@ class uiCore extends uiComponents {
         return Number.isFinite(this.value) ? `${this.value.toFixed(1)} °C` : '–';
     }
 
-    // In the Command view: a tile with the label and the latest temperature.
+    createSettings() {
+        super.createSettings();
+        document.getElementById('settings').appendChild(shownSetting(this));
+    }
+
+    // In the Command view, if shown: a tile with the label and the latest temperature.
     buildUI(commandInterface) {
+        if (!this.shown) return;
         const control = document.createElement('div');
         control.className = 'control-reading';
         control.innerHTML = `<span class="name"></span><span class="state"></span>`;
@@ -65,13 +72,14 @@ class uiCore extends uiComponents {
     }
 
     marshal() {
-        return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x00];
+        return [this.tc, this.shown ? MSG_FLAG_SHOWN : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x00];
     }
 }
 
 // Telemetry from the device, a text frame (see PROTOCOL.md, "Telemetry text
 // frames"): "core T" is the chip temperature, which the core nodes pass on, and
-// "adc C R" a reading R of ADC channel C, which that channel's ADC nodes pass on.
+// "adc C R" a reading R of ADC channel C, which that channel's ADC nodes pass on,
+// and "gpi P S" the state S (1 on, 0 off) of GPIO input pin P, which its node passes on.
 function receiveTelemetry(text) {
     const [name, ...values] = text.split(' ');
     if (name === 'core') {
@@ -80,5 +88,8 @@ function receiveTelemetry(text) {
     } else if (name === 'adc') {
         const [channel, raw] = values.map(Number);
         Object.values(elements).filter(e => e instanceof uiADC && e.channel === channel).forEach(e => e.update(raw));
+    } else if (name === 'gpi') {
+        const [pin, on] = values.map(Number);
+        Object.values(elements).filter(e => e instanceof uiGPI && e.pin === pin).forEach(e => e.update(on === 1));
     }
 }

@@ -87,9 +87,9 @@ int main() {
 
         // Each message from core 1 is a tag and a value (PROTOCOL.md, "Core 1 →
         // core 0"). Take all that are waiting.
-        while (multicore_fifo_rvalid()) {
-            uint32_t tag = multicore_fifo_pop_blocking();
-            uint32_t value = multicore_fifo_pop_blocking();
+        // Some may have been taken while core 0 waited to send (push_to_core1).
+        uint32_t tag, value;
+        while (take_from_core1(&tag, &value)) {
 
             char text[32] = "";
             switch (tag) {
@@ -104,6 +104,9 @@ int main() {
             }
             case FIFO_TAG_ADC:
                 snprintf(text, sizeof text, "adc %u %u", (unsigned)fifo_adc_channel(value), (unsigned)fifo_adc_raw(value));
+                break;
+            case FIFO_TAG_GPI:
+                snprintf(text, sizeof text, "gpi %u %u", (unsigned)fifo_gpi_pin(value), (unsigned)fifo_gpi_on(value));
                 break;
             case FIFO_TAG_LED:
                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, value);

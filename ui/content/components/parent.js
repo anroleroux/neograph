@@ -115,10 +115,67 @@ function parsePin(pin) {
     return /^\d+$/.test(pin) && pinUsable(Number(pin)) ? Number(pin) : null;
 }
 
-// A settings field that picks a GPIO pin from the usable ones.
-function pinSetting(get, set) {
-    return selectSetting('GPIO pin', USABLE_PINS.map(pin => [pin, `GPIO ${pin}`]), get, set);
+// A settings field for a hardware input: whether the Command view shows its
+// tile (MSG_FLAG_SHOWN). Picking one shows or hides the tile at once.
+function shownSetting(node) {
+    return choiceSetting('Command view', {show: 'Show', hide: 'Hide'}, () => node.shown ? 'show' : 'hide',
+        (v) => { node.shown = v === 'show'; buildCommandInterface(); });
 }
+
+// The PWM slice a GPIO pin is on. The pins of a slice share its counter, so its
+// frequency: GPIO 0, 1, 16 and 17 are slice 0, 2, 3, 18 and 19 slice 1, and so on.
+const pwmSlice = (pin) => (pin >> 1) & 7;
+
+// The GPIO pins `node` may not take: those the graph's other nodes use (see
+// usedPins) and, for a PWM, every pin on another PWM's slice, which would run at
+// that PWM's frequency.
+function pinsInUse(node) {
+    const others = Object.values(elements).filter(e => e !== node);
+    const used = new Set(others.flatMap(e => e.usedPins()));
+    if (node instanceof uiPWM) {
+        const slices = new Set(others.filter(e => e instanceof uiPWM).map(e => pwmSlice(e.pin)));
+        USABLE_PINS.filter(pin => slices.has(pwmSlice(pin))).forEach(pin => used.add(pin));
+    }
+    return used;
+}
+
+// A usable pin no node but `node` uses: `preferred` if it is free, else the
+// lowest free one (`preferred` if none is).
+function freePin(node, preferred) {
+    const used = pinsInUse(node);
+    if (!used.has(preferred)) return preferred;
+    return USABLE_PINS.find(pin => !used.has(pin)) ?? preferred;
+}
+
+// A settings field that picks a GPIO pin for `node` from the usable ones that
+// no other node uses. Its own pin is always offered.
+function pinSetting(node, get, set) {
+    const used = pinsInUse(node);
+    const pins = USABLE_PINS.filter(pin => pin === get() || !used.has(pin));
+    return selectSetting('GPIO pin', pins.map(pin => [pin, `GPIO ${pin}`]), get, set);
+}
+
+// A source reference as saved (see MSG_FLAG_OUTPUT): the source node's ID, then
+// which of its outputs. ID 0 and output 0 if there is no source.
+function refBytes(node, output = 0) {
+    const id = node?.id ?? 0;
+    return [(id >> 8) & 0xFF, id & 0xFF, node ? output : 0];
+}
+
+// The source reference at byte i of a message's payload, as {node, output}:
+// three bytes in a message with MSG_FLAG_OUTPUT, otherwise two, the node's ID,
+// and output 0. The node is null if it is not in the graph (or ID 0).
+function refAt(m, i) {
+    const len = m.flags & MSG_FLAG_OUTPUT ? 3 : 2;
+    if (m.len < i + len) return { node: null, output: 0 };
+    return {
+        node: elements['n' + (m.pay[i] << 8 | m.pay[i + 1])] ?? null,
+        output: len === 3 ? m.pay[i + 2] : 0,
+    };
+}
+
+// The length of a source reference in a message: see refAt.
+const refLen = (m) => m.flags & MSG_FLAG_OUTPUT ? 3 : 2;
 
 class uiComponents {
     constructor(type,x, y) {
@@ -146,24 +203,28 @@ class uiComponents {
     // Whether a wire can join this node and `other`: one must be a source (an
     // input such as a button, which feeds any number of outputs) and the other
     // an output with room for another wire (most take one, a PWM two), not
-    // already wired from that source, that takes it (see takesType).
+    // already wired from that output of the source, that takes it (see
+    // takesType). A wire leaves a source from its active output (actNum): a 2D
+    // slider's X or Y, picked in its settings.
     canTakeConn(other) {
         if (other === this || other.actDir === this.actDir) return false;
         const [output, source] = this.actDir === 'inputs' ? [this, other] : [other, this];
         const input = output.inputs[output.actNum];
         return output.takesType(source)
-            && input.conns.length < input.max && !input.conns.some(c => c.start.node === source);
+            && input.conns.length < input.max
+            && !input.conns.some(c => c.start.node === source && c.start.output === source.actNum);
     }
 
-    // Whether this output takes `source`. Their types must match: a boolean
-    // source (a button) drives a boolean output (an LED or GPO), and a floating
-    // one (a slider, the core temperature) a floating output (a PWM or a plot).
-    // A source whose values only reach the browser (the core temperature) drives
-    // only UI outputs: the device never has its values.
-    takesType(source) {
+    // Whether this output takes output `output` of `source` (its active one by
+    // default). Their types must match: a boolean source (a button) drives a
+    // boolean output (an LED or GPO), and a floating one (a slider, the core
+    // temperature) a floating output (a PWM or a plot). A source whose values
+    // only reach the browser (the core temperature) drives only UI outputs: the
+    // device never has its values.
+    takesType(source, output = source.actNum) {
         if (source.actDir !== 'outputs') return false;
-        const out = source.outputs[source.actNum];
-        return out.type === this.inputs[this.actNum].type && !(out.browserOnly && this.tc & MSG_HW_BIT);
+        const out = source.outputs[output];
+        return !!out && out.type === this.inputs[this.actNum].type && !(out.browserOnly && this.tc & MSG_HW_BIT);
     }
 
     // The wires into this node.
@@ -174,6 +235,24 @@ class uiComponents {
     // The ID of the node wired into this one, 0 if none (an output's single source).
     sourceID() {
         return this.inConns()[0]?.start.node.id ?? 0;
+    }
+
+    // The source reference of the wire into this one (an output's single
+    // source), as saved: the source's ID, then its output (see MSG_FLAG_OUTPUT).
+    // ID 0 if none.
+    sourceRef() {
+        const conn = this.inConns()[0];
+        return refBytes(conn?.start.node, conn?.start.output);
+    }
+
+    // The GPIO pins this node takes, which no other node may use: none for most.
+    usedPins() {
+        return [];
+    }
+
+    // The value of one of this source's outputs: most have one, `value`.
+    outputValue(output) {
+        return this.value;
     }
 
     setCoords(x = 0, y = 0) {
@@ -236,23 +315,29 @@ class uiComponents {
     // Send this input's value to the device as a one-message command. The value
     // is a fraction from 0 to 1, sent as one byte from 0 to VALUE_FULL.
     sendValue(value) {
-        const byte = Math.round(Math.max(0, Math.min(1, value)) * VALUE_FULL);
+        this.sendValues([value]);
+    }
+
+    // Send the values of all this input's outputs as a one-message command: one
+    // byte each, in output order.
+    sendValues(values) {
+        const bytes = values.map(v => Math.round(Math.max(0, Math.min(1, v)) * VALUE_FULL));
         const cmdPkt = Uint8Array.from([
-            PKT_COMMAND, 0, MSG_HEADER_LEN + 1,
-            this.tc, 0, (this.id >> 8) & 0xFF, this.id & 0xFF, 1, byte,
+            PKT_COMMAND, 0, MSG_HEADER_LEN + bytes.length,
+            this.tc, 0, (this.id >> 8) & 0xFF, this.id & 0xFF, bytes.length, ...bytes,
         ]);
 
         console.log(cmdPkt) //debug
         socket.send(cmdPkt); //online
 
-        this.emit(value);
+        values.forEach((value, output) => this.emit(value, output));
     }
 
-    // Hand a new value of this source to the nodes wired to it. UI outputs (a
-    // plot) show it in the browser; hardware outputs ignore it, as the device
-    // drives them. The value may be any number, not only 0 to 1.
-    emit(value) {
-        this.outputs.forEach(output => output.conns.forEach(conn => conn.end.node.receive(value)));
+    // Hand a new value of one of this source's outputs to the nodes wired to it.
+    // UI outputs (a plot) show it in the browser; hardware outputs ignore it, as
+    // the device drives them. The value may be any number, not only 0 to 1.
+    emit(value, output = 0) {
+        this.outputs[output].conns.forEach(conn => conn.end.node.receive(value));
     }
 
     // A new value from the source wired into this node. Only UI outputs show it:
@@ -278,7 +363,7 @@ class uiComponents {
     // The shape of each wire into this node, as a MSG_WIRE message keyed by this
     // node's ID: the handle angle at the source end, then at this end, each in
     // 1/65536 of a turn (see PROTOCOL.md). A node that takes more than one wire
-    // adds the source's ID, to tell its wires apart. Nothing if no wire comes in.
+    // adds the source reference, to tell its wires apart. Nothing if no wire comes in.
     marshalWire() {
         const turn = (angle) => {
             const n = Math.round(angle / (2 * Math.PI) * 65536) & 0xFFFF;
@@ -287,11 +372,9 @@ class uiComponents {
         const several = this.inputs.some(input => input.max > 1);
         return this.inConns().flatMap(conn => {
             const shape = [...turn(conn.start.angle), ...turn(conn.end.angle)];
-            if (several) {
-                const src = conn.start.node.id;
-                shape.push((src >> 8) & 0xFF, src & 0xFF);
-            }
-            return [MSG_WIRE, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, shape.length, ...shape];
+            if (several) shape.push(...refBytes(conn.start.node, conn.start.output));
+            return [MSG_WIRE, several ? MSG_FLAG_OUTPUT : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF,
+                shape.length, ...shape];
         });
     }
 
@@ -314,8 +397,10 @@ class uiComponents {
         delete elements[this.name];
     }
 
+    // A wire from or to this node: from one of its outputs, or into its input.
     addEdge(e) {
-        this[this.actDir][this.actNum].conns.push(e);
+        if (e.start.node === this) this.outputs[e.start.output].conns.push(e);
+        else this.inputs[this.actNum].conns.push(e);
     }
 
     // A wire into this node was taken out.

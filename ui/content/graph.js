@@ -21,12 +21,15 @@ const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FI
 const NODE_CLASSES = {
     [MSG_UI_BUTTON]: uiButton,
     [MSG_UI_SLIDER]: uiSlider,
+    [MSG_UI_SLIDER_2D]: uiSlider2D,
     [MSG_HW_LED]: uiLED,
     [MSG_HW_GPO]: uiGPO,
     [MSG_HW_PWM]: uiPWM,
     [MSG_UI_GRAPH]: uiPlot,
+    [MSG_UI_INDICATOR]: uiIndicator,
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
+    [MSG_HW_GPI]: uiGPI,
     [MSG_HW_KEYBOARD]: uiKeyboard,
 };
 
@@ -84,9 +87,12 @@ function restoreGraph(msgs) {
         if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
         else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
         else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
-        // A wire into an output that takes several carries its source's ID.
+        // A wire into an output that takes several carries its source reference.
         else if (m.type === MSG_WIRE && m.len === 4) wires.set(m.id, m);
-        else if (m.type === MSG_WIRE && m.len === 6) wires.set(m.id + ':' + (m.pay[4] << 8 | m.pay[5]), m);
+        else if (m.type === MSG_WIRE && m.len === 4 + refLen(m)) {
+            const output = m.flags & MSG_FLAG_OUTPUT ? m.pay[6] : 0;
+            wires.set(m.id + ':' + (m.pay[4] << 8 | m.pay[5]) + ':' + output, m);
+        }
     }
     if (controls.size === 0) return;
 
@@ -117,29 +123,49 @@ function restoreGraph(msgs) {
         }
         elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
 
+        // An output's settings come after its source reference (see refAt).
+        const r = refLen(m);
         if (m.type === MSG_UI_SLIDER && m.len >= 1) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
+        if (m.type === MSG_UI_SLIDER_2D && m.len >= 1) {
+            elm.setRelease(m.pay[0] & SLIDER_RETURN ? 'centre' : 'stay');
+            const ease = Object.keys(SLIDER_2D_EASES)
+                .find(e => SLIDER_2D_EASES[e].bits === (m.pay[0] & SLIDER_EASE_MASK));
+            elm.setReturnEase(ease);                            // an unknown one keeps the default
+            if (m.len >= 2) elm.setReturnSpeed(m.pay[1]);       // 0 keeps the default
+            else elm.setReturnEase('immediate');                // saved before returns had a speed
+            const home = [VALUE_HALF, VALUE_HALF];
+            if (m.len >= 4) home.splice(0, 2, m.pay[2], m.pay[3]);   // without one, the centre
+            home.forEach((b, axis) => elm.setHome(axis, b / VALUE_FULL));
+        }
         if (m.type === MSG_UI_BUTTON && m.len >= 1) elm.setAction(m.pay[0] & BUTTON_MOMENTARY ? 'momentary' : 'toggle');
-        if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
-        if (m.type === MSG_HW_KEYBOARD && m.len >= 3) elm.setStroke(m.pay.slice(2));
-        if (m.type === MSG_UI_GRAPH && m.len >= 3) {
-            elm.setWindow(m.pay[2]);
-            elm.setUnit(decoder.decode(m.pay.slice(3)));
+        if (m.type === MSG_HW_GPO && m.len >= r + 1) elm.setPin(m.pay[r]);
+        if (m.type === MSG_HW_KEYBOARD && m.len >= r + 1) elm.setStroke(m.pay.slice(r));
+        if (m.type === MSG_UI_GRAPH && m.len >= r + 1) {
+            elm.setWindow(m.pay[r]);
+            elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
-        if (m.type === MSG_HW_PWM && m.len >= 15) {
-            const u16 = (i) => m.pay[i] << 8 | m.pay[i + 1];
-            elm.setPin(m.pay[2]);
-            elm.setFreq(u16(3));
-            elm.dutyFromInput = !!(m.pay[5] & PWM_DUTY_INPUT);
-            elm.freqFromInput = !!(m.pay[5] & PWM_FREQ_INPUT);
-            elm.freqLog = !!(m.pay[5] & PWM_FREQ_LOG);
-            elm.setDuty(m.pay[6]);
-            elm.setDutyMin(m.pay[7]);
-            elm.setDutyMax(m.pay[8]);
-            elm.setFreqMin(u16(11));
-            elm.setFreqMax(u16(13));
+        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
+        if (m.type === MSG_HW_GPI && m.len >= 2) {
+            elm.setPin(m.pay[0]);
+            elm.setPull(m.pay[1] & GPI_PULL_MASK);
+            elm.setActive(m.pay[1] & GPI_INVERT ? 'low' : 'high');
+        }
+        if (m.type === MSG_HW_PWM && m.len === 11 + 2 * r) {
+            // After the duty source, and after the frequency source.
+            const q = (i) => m.pay[r + i], f = (i) => m.pay[2 * r + 7 + i];
+            elm.setPin(q(0));
+            elm.setFreq(q(1) << 8 | q(2));
+            elm.dutyFromInput = !!(q(3) & PWM_DUTY_INPUT);
+            elm.freqFromInput = !!(q(3) & PWM_FREQ_INPUT);
+            elm.freqLog = !!(q(3) & PWM_FREQ_LOG);
+            elm.setDuty(q(4));
+            elm.setDutyMin(q(5));
+            elm.setDutyMax(q(6));
+            elm.setFreqMin(f(0) << 8 | f(1));
+            elm.setFreqMax(f(2) << 8 | f(3));
         }
         if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
     }
@@ -152,23 +178,28 @@ function restoreGraph(msgs) {
     for (const [id, m] of controls) {
         const elm = elements['n' + id];
         if (elm.actDir !== 'inputs') continue;
-        const ref = (i) => elements['n' + (m.len >= i + 2 ? (m.pay[i] << 8 | m.pay[i + 1]) : 0)] ?? null;
 
         if (m.type === MSG_HW_PWM) {
-            if (m.len < 15) continue;
+            const r = refLen(m);
+            if (m.len !== 11 + 2 * r) continue;
             // A source only drives a parameter that is from the input, and only
             // if it is floating: graphs saved before types were checked may wire
             // a button to a PWM.
-            const source = (src, fromInput) => fromInput && src && elm.takesType(src) ? src : null;
-            elm.dutySource = source(ref(0), elm.dutyFromInput);
-            elm.freqSource = source(ref(9), elm.freqFromInput);
+            for (const [param, at] of [['duty', 0], ['freq', r + 7]]) {
+                const { node, output } = refAt(m, at);
+                if (elm[param + 'FromInput'] && node && elm.takesType(node, output)) {
+                    elm[param + 'Source'] = node;
+                    elm[param + 'Output'] = output;
+                }
+            }
             elm.syncWires();
-        } else if (ref(0)) {
-            createEdge(ref(0).name, elm.name);     // none if the types don't match
+        } else {
+            const { node, output } = refAt(m, 0);
+            if (node) createEdge(node.name, elm.name, output);     // none if the types don't match
         }
 
         for (const edge of elm.inConns()) {
-            const wire = wires.get(id + ':' + edge.start.node.id) ?? wires.get(id);
+            const wire = wires.get(id + ':' + edge.start.node.id + ':' + edge.start.output) ?? wires.get(id);
             if (!wire) continue;
             edge.start.angle = angle(wire.pay[0], wire.pay[1]);
             edge.end.angle = angle(wire.pay[2], wire.pay[3]);
@@ -287,14 +318,16 @@ function createNode(id,obj) {
 }
 
 // Wire two nodes, a source and an output whose types match; null if they don't.
-function createEdge(id1,id2) {
+// The wire leaves the source from `sourceOutput`, by default its active output.
+function createEdge(id1, id2, sourceOutput) {
     let el1 = elements[id1];
     let el2 = elements[id2];
     const output = el1.actDir === 'inputs' ? el1 : el2;
     const source = output === el1 ? el2 : el1;
-    if (!output.takesType(source)) return null;
+    sourceOutput ??= source.actNum;
+    if (!output.takesType(source, sourceOutput)) return null;
 
-    return new gEdge(el1, el2);
+    return new gEdge(el1, el2, sourceOutput);
 }
 
 // render nodes from elements

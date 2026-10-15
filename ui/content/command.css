@@ -20,7 +20,8 @@
    in small capitals. A button also has a light in the corner, green while it is on. */
 #command > .control-btn,
 #command > .control-slider,
-#command > .control-reading {
+#command > .control-reading,
+#command > .control-light {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -69,6 +70,26 @@
 #command > .control-btn[aria-pressed="true"] > .light {
     background-color: #4BAC4F;
     box-shadow: 0 0 0.5em #4BAC4F;
+}
+
+/* A light: a lamp above the name, green while its signal is on. */
+#command > .control-light {
+    padding-top: 0.6em;
+}
+
+#command > .control-light > .lamp {
+    flex: none;
+    width: 1.6em;
+    height: 1.6em;
+    border-radius: 50%;
+    background-color: #000;
+    box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 6px;
+    transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+#command > .control-light[data-on="true"] > .lamp {
+    background-color: #4BAC4F;
+    box-shadow: 0 0 0.8em #4BAC4F;
 }
 
 /* A button: the whole tile is pressed. */
@@ -121,6 +142,55 @@
     direction: rtl;
     width: auto;
     margin: 0.35em 0 0;
+}
+
+/* A 2D slider: the name and values above a square pad, two columns wide and
+   two rows tall. The pad is a faint crosshair; the puck is the tile's ink. */
+#command > .control-pad {
+    grid-column: span 2;
+    grid-row: span 2;
+    height: calc(12em + var(--step-0));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25em;
+    padding: 0.6em 0.5em 0.75em;
+    color: #20202b;
+    text-align: center;
+}
+
+#command > .control-pad > .name {
+    -webkit-line-clamp: 1;
+}
+
+#command > .control-pad > .pad {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    aspect-ratio: 1;
+    margin-top: 0.35em;
+    border: 1px solid rgba(32, 32, 43, 0.3);
+    border-radius: 0.35em;
+    background:
+        linear-gradient(rgba(32, 32, 43, 0.15), rgba(32, 32, 43, 0.15)) center / 1px 100% no-repeat,
+        linear-gradient(rgba(32, 32, 43, 0.15), rgba(32, 32, 43, 0.15)) center / 100% 1px no-repeat;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+#command > .control-pad > .pad:focus-visible {
+    outline: 2px solid var(--clr-face);
+    outline-offset: 2px;
+}
+
+#command > .control-pad .puck {
+    position: absolute;
+    width: 1.1em;
+    height: 1.1em;
+    border-radius: 50%;
+    background-color: #20202b;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
 }
 
 /* A plot: the name and value above the signal, three columns wide and two

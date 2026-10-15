@@ -22,9 +22,12 @@ class uiADC extends uiComponents {
         this.actDir = "outputs";
         this.actNum = 0;
 
-        this.channel = 0;
+        // The first channel whose pin no other node uses.
+        this.channel = Math.max(0, [...Array(ADC_CHANNELS).keys()]
+            .findIndex(ch => !pinsInUse(this).has(ADC_PIN_FIRST + ch)));
         this.value = NaN;       // volts; no reading yet
         this.unit = 'V';
+        this.shown = false;     // a tile in the Command view
 
         this.buildGraphElement();
     }
@@ -57,12 +60,21 @@ class uiADC extends uiComponents {
         this.update(NaN);
     }
 
+    // Its channel's pin.
+    usedPins() {
+        return [ADC_PIN_FIRST + this.channel];
+    }
+
+    // The channels offered are its own and those whose pin no other node uses.
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        const channels = Array.from({ length: ADC_CHANNELS },
-            (_, ch) => [ch, `ADC${ch} · GPIO ${ADC_PIN_FIRST + ch}`]);
+        const used = pinsInUse(this);
+        const channels = Array.from({ length: ADC_CHANNELS }, (_, ch) => ch)
+            .filter(ch => ch === this.channel || !used.has(ADC_PIN_FIRST + ch))
+            .map(ch => [ch, `ADC${ch} · GPIO ${ADC_PIN_FIRST + ch}`]);
         settings.appendChild(selectSetting('Channel', channels, () => this.channel, (ch) => this.setChannel(ch)));
+        settings.appendChild(shownSetting(this));
     }
 
     // A new reading from the device, 0 to ADC_RAW_FULL, or NaN for none: hand
@@ -77,8 +89,9 @@ class uiADC extends uiComponents {
         return Number.isFinite(this.value) ? `${this.value.toFixed(2)} V` : '–';
     }
 
-    // In the Command view: a tile with the label and the latest reading.
+    // In the Command view, if shown: a tile with the label and the latest reading.
     buildUI(commandInterface) {
+        if (!this.shown) return;
         const control = document.createElement('div');
         control.className = 'control-reading';
         control.innerHTML = `<span class="name"></span><span class="state"></span>`;
@@ -90,6 +103,6 @@ class uiADC extends uiComponents {
     }
 
     marshal() {
-        return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x01, this.channel];
+        return [this.tc, this.shown ? MSG_FLAG_SHOWN : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x01, this.channel];
     }
 }
