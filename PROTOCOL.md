@@ -1096,6 +1096,17 @@ Uptime is first sent at tick 5 and temperature at tick 6, then each every 5 tick
 Core 0 takes every waiting message each pass of its main loop, which waits at most
 10 ms for network work.
 
+**Neither core waits on the other forever.** Each FIFO holds only a few words, and a
+core sending to a full one waits for room. If core 0 waited to send a setup word
+while core 1 waited to send a report, neither would take the other's words. So:
+
+- **Core 1**, while it waits for room in core 0's FIFO, answers a request to pause
+  for a flash write (see [Pausing core 1](#pausing-core-1-for-flash-writes)).
+- **Core 0** sends every word through `push_to_core1` (`src/hwman.c`). While core
+  1's FIFO is full, it takes core 1's messages and keeps them, in order, for its main
+  loop (`take_from_core1`), so core 1 can go on and take core 0's words. It keeps
+  up to 64 messages; more are dropped and logged.
+
 ---
 
 ## Known issues

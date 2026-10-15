@@ -218,6 +218,49 @@ static void push_to_core0(uint32_t word) {
     multicore_fifo_push_blocking(word);
 }
 
+// ── Core 0's side of the FIFO ──
+// Neither core may wait for room in the other's FIFO while the other waits for
+// room in its own: neither would ever drain the other's. Core 1 never does (see
+// push_to_core0, which also answers park requests); core 0, while it waits to
+// send, takes core 1's messages and keeps them, in order, for its main loop. A
+// message is a tag and a value, sent one after the other, so once the tag is
+// taken the value comes at once. Up to CORE1_HELD messages are kept; more, which
+// would take core 1 sending for a long while as core 0 waits, are dropped.
+#define CORE1_HELD 64
+
+static uint32_t held[CORE1_HELD][2];
+static uint8_t held_first = 0, held_count = 0;
+
+void push_to_core1(uint32_t word) {
+    while (!multicore_fifo_wready()) {
+        if (!multicore_fifo_rvalid()) continue;
+        uint32_t tag = multicore_fifo_pop_blocking();
+        uint32_t value = multicore_fifo_pop_blocking();
+        if (held_count == CORE1_HELD) {
+            printf("core 1 message with tag %lu dropped: %d are waiting\n", (unsigned long)tag, CORE1_HELD);
+            continue;
+        }
+        uint8_t i = (held_first + held_count++) % CORE1_HELD;
+        held[i][0] = tag;
+        held[i][1] = value;
+    }
+    multicore_fifo_push_blocking(word);
+}
+
+bool take_from_core1(uint32_t *tag, uint32_t *value) {
+    if (held_count) {
+        *tag = held[held_first][0];
+        *value = held[held_first][1];
+        held_first = (held_first + 1) % CORE1_HELD;
+        held_count--;
+        return true;
+    }
+    if (!multicore_fifo_rvalid()) return false;
+    *tag = multicore_fifo_pop_blocking();
+    *value = multicore_fifo_pop_blocking();
+    return true;
+}
+
 void add_packet(hwel el) {
     // First check if one with the same ID already exists
     hwel_sources *existing = NULL;

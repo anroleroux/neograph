@@ -14,6 +14,7 @@
 
 #include "websockets.h"
 #include "tcpserver.h"
+#include "hwman.h"
 #include "config.h"
 #include "config/config_iterator.h"
 #include "networking/ws_frame.h"
@@ -222,7 +223,7 @@ static void handle_packet(uint8_t *payload, size_t length) {
         while (itr.next(&itr)) {
             for (uint8_t i = 0; i < itr.len && i < FIFO_OUTPUTS_MAX; i++) {
                 printf("command from element %u, output %u, value %u: sending to core 1\n", itr.id, i, itr.pay[i]);
-                multicore_fifo_push_blocking(fifo_action_word(itr.id, i, itr.pay[i]));
+                push_to_core1(fifo_action_word(itr.id, i, itr.pay[i]));
             }
         }
     }

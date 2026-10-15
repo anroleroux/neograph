@@ -87,9 +87,9 @@ int main() {
 
         // Each message from core 1 is a tag and a value (PROTOCOL.md, "Core 1 →
         // core 0"). Take all that are waiting.
-        while (multicore_fifo_rvalid()) {
-            uint32_t tag = multicore_fifo_pop_blocking();
-            uint32_t value = multicore_fifo_pop_blocking();
+        // Some may have been taken while core 0 waited to send (push_to_core1).
+        uint32_t tag, value;
+        while (take_from_core1(&tag, &value)) {
 
             char text[32] = "";
             switch (tag) {

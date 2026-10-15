@@ -137,6 +137,11 @@ int connect_to_wifi(const network_config nw) {
     }
     print_wifi_status(result);
 
+    // Keep the WiFi chip awake. In its default power saving it sleeps between the
+    // router's beacons, and some routers then miss it: the device stops answering
+    // pings and page loads. It draws more current awake, fine on USB or mains power.
+    cyw43_wifi_pm(&cyw43_state, CYW43_PERFORMANCE_PM);
+
     if (net_address_usable(nw.static_address)) {
         // A fixed address. Joining got a DHCP lease first, which gives the
         // network's mask, and its gateway unless one is set.
