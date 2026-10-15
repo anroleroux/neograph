@@ -162,15 +162,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM KEY, TMP ADC, PLT LGT', 'the groups show ' + groups.join(', '));
-    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO | ', 'clicking the open group again left ' + await menu());
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC, PLT LGT, KEY', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO USB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.
@@ -307,6 +307,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
     // Add a USB keyboard typing Ctrl+Alt+Delete, set from its settings, and a
     // momentary button to press it. A keyboard takes a button, not a slider.
+    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
     await page.locator('#add [title="Add a USB keyboard"]').dispatchEvent('click');
     const keyRows = () => page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
     expect(await keyRows() === 'Label:|Types:|Hold:|Key:', 'a new keyboard does not show a key combo: ' + await keyRows());
