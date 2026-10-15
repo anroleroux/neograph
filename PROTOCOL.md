@@ -252,7 +252,7 @@ Every packet payload except `0D` is a sequence of messages:
 | Byte | Field | Notes |
 |---|---|---|
 | 0 | Message type | Which kind of element; see [Element types](#element-types) |
-| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Other bits are 0. |
+| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Other bits are 0. |
 | 2–3 | Element ID | Big endian |
 | 4 | Payload length | Bytes after this header, 0–255 |
 | 5… | Payload | Depends on the type |
@@ -555,11 +555,20 @@ A momentary button `n1` wired to a light `n2`:
 C0000000                    # clean setup; the button and light are skipped
 ```
 
+### Hardware input tiles
+
+A hardware input (core temperature, GPIO input, ADC) shows a tile in the Command view
+only if its settings say so: "Command view: Show | Hide", Hide by default. A light or
+plot wired to it shows its values either way. The choice is saved as `MSG_FLAG_SHOWN`
+in its message's flags; a message without it, such as one saved before the choice
+existed, is hidden. The device ignores the flag.
+
 ### Core temperature
 
 A core temperature node (`30`) is a floating source whose value is the chip's
 temperature in °C, from the `core T` [telemetry text frames](#telemetry-text-frames).
-The Command view shows it on a tile, and a plot wired to it draws it.
+The Command view can show it on a tile (see [Hardware input tiles](#hardware-input-tiles)),
+and a plot wired to it draws it.
 
 - **Nothing new on the device.** Core 1 measures the temperature every 5 ticks (6 s)
   whatever the graph, and core 0 sends it to the most recent client. The UI hands
@@ -572,8 +581,9 @@ The Command view shows it on a tile, and a plot wired to it draws it.
 ### GPIO inputs
 
 A GPIO input node (`31`) is a boolean source: one of the device's header pins, read as
-on or off. In the Command view a tile shows its state, On or Off (`–` until the first
-reading), and the [lights](#lights) wired to it show it too.
+on or off. The Command view can show its state on a tile, On or Off (`–` until the
+first reading; see [Hardware input tiles](#hardware-input-tiles)), and the
+[lights](#lights) wired to it show it too.
 
 - **Pull and polarity.** The pin's pull is none, up or down. "On when" Low
   (`GPI_INVERT`) makes it on while the pin is low: a switch to ground with the pull up.
@@ -615,8 +625,8 @@ the onboard LED `n2` and a light `n3`:
 
 An ADC node (`32`) is a floating source: one of the device's analog inputs, ADC0 to
 ADC2 on GPIO 26 to 28. In the browser its value is the reading in volts, 0 to 3.3
-(1.3 V reads 1.3), and its unit is V. The Command view shows it on a tile, and a plot
-wired to it draws it.
+(1.3 V reads 1.3), and its unit is V. The Command view can show it on a tile (see
+[Hardware input tiles](#hardware-input-tiles)), and a plot wired to it draws it.
 
 - **Two scales.** On the device the reading drives outputs as a fraction of 3.3 V, 0
   to 1, as a slider's value does: 1.3 V puts a PWM's duty 39 % of the way from its
@@ -641,7 +651,7 @@ An ADC on ADC1 (GPIO 27) driving a PWM's duty cycle, and drawn on a plot:
 
 ```hex example=adc-config
 0A 00 25                                        # Config, 37 bytes
-32 00 00 01 01  01                              # ADC n1 on ADC1
+32 02 00 01 01  01                              # ADC n1 on ADC1, its tile shown
 22 01 00 02 11  00 01 00 02 03 E8 01            # PWM n2: duty ← n1, pin 2, 1000 Hz, duty from input
                 32 00 64  00 00 00 00 64 27 10  #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
 02 01 00 03 04  00 01 00 0A                     # plot n3 ← n1, 10 s

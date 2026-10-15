@@ -27,6 +27,7 @@ class uiADC extends uiComponents {
             .findIndex(ch => !pinsInUse(this).has(ADC_PIN_FIRST + ch)));
         this.value = NaN;       // volts; no reading yet
         this.unit = 'V';
+        this.shown = false;     // a tile in the Command view
 
         this.buildGraphElement();
     }
@@ -73,6 +74,7 @@ class uiADC extends uiComponents {
             .filter(ch => ch === this.channel || !used.has(ADC_PIN_FIRST + ch))
             .map(ch => [ch, `ADC${ch} · GPIO ${ADC_PIN_FIRST + ch}`]);
         settings.appendChild(selectSetting('Channel', channels, () => this.channel, (ch) => this.setChannel(ch)));
+        settings.appendChild(shownSetting(this));
     }
 
     // A new reading from the device, 0 to ADC_RAW_FULL, or NaN for none: hand
@@ -87,8 +89,9 @@ class uiADC extends uiComponents {
         return Number.isFinite(this.value) ? `${this.value.toFixed(2)} V` : '–';
     }
 
-    // In the Command view: a tile with the label and the latest reading.
+    // In the Command view, if shown: a tile with the label and the latest reading.
     buildUI(commandInterface) {
+        if (!this.shown) return;
         const control = document.createElement('div');
         control.className = 'control-reading';
         control.innerHTML = `<span class="name"></span><span class="state"></span>`;
@@ -100,6 +103,6 @@ class uiADC extends uiComponents {
     }
 
     marshal() {
-        return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x01, this.channel];
+        return [this.tc, this.shown ? MSG_FLAG_SHOWN : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x01, this.channel];
     }
 }

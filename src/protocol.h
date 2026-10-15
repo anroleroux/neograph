@@ -31,8 +31,12 @@
 /* Message header byte 1, bit 0: each source reference in the payload is 3 bytes, the
    element ID then the index of its output (MSG_FLAG_OUTPUT). Without it, a reference
    is the 2-byte element ID, and means the element's output 0: messages saved before
-   sources had several outputs. Other bits are 0. */
+   sources had several outputs. */
 #define MSG_FLAG_OUTPUT         0x01
+
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) shows
+   a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
+#define MSG_FLAG_SHOWN          0x02
 
 /* Control element types (0x00-0x3F): bit 5 set = HW, bit 4 set = input. */
 #define MSG_HW_BIT              0x20

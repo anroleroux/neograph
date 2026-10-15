@@ -19,6 +19,7 @@ class uiCore extends uiComponents {
 
         this.value = NaN;       // °C; no reading yet
         this.unit = '°C';
+        this.shown = false;     // a tile in the Command view
 
         this.buildGraphElement();
     }
@@ -52,8 +53,14 @@ class uiCore extends uiComponents {
         return Number.isFinite(this.value) ? `${this.value.toFixed(1)} °C` : '–';
     }
 
-    // In the Command view: a tile with the label and the latest temperature.
+    createSettings() {
+        super.createSettings();
+        document.getElementById('settings').appendChild(shownSetting(this));
+    }
+
+    // In the Command view, if shown: a tile with the label and the latest temperature.
     buildUI(commandInterface) {
+        if (!this.shown) return;
         const control = document.createElement('div');
         control.className = 'control-reading';
         control.innerHTML = `<span class="name"></span><span class="state"></span>`;
@@ -65,7 +72,7 @@ class uiCore extends uiComponents {
     }
 
     marshal() {
-        return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x00];
+        return [this.tc, this.shown ? MSG_FLAG_SHOWN : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x00];
     }
 }
 

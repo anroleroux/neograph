@@ -260,6 +260,11 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Add the core temperature and a second plot for it. Its values reach only
     // the browser, so it drives a plot but no hardware output.
     await page.locator('#add [title="Add the core temperature"]').dispatchEvent('click');
+    // A hardware input's tile is hidden until its settings show it.
+    const coreRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
+    expect(coreRows === 'Label:|Command view:' && await page.evaluate(() => elements.n8.shown === false),
+        'the core temperature does not start hidden: ' + coreRows);
+    await choice('Command view', 'Show');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
     const core = await page.evaluate(() => {
         elements.n9.setLabel('Temperature');
@@ -288,6 +293,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         .map(o => o.textContent).join('|'));
     expect(channels === 'ADC0 · GPIO 26|ADC1 · GPIO 27|ADC2 · GPIO 28', 'the ADC offers channels ' + channels);
     await select('Channel').selectOption('1');
+    await choice('Command view', 'Show');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
     const adc = await page.evaluate(() => {
         const adc = elements.n10;
@@ -477,7 +483,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // for it. A GPIO input is boolean: it drives a light, not a PWM.
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add a GPIO input"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|GPIO pin:|Pull:|On when:', 'a GPIO input does not show its settings: ' + await keyRows());
+    expect(await keyRows() === 'Label:|GPIO pin:|Pull:|On when:|Command view:', 'a GPIO input does not show its settings: ' + await keyRows());
     // Its default, GPIO 3, is free; the pins of the GPO (7), the PWMs (15 and 2)
     // and the ADC (ADC1, GPIO 27) are not offered.
     const gpiPins = await pinOptions();
@@ -487,6 +493,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await select('GPIO pin').selectOption('8');
     await choice('Pull', 'Up');
     await choice('On when', 'Low');
+    await choice('Command view', 'Show');
     await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
     await page.locator('#add [title="Add a light"]').dispatchEvent('click');
     const gpi = await page.evaluate(() => {
@@ -506,7 +513,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(gpi.free === '4,0,0', 'free pins are ' + JSON.stringify(gpi));
     expect(gpi.toPwm, 'a GPIO input was wired to a PWM');
     expect(gpi.toLight, 'the GPIO input was not wired to the light, or the light shows a state before any reading');
-    expect(gpi.marshal === '31000013' + '02' + '0805', 'the GPIO input marshals as ' + gpi.marshal);
+    expect(gpi.marshal === '31020013' + '02' + '0805', 'the GPIO input marshals as ' + gpi.marshal);
 
     // A plot shows its source's unit, unless it is given its own.
     const units = await page.evaluate(() => {
@@ -848,6 +855,16 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const resaved = await sent(page);
     expect(resaved.length === 1 && hex(resaved[0]) === hex(saved), 'saving the restored graph changed the config');
     packets.push(...resaved);
+
+    // Hiding a hardware input takes its tile out of the Command view at once.
+    const tilesShown = await page.evaluate(() => [elements.n8.shown, elements.n10.shown, elements.n19.shown].join());
+    const tiles = () => page.evaluate(() => document.querySelectorAll('#command .control-reading').length);
+    await page.evaluate(() => selectById(10));
+    await page.locator('#settings .choice', { has: page.locator('.label:text-is("Command view:")') })
+        .locator('button', { hasText: 'Hide' }).dispatchEvent('click');
+    expect(tilesShown === 'true,true,true' && await tiles() === 2 && await page.evaluate(() => elements.n10.shown === false),
+        `restored shown ${tilesShown}; hiding the ADC left ${await tiles()} reading tiles`);
+    await page.evaluate(() => clearSelection());
 
     // A config with addresses shows them; one without shows none, not the last one's.
     const shown = await page.evaluate(([cfg, firstBoot]) => {

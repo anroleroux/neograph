@@ -22,6 +22,7 @@ class uiGPI extends uiComponents {
         this.pull = GPI_PULL_DOWN;
         this.invert = false;    // on while the pin is low
         this.value = null;      // true or false; null before the first reading
+        this.shown = false;     // a tile in the Command view
 
         this.buildGraphElement();
     }
@@ -79,6 +80,7 @@ class uiGPI extends uiComponents {
             () => String(this.pull), (p) => this.setPull(p)));
         settings.appendChild(choiceSetting('On when', {high: 'High', low: 'Low'},
             () => this.invert ? 'low' : 'high', (l) => this.setActive(l)));
+        settings.appendChild(shownSetting(this));
     }
 
     outputValue(output) {
@@ -98,6 +100,7 @@ class uiGPI extends uiComponents {
 
     // In the Command view: a tile with the label and the latest state.
     buildUI(commandInterface) {
+        if (!this.shown) return;
         const control = document.createElement('div');
         control.className = 'control-reading';
         control.innerHTML = `<span class="name"></span><span class="state"></span>`;
@@ -110,7 +113,7 @@ class uiGPI extends uiComponents {
 
     // The pin, then its pull and whether it is on while low.
     marshal() {
-        return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x02,
+        return [this.tc, this.shown ? MSG_FLAG_SHOWN : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x02,
             this.pin, this.pull | (this.invert ? GPI_INVERT : 0)];
     }
 }

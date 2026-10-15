@@ -147,6 +147,7 @@ function restoreGraph(msgs) {
             elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
+        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
         if (m.type === MSG_HW_GPI && m.len >= 2) {
             elm.setPin(m.pay[0]);
             elm.setPull(m.pay[1] & GPI_PULL_MASK);

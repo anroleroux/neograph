@@ -71,7 +71,7 @@ void test_every_packet_example_is_well_formed(void)
         messages(&it, ex);
         size_t count = 0;
         while (it.next(&it)) {
-            TEST_ASSERT_EQUAL_HEX8_MESSAGE(0x00, it.flags & ~MSG_FLAG_OUTPUT, ex->name);   /* unknown flags */
+            TEST_ASSERT_EQUAL_HEX8_MESSAGE(0x00, it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN), ex->name);   /* unknown flags */
             count++;
         }
         TEST_ASSERT_TRUE_MESSAGE(count > 0, ex->name);

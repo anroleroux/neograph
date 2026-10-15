@@ -115,6 +115,13 @@ function parsePin(pin) {
     return /^\d+$/.test(pin) && pinUsable(Number(pin)) ? Number(pin) : null;
 }
 
+// A settings field for a hardware input: whether the Command view shows its
+// tile (MSG_FLAG_SHOWN). Picking one shows or hides the tile at once.
+function shownSetting(node) {
+    return choiceSetting('Command view', {show: 'Show', hide: 'Hide'}, () => node.shown ? 'show' : 'hide',
+        (v) => { node.shown = v === 'show'; buildCommandInterface(); });
+}
+
 // The PWM slice a GPIO pin is on. The pins of a slice share its counter, so its
 // frequency: GPIO 0, 1, 16 and 17 are slice 0, 2, 3, 18 and 19 slice 1, and so on.
 const pwmSlice = (pin) => (pin >> 1) & 7;

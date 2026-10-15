@@ -266,7 +266,9 @@ int main(int argc, char **argv) {
         config_element_iterator it;
         config_element_iterator_init(&it, p + 3, data_length);
         while (it.next(&it))
-            if (it.flags & ~MSG_FLAG_OUTPUT) fail("a message's flags set a bit other than MSG_FLAG_OUTPUT");
+            if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN)) fail("a message's flags set an unknown bit");
+            else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI)
+                fail("MSG_FLAG_SHOWN on a message that is not a hardware input's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");
 
         switch (p[0]) {
