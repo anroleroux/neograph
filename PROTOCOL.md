@@ -587,6 +587,13 @@ reading), and the [lights](#lights) wired to it show it too.
   core 0 sends as a `gpi P S` [telemetry text frame](#telemetry-text-frames). The UI
   hands it to the GPIO input node on that pin, which hands it to its lights. A browser
   that connects learns the state within a second.
+- **Input buffer on only to read.** Between reads core 1 turns the pin's input buffer
+  off. On the RP2350's A2 stepping (erratum RP2350-E9) a pin with its input buffer on
+  leaks enough to stay near mid-rail after it is let go, against the internal
+  pull-down, and would read high long after; with the buffer off the pull-down brings
+  it low. On that stepping an external pull-down of 8.2 kΩ or less, or a pull-up with
+  a switch to ground, is the surest wiring.
+- **3.3 V signals.** Drive the pin with 3.3 V, the Pico's logic level.
 - **After a save.** The device reads a pin once a saved config has a GPIO input on it,
   so a new node's tile shows `–` until the graph is saved.
 - **The pin is the input's.** The UI doesn't offer it to another node (see
@@ -1020,7 +1027,8 @@ element ID and one of its outputs.
   [usable](#gpio-pins) or a GPO, PWM, ADC or other GPIO input uses it. Up to 16 GPIO
   inputs are kept.
 - **GPI reading:** every 10 ms, each GPIO input's pin is read (inverted with
-  `GPI_INVERT`). A state that differs for 3 reads in a row becomes its state: it drives
+  `GPI_INVERT`), its input buffer on only for the read (erratum RP2350-E9, see
+  [GPIO inputs](#gpio-inputs)). A state that differs for 3 reads in a row becomes its state: it drives
   the outputs wired to the node, `VALUE_FULL` on or 0 off, as an action word would, and
   is reported to core 0 (below). Each state is also reported every second. After any
   output is set up, the next read drives every GPIO input's outputs, as for an ADC.

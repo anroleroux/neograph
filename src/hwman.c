@@ -496,10 +496,23 @@ static void gpi_report(gpi_node *in, absolute_time_t now) {
     in->reported_at = now;
 }
 
+// Read a GPIO input's pin with its input buffer on only for the read. On the
+// RP2350's A2 stepping (erratum RP2350-E9), a pad with its input buffer on leaks
+// enough current to hold a released pin near mid-rail against the internal
+// pull-down, so it would read high long after it was let go. With the buffer
+// off between reads, the pull-down brings the pin low.
+static bool gpi_read(uint8_t pin) {
+    gpio_set_input_enabled(pin, true);
+    busy_wait_us_32(1);         // through the input synchronizer
+    bool high = gpio_get(pin);
+    gpio_set_input_enabled(pin, false);
+    return high;
+}
+
 static void gpi_poll(absolute_time_t now) {
     for (uint8_t i = 0; i < gpi_node_count; i++) {
         gpi_node *in = &gpi_nodes[i];
-        bool on = gpio_get(in->pin) != in->invert;
+        bool on = gpi_read(in->pin) != in->invert;
         if (on == in->on) {
             in->differ = 0;
         } else if (++in->differ >= GPI_DEBOUNCE) {
@@ -533,7 +546,7 @@ static bool gpi_setup(uint16_t id, uint8_t pin, uint8_t options) {
     gpi_node *in = &gpi_nodes[gpi_node_count++];
     *in = (gpi_node){ .id = id, .pin = pin, .invert = options & GPI_INVERT, .drive = true,
                       .reported_at = from_us_since_boot(0) };
-    in->on = gpio_get(pin) != in->invert;
+    in->on = gpi_read(pin) != in->invert;      // leaves the input buffer off (see gpi_read)
     printf("GPI on GPIO %d for ID %d, options %02X\n", pin, id, options);
     return true;
 }
