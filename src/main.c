@@ -105,6 +105,9 @@ int main() {
             case FIFO_TAG_ADC:
                 snprintf(text, sizeof text, "adc %u %u", (unsigned)fifo_adc_channel(value), (unsigned)fifo_adc_raw(value));
                 break;
+            case FIFO_TAG_GPI:
+                snprintf(text, sizeof text, "gpi %u %u", (unsigned)fifo_gpi_pin(value), (unsigned)fifo_gpi_on(value));
+                break;
             case FIFO_TAG_LED:
                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, value);
                 break;

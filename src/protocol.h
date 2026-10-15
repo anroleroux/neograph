@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_ and KEYBOARD_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_ and KEYBOARD_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -53,7 +53,7 @@
 #define MSG_HW_PWM              0x22
 #define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
 #define MSG_HW_CORE             0x30    /* the core temperature, from telemetry */
-#define MSG_HW_GPI              0x31    /* reserved */
+#define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 
 /* Supporting and networking element types. */
@@ -128,6 +128,15 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ADC_CHANNELS            3
 #define ADC_PIN_FIRST           26
 #define ADC_RAW_FULL            4095    /* a 12-bit reading at the reference voltage, 3.3 V */
+
+/* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
+   options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
+   is high, 1 = on while it is low. */
+#define GPI_PULL_MASK           0x03
+#define GPI_PULL_NONE           0x00
+#define GPI_PULL_UP             0x01
+#define GPI_PULL_DOWN           0x02
+#define GPI_INVERT              0x04
 
 /* USB keyboard (MSG_HW_KEYBOARD) payload byte 2: what it types each time its input goes on. */
 #define KEYBOARD_COMBO          0x00    /* one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key */
@@ -226,6 +235,7 @@ static inline int pwm_payload_read(const uint8_t *pay, uint8_t len, uint8_t flag
 #define FIFO_TAG_LED            2       /* value: onboard LED state, 0 or 1 */
 #define FIFO_TAG_ADC            3       /* value: an ADC reading, see fifo_adc_word */
 #define FIFO_TAG_KEYBOARD       4       /* value: the ID of a USB keyboard whose input went on */
+#define FIFO_TAG_GPI            5       /* value: a GPIO input's state, see fifo_gpi_word */
 
 /* An action word carries an output index in the 5 bits a setup word carries a type in. */
 #define FIFO_OUTPUTS_MAX        32
@@ -261,6 +271,15 @@ static inline uint8_t fifo_op_output(uint32_t word) { return (word >> 24) & 0x1F
 static inline uint32_t fifo_adc_word(uint8_t channel, uint16_t raw) { return (uint32_t)channel << 16 | raw; }
 static inline uint8_t fifo_adc_channel(uint32_t word) { return (word >> 16) & 0xFF; }
 static inline uint16_t fifo_adc_raw(uint32_t word) { return word & 0xFFFF; }
+
+/* GPI options word, sent after a GPIO input's setup word: [7:0] its options (GPI_). */
+static inline uint32_t fifo_gpi_options_word(uint8_t options) { return options; }
+static inline uint8_t fifo_gpi_options(uint32_t word) { return word & 0xFF; }
+
+/* GPI word, the value after FIFO_TAG_GPI: [31:16] the pin · [0] 1 = on (after GPI_INVERT). */
+static inline uint32_t fifo_gpi_word(uint8_t pin, int on) { return (uint32_t)pin << 16 | (on ? 1 : 0); }
+static inline uint8_t fifo_gpi_pin(uint32_t word) { return (word >> 16) & 0xFF; }
+static inline int fifo_gpi_on(uint32_t word) { return word & 1; }
 
 /* Reference word, sent after a setup word for LED/GPO/PWM/keyboard: [31:16] source
    element ID · [7:0] the source's output index. */

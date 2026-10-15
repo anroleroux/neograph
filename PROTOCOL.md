@@ -69,7 +69,7 @@ sequenceDiagram
     UI->>C0: 0x0B / 0x0C field update (written to flash)
     Note over UI: user saves the graph
     UI->>C0: 0x0A Config (written to flash)
-    C0->>C1: setup words for each LED/GPO/PWM/ADC/keyboard
+    C0->>C1: setup words for each LED/GPO/PWM/ADC/GPI/keyboard
     Note over UI: user presses a button
     UI->>C0: 0x01 Command
     C0->>C1: action word
@@ -124,7 +124,7 @@ header included, is what the device stores in flash (see [Storage](#storage)).
 - **HW → UI.** Sent on connect, after `0D`, if flash holds a config. The UI
   rebuilds its graph from it (see [Restoring the graph](#restoring-the-graph)).
 - **UI → HW.** Sent when the user saves the graph. The device writes the whole
-  packet to flash, then sends setup words for each LED, GPO, PWM and ADC element to core 1.
+  packet to flash, then sends setup words for each LED, GPO, PWM, ADC and GPIO input element to core 1.
 
 [Part 2](#part-2-config-model) describes the payload; [The graph](#the-graph) has a
 full example.
@@ -224,9 +224,11 @@ connected client as WebSocket text frames:
 | `uptime N` | Uptime in 1.2 s ticks (integer) |
 | `core T` | Chip temperature in °C, two decimals |
 | `adc C R` | A reading of ADC channel C (0–2): R from 0 to 4095 (`ADC_RAW_FULL`, 3.3 V) |
+| `gpi P S` | The state of the GPIO input on pin P: S is 1 on, 0 off (after its "On when") |
 
 The UI hands `core T` to the [core temperature](#core-temperature) nodes, `adc C R`
-to the [ADC](#adc-inputs) nodes on channel C, and ignores `uptime N`.
+to the [ADC](#adc-inputs) nodes on channel C, `gpi P S` to the
+[GPIO input](#gpio-inputs) node on pin P, and ignores `uptime N`.
 
 ### Limits
 
@@ -322,7 +324,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `22` | `MSG_HW_PWM` | HW output: PWM pin | Implemented |
 | `23` | `MSG_HW_KEYBOARD` | HW output: a keystroke typed to the PC over USB | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
-| `31` | `MSG_HW_GPI` | HW input: GPIO pin | Reserved |
+| `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
 | `A0` | `MSG_STRING` | String: a node's label | Implemented |
 | `A1` | `MSG_LAYOUT` | A node's position in the graph | Implemented |
@@ -342,6 +344,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `01` Light | 3 | Bytes 0–2: source reference (0 = not connected). The device ignores light messages in a config: the light is drawn in the browser (see [Lights](#lights)). |
 | `02` Plot | 4–20 | Bytes 0–2: source reference (0 = not connected) · byte 3: time window, 1–255 s (UI default 10) · bytes 4…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
+| `31` GPIO input | 2 | Byte 0: the GPIO pin, a [usable](#gpio-pins) one (UI default 3). Byte 1: options; bits 0–1 (`GPI_PULL_MASK`) the pin's pull, `GPI_PULL_NONE` (0), `GPI_PULL_UP` (1) or `GPI_PULL_DOWN` (2, UI default); bit 2 (`GPI_INVERT`): 0 = on while the pin is high (UI default), 1 = on while it is low. Other bits are 0. See [GPIO inputs](#gpio-inputs). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -416,11 +419,12 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button | `20` LED, `21` GPO, `23` USB keyboard, `01` light | 0 or 1 (`00` / `FF`) |
+| Boolean | `10` button, `31` GPIO input | `20` LED, `21` GPO, `23` USB keyboard, `01` light | 0 or 1 (`00` / `FF`) |
 | Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts in the browser, 0 to 1 on the device; the core temperature in °C |
 
 The core temperature's values reach only the browser, so it drives a plot but not a
-PWM. An ADC's are on the device, so it drives both. The UI only draws wires between matching types, and drops mismatched source references
+PWM. An ADC's are on the device, so it drives both; so are a GPIO input's, which drives
+an LED, GPO or USB keyboard on the device and a light in the browser. The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
 
 When the user saves, the UI sends a `0A` config whose payload is:
@@ -478,15 +482,15 @@ When a config arrives, the UI rebuilds the graph from it:
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `32` ADC) becomes a node with the message's ID. If an ID
+  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPO its pin, a USB keyboard its keystroke, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a GPO its pin, a USB keyboard its keystroke, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
-  restored node of the output's [type](#wire-types): an LED's, GPO's, USB keyboard's or light's button, a plot's slider, 2D slider, ADC or core temperature, and the sliders, 2D sliders or
+  restored node of the output's [type](#wire-types): an LED's, GPO's, USB keyboard's or light's button or GPIO input, a plot's slider, 2D slider, ADC or core temperature, and the sliders, 2D sliders or
   ADCs of a PWM's parameters that follow an input. A reference without an output
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
@@ -555,6 +559,39 @@ The Command view shows it on a tile, and a plot wired to it draws it.
   wired to it draws nothing.
 - **Browser only.** The device never sees these values as a source, so a core
   temperature can't drive a PWM; the UI refuses that wire.
+
+### GPIO inputs
+
+A GPIO input node (`31`) is a boolean source: one of the device's header pins, read as
+on or off. In the Command view a tile shows its state, On or Off (`–` until the first
+reading), and the [lights](#lights) wired to it show it too.
+
+- **Pull and polarity.** The pin's pull is none, up or down. "On when" Low
+  (`GPI_INVERT`) makes it on while the pin is low: a switch to ground with the pull up.
+  The default, pull down and on while high, suits a switch to 3.3 V.
+- **On the device.** Core 1 reads the pin every 10 ms. A new state, held for 3 reads
+  in a row (30 ms) so a bouncing switch changes it once, drives the outputs wired to
+  the node directly, `FF` on and `00` off, as a button's command would: an LED, GPO or
+  USB keyboard follows the pin without the browser (see
+  [Core 1 behaviour](#core-1-behaviour)).
+- **In the browser.** Core 1 reports each change, and the state every second, which
+  core 0 sends as a `gpi P S` [telemetry text frame](#telemetry-text-frames). The UI
+  hands it to the GPIO input node on that pin, which hands it to its lights. A browser
+  that connects learns the state within a second.
+- **After a save.** The device reads a pin once a saved config has a GPIO input on it,
+  so a new node's tile shows `–` until the graph is saved.
+- **The pin is the input's.** A GPO, PWM, ADC or other GPIO input on the same pin is
+  refused by core 1; the first setup on a pin wins (see [Known issues](#known-issues)).
+
+A GPIO input `n1` on GPIO 3, pulled up and on while low (a switch to ground), driving
+the onboard LED `n2` and a light `n3`:
+
+```hex example=gpi-config
+0A 00 17                                        # Config, 23 bytes
+31 00 00 01 02  03 05                           # GPIO input n1 on GPIO 3: pull up, on while low
+20 01 00 02 03  00 01 00                        # LED n2 ← n1
+01 01 00 03 03  00 01 00                        # light n3 ← n1
+```
 
 ### ADC inputs
 
@@ -819,7 +856,7 @@ Every exchange starts with an **operation word**:
 | `op` | Constant | Sent by | Followed by |
 |---|---|---|---|
 | 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per payload byte: the value of one output of the element. Also `0A` config and each connect, after the setup words: a 2D slider's home | Nothing |
-| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM/ADC/keyboard message | For an LED, GPO, PWM or keyboard, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel |
+| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM/ADC/GPI/keyboard message | For an LED, GPO, PWM or keyboard, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel. For a GPIO input, the low byte is its pin, and a GPI options word follows: bits 7–0 its options (`fifo_gpi_options_word`) |
 | 3 | `FIFO_OP_CLEAN_SETUP` | `0A` config and on each connect, once, before the setup words | Nothing |
 
 A setup word carries the low 5 bits of the element type. Core 1 sets bit 5 on decode,
@@ -910,6 +947,15 @@ C0000000                    # clean setup
 80000200 00010000           # setup LED n2, source n1 output 0
 ```
 
+The words for the [gpi-config example](#gpio-inputs). A GPIO input's setup word carries
+its pin and is followed by its options word; the light is skipped:
+
+```fifo example=gpi-config
+C0000000                    # clean setup
+91000103 00000005           # setup GPI n1, type 31 → 11, GPIO 3; options: pull up, on while low
+80000200 00010000           # setup LED n2, source n1
+```
+
 The words for the [keyboard-config example](#usb-keyboards). A keyboard's setup word
 carries nothing in its low byte, and is followed by its reference word: core 0 keeps
 the keystroke, and core 1 only needs to know which source drives it. The buttons are
@@ -952,10 +998,19 @@ element ID and one of its outputs.
   constant value, or at its min if it follows an input. The PWM goes in the table
   under its duty source, and also under its frequency source, each entry marked
   with the parameter that source drives.
-  A GPO or PWM on a pin that isn't [usable](#gpio-pins), or that another GPO, PWM or
-  ADC already uses, is skipped: it reads its further words but doesn't touch the pin
+  A GPO or PWM on a pin that isn't [usable](#gpio-pins), or that another GPO, PWM,
+  ADC or GPIO input already uses, is skipped: it reads its further words but doesn't touch the pin
   or go in the table.
   A keyboard goes in the table under its source, and touches no pin.
+- **GPI setup** (`op` 2, type `31`): reads the options word (waiting up to 1 ms) and
+  makes the pin in the low byte an input with its pull, unless the pin isn't
+  [usable](#gpio-pins) or a GPO, PWM, ADC or other GPIO input uses it. Up to 16 GPIO
+  inputs are kept.
+- **GPI reading:** every 10 ms, each GPIO input's pin is read (inverted with
+  `GPI_INVERT`). A state that differs for 3 reads in a row becomes its state: it drives
+  the outputs wired to the node, `VALUE_FULL` on or 0 off, as an action word would, and
+  is reported to core 0 (below). Each state is also reported every second. After any
+  output is set up, the next read drives every GPIO input's outputs, as for an ADC.
 - **ADC setup** (`op` 2, type `32`): starts sampling the channel in the low byte, on
   GPIO 26 + channel, unless another GPO or PWM uses that pin. Several ADC nodes may
   share a channel; up to 16 ADC nodes are kept.
@@ -1027,6 +1082,7 @@ Each message is two words: a **tag**, then a **value**.
 | 2 | `FIFO_TAG_LED` | 0 or 1 | Sets the onboard LED |
 | 3 | `FIFO_TAG_ADC` | Bits 31–16 the channel, 15–0 the reading, 0–4095 (`fifo_adc_word`) | Sends text frame `adc C R` |
 | 4 | `FIFO_TAG_KEYBOARD` | The keyboard's element ID | Types its keystroke (see [USB keyboards](#usb-keyboards)) |
+| 5 | `FIFO_TAG_GPI` | Bits 23–16 the pin, bit 0 1 = on (`fifo_gpi_word`) | Sends text frame `gpi P S` |
 
 Uptime is first sent at tick 5 and temperature at tick 6, then each every 5 ticks.
 Core 0 takes every waiting message each pass of its main loop, which waits at most
@@ -1079,8 +1135,8 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 12. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
     at one frequency. Two PWM outputs on the same slice both run at the frequency of
     the one set up last; the UI doesn't warn about it.
-13. **The UI lets two nodes claim one pin.** Two GPOs, PWMs or an ADC and a GPO or
-    PWM may name the same pin. Core 1 sets up the first and skips the others (it logs
+13. **The UI lets two nodes claim one pin.** Two GPOs, PWMs, GPIO inputs, or an ADC
+    and one of those, may name the same pin. Core 1 sets up the first and skips the others (it logs
     each), but the UI doesn't warn about it.
 14. **ADC readings carry power-supply noise.** The Pico 2 W's switching regulator
     runs in its power-saving mode, which adds ripple to the ADC's 3.3 V reference.
@@ -1104,8 +1160,8 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 - **Constants** live in [`src/protocol.h`](src/protocol.h) and
   [`ui/content/protocol.js`](ui/content/protocol.js). `make test` fails if a `PKT_`,
-  `MSG_`, `FIELD_` or `NET_OPT_` constant is missing from either file or has a
-  different value.
+  `MSG_`, `FIELD_`, `NET_OPT_`, `GPI_` or other mirrored constant is missing from either
+  file or has a different value.
 - **Examples.** `make test` extracts every `hex example=<name>` and
   `fifo example=<name>` block from this file into `tests/protocol_examples.h`
   (`make/examples.awk`). `tests/test_protocol.c` then checks:

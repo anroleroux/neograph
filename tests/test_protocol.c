@@ -340,7 +340,9 @@ void test_wires_join_matching_types(void)
         while (it.next(&it)) {
             if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD || it.type == MSG_UI_INDICATOR) {
                 msg_ref src = msg_ref_at(it.pay, it.flags);
-                if (src.id) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_BUTTON, element_type(ex, src.id), ex->name);
+                /* A boolean source: a button or a GPIO input. */
+                if (src.id) TEST_ASSERT_TRUE_MESSAGE(element_type(ex, src.id) == MSG_UI_BUTTON
+                                                     || element_type(ex, src.id) == MSG_HW_GPI, ex->name);
                 TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, src.output, ex->name);
             } else if (it.type == MSG_HW_PWM) {
                 pwm_payload pwm;
@@ -364,6 +366,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_KEYBOARD & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_GPI, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPI, 1, 3)));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -501,6 +504,28 @@ void test_slider_2d_config(void)
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
+void test_gpi_config(void)
+{
+    config_element_iterator it;
+    messages(&it, example("gpi-config"));
+
+    assert_message(&it, MSG_HW_GPI, 1, 2);
+    TEST_ASSERT_TRUE(pin_usable(it.pay[0]));
+    TEST_ASSERT_EQUAL_UINT8(3, it.pay[0]);
+    TEST_ASSERT_EQUAL_HEX8(GPI_PULL_UP, it.pay[1] & GPI_PULL_MASK);
+    TEST_ASSERT_EQUAL_HEX8(GPI_INVERT, it.pay[1] & GPI_INVERT);
+    assert_message(&it, MSG_HW_LED, 2, 3);
+    assert_message(&it, MSG_UI_INDICATOR, 3, 3);
+    TEST_ASSERT_FALSE(it.next(&it));
+
+    /* The state core 1 reports for it. */
+    uint32_t word = fifo_gpi_word(28, 1);
+    TEST_ASSERT_EQUAL_UINT8(28, fifo_gpi_pin(word));
+    TEST_ASSERT_EQUAL_INT(1, fifo_gpi_on(word));
+    TEST_ASSERT_EQUAL_INT(0, fifo_gpi_on(fifo_gpi_word(28, 0)));
+    TEST_ASSERT_EQUAL_HEX8(0x05, fifo_gpi_options(fifo_gpi_options_word(0x05)));
+}
+
 void test_light_config(void)
 {
     config_element_iterator it;
@@ -573,6 +598,12 @@ static void assert_setup_words(const char *name)
             TEST_ASSERT_TRUE(n + 1 <= words->len);
             TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, it.pay[0]), words->words[n++]);
             continue;
+        case MSG_HW_GPI:
+            /* The pin, then its options: a GPIO input is a source too. */
+            TEST_ASSERT_TRUE(n + 2 <= words->len);
+            TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, it.pay[0]), words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_gpi_options_word(it.pay[1]), words->words[n++]);
+            continue;
         default: continue;
         }
         TEST_ASSERT_TRUE(n + 2 <= words->len);
@@ -605,6 +636,7 @@ void test_fifo_setup_words_match_keyboard_config(void) { assert_setup_words("key
 void test_fifo_setup_words_match_slider_2d_config(void) { assert_setup_words("slider-2d-config"); }
 void test_fifo_setup_words_match_legacy_config(void) { assert_setup_words("legacy-config"); }
 void test_fifo_setup_words_match_light_config(void) { assert_setup_words("light-config"); }
+void test_fifo_setup_words_match_gpi_config(void) { assert_setup_words("gpi-config"); }
 
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c):
  * one per payload byte, for the element's output of the same index. */
@@ -692,12 +724,14 @@ int main(void)
     RUN_TEST(test_slider_2d_config);
     RUN_TEST(test_legacy_config);
     RUN_TEST(test_light_config);
+    RUN_TEST(test_gpi_config);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_setup_words_match_adc_config);
     RUN_TEST(test_fifo_setup_words_match_keyboard_config);
     RUN_TEST(test_fifo_setup_words_match_slider_2d_config);
     RUN_TEST(test_fifo_setup_words_match_legacy_config);
     RUN_TEST(test_fifo_setup_words_match_light_config);
+    RUN_TEST(test_fifo_setup_words_match_gpi_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_action_words_match_command_slider_2d);

@@ -41,7 +41,7 @@ const MSG_HW_GPO             = 0x21;
 const MSG_HW_PWM             = 0x22;
 const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_CORE            = 0x30;  // the core temperature, from telemetry
-const MSG_HW_GPI             = 0x31;  // reserved
+const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
 
 // Supporting and networking element types.
@@ -97,6 +97,15 @@ const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable
 const ADC_CHANNELS           = 3;
 const ADC_PIN_FIRST          = 26;
 const ADC_RAW_FULL           = 4095;  // a 12-bit reading at the reference voltage, 3.3 V
+
+// GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pinUsable). Byte 1:
+// options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
+// is high, 1 = on while it is low.
+const GPI_PULL_MASK          = 0x03;
+const GPI_PULL_NONE          = 0x00;
+const GPI_PULL_UP            = 0x01;
+const GPI_PULL_DOWN          = 0x02;
+const GPI_INVERT             = 0x04;
 
 // USB keyboard (MSG_HW_KEYBOARD) payload byte 2: what it types each time its input goes on.
 const KEYBOARD_COMBO         = 0x00;  // one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key

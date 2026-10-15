@@ -168,7 +168,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC, PLT LGT, KEY', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -471,6 +471,32 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         'the light was wired as ' + JSON.stringify(light));
     expect(light.marshal === '01010012' + '03' + '000d00', 'the light marshals as ' + light.marshal);
 
+    // Add a GPIO input on GPIO 8, pulled up and on while low, and a second light
+    // for it. A GPIO input is boolean: it drives a light, not a PWM.
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a GPIO input"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|GPIO pin:|Pull:|On when:', 'a GPIO input does not show its settings: ' + await keyRows());
+    await select('GPIO pin').selectOption('8');
+    await choice('Pull', 'Up');
+    await choice('On when', 'Low');
+    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a light"]').dispatchEvent('click');
+    const gpi = await page.evaluate(() => {
+        const [input, light] = [elements.n19, elements.n20];
+        light.setLabel('Door');
+        return {
+            settings: [input.pin, input.pull, input.invert].join(),
+            rejected: input.setPin('23') === false && input.setPull(3) === false && input.setActive('x') === false,
+            toPwm: createEdge('n19', 'n4') === null,
+            toLight: createEdge('n19', 'n20') !== null && light.sourceID() === 19 && light.on === null,
+            marshal: input.marshal().map(b => b.toString(16).padStart(2, '0')).join(''),
+        };
+    });
+    expect(gpi.settings === '8,1,true' && gpi.rejected, 'the GPIO input settings gave ' + JSON.stringify(gpi));
+    expect(gpi.toPwm, 'a GPIO input was wired to a PWM');
+    expect(gpi.toLight, 'the GPIO input was not wired to the light, or the light shows a state before any reading');
+    expect(gpi.marshal === '31000013' + '02' + '0805', 'the GPIO input marshals as ' + gpi.marshal);
+
     // A plot shows its source's unit, unless it is given its own.
     const units = await page.evaluate(() => {
         const [speed, temp, level] = [elements.n7, elements.n9, elements.n11];
@@ -516,7 +542,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const held = page.locator('#command .control-btn').nth(1);
     const box = await held.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    const lamp = () => page.locator('#command .control-light').evaluate(l => l.dataset.on + ' ' + l.querySelector('.state').textContent);
+    const lamp = () => page.locator('#command .control-light').first().evaluate(l => l.dataset.on + ' ' + l.querySelector('.state').textContent);
     expect(await lamp() === 'false Off', 'the light does not start off: ' + await lamp());
     await page.mouse.down();
     expect(await held.getAttribute('aria-pressed') === 'true', 'the momentary button is not on while held');
@@ -633,6 +659,17 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         plot: elements.n11.samples.map(([, v]) => v === null ? '' : v.toFixed(4)).join(),
     }));
     expect(reading.tile === '1.65 V', 'the ADC tile shows ' + reading.tile);
+
+    // GPIO input states reach the GPIO input on their pin only, its tile and its light.
+    const door = () => page.evaluate(() => [
+        [...document.querySelectorAll('#command .control-reading')].find(t => t.title.startsWith('GPIO input')).querySelector('.state').textContent,
+        document.querySelectorAll('#command .control-light')[1].querySelector('.state').textContent,
+        document.querySelectorAll('#command .control-light')[1].dataset.on].join(' '));
+    expect(await door() === '– – false', 'before any reading the GPIO input and its light show ' + await door());
+    await page.evaluate(() => { window.__ws.receive('gpi 8 1'); window.__ws.receive('gpi 9 0'); });
+    expect(await door() === 'On On true', 'pin 8 on shows ' + await door());
+    await page.evaluate(() => window.__ws.receive('gpi 8 0'));
+    expect(await door() === 'Off Off false', 'pin 8 off shows ' + await door());
     expect(reading.plot === ',1.6504', 'the ADC plot holds ' + reading.plot);
     await toCommandView(page);
     const plotStates = await page.$$eval('#command .control-plot .state', ss => ss.map(s => s.textContent).join('|'));
@@ -697,15 +734,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
-        const pwm = new uiPWM(400, 300);      // n19, no wires yet
-        new uiButton(-400, 300);              // n20
+        const pwm = new uiPWM(400, 300);      // n21, no wires yet
+        new uiButton(-400, 300);              // n22
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
-        selectById(19);
+        selectById(21);
         const fromPwm = marked();
         clearSelection();
         toggleConnectMode();
-        selectById(19);
+        selectById(21);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
         const input = [...document.querySelectorAll('#settings .editable.select')]
@@ -715,7 +752,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
-            buttonToPwm: createEdge('n20', 'n19') === null && pwm.setSource('duty', elements.n20) === false
+            buttonToPwm: createEdge('n22', 'n21') === null && pwm.setSource('duty', elements.n22) === false
                 && pwm.inConns().length === 0,
         };
     });
@@ -726,14 +763,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n20', 'n2');
+        createEdge('n22', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n20' && replaced.button === 'n3,n14' && replaced.wires === 1,
+    expect(replaced.led === 'n22' && replaced.button === 'n3,n14' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
@@ -762,11 +799,12 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             elements.n17.freqSource?.name, elements.n17.freqOutput, elements.n17.inConns().map(c => c.outputName.textContent).join('')].join(),
         pads: document.querySelectorAll('#command .control-pad').length,
         light: [elements.n18.sourceID(), elements.n18.on, document.querySelectorAll('#command .control-light').length].join(),
+        gpi: [elements.n19.pin, elements.n19.pull, elements.n19.invert, elements.n20.sourceID()].join(),
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting|Stick|Stick Y|Motor|Light', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 13
-        && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 4 && restored.readings === 2
-        && restored.pad === '64:191,true,immediate,120,0:15:1,n15,0,n15,1,XY' && restored.pads === 1 && restored.light === '13,false,1'
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting|Stick|Stick Y|Motor|Light|GPIO input|Door', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 14
+        && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 4 && restored.readings === 3
+        && restored.pad === '64:191,true,immediate,120,0:15:1,n15,0,n15,1,XY' && restored.pads === 1 && restored.light === '13,false,2' && restored.gpi === '8,1,true,19'
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 2
         && restored.keyboards === 'Ctrl+Alt+Delete,13,true,false,"hello\\n",1',

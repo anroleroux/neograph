@@ -71,7 +71,8 @@ class uiCore extends uiComponents {
 
 // Telemetry from the device, a text frame (see PROTOCOL.md, "Telemetry text
 // frames"): "core T" is the chip temperature, which the core nodes pass on, and
-// "adc C R" a reading R of ADC channel C, which that channel's ADC nodes pass on.
+// "adc C R" a reading R of ADC channel C, which that channel's ADC nodes pass on,
+// and "gpi P S" the state S (1 on, 0 off) of GPIO input pin P, which its node passes on.
 function receiveTelemetry(text) {
     const [name, ...values] = text.split(' ');
     if (name === 'core') {
@@ -80,5 +81,8 @@ function receiveTelemetry(text) {
     } else if (name === 'adc') {
         const [channel, raw] = values.map(Number);
         Object.values(elements).filter(e => e instanceof uiADC && e.channel === channel).forEach(e => e.update(raw));
+    } else if (name === 'gpi') {
+        const [pin, on] = values.map(Number);
+        Object.values(elements).filter(e => e instanceof uiGPI && e.pin === pin).forEach(e => e.update(on === 1));
     }
 }

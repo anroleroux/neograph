@@ -29,6 +29,7 @@ const NODE_CLASSES = {
     [MSG_UI_INDICATOR]: uiIndicator,
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
+    [MSG_HW_GPI]: uiGPI,
     [MSG_HW_KEYBOARD]: uiKeyboard,
 };
 
@@ -146,6 +147,11 @@ function restoreGraph(msgs) {
             elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
+        if (m.type === MSG_HW_GPI && m.len >= 2) {
+            elm.setPin(m.pay[0]);
+            elm.setPull(m.pay[1] & GPI_PULL_MASK);
+            elm.setActive(m.pay[1] & GPI_INVERT ? 'low' : 'high');
+        }
         if (m.type === MSG_HW_PWM && m.len === 11 + 2 * r) {
             // After the duty source, and after the frequency source.
             const q = (i) => m.pay[r + i], f = (i) => m.pay[2 * r + 7 + i];

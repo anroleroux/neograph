@@ -22,4 +22,6 @@
 
 /* {{adc-js}} */
 
+/* {{gpi-js}} */
+
 /* {{keyboard-js}} */

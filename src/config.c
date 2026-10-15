@@ -438,6 +438,19 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             break;
         }
 
+        case MSG_HW_GPI:
+            // Core 1 reads the pin; the options word follows.
+            if (itr.len != 2) break;
+
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPI, itr.id, itr.pay[0]);
+            multicore_fifo_push_blocking(control_setup_msg);
+            printf("send hw GPI setup %X\n",control_setup_msg);
+
+            control_setup_msg = fifo_gpi_options_word(itr.pay[1]);
+            multicore_fifo_push_blocking(control_setup_msg);
+            printf("send hw GPI setup %X\n",control_setup_msg);
+            break;
+
         case MSG_HW_ADC:
             if (itr.len != 1 || itr.pay[0] >= ADC_CHANNELS) break;
 

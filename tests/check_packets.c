@@ -54,10 +54,10 @@ static bool has_refs(uint8_t type) {
 }
 
 /* A source reference must name an output of a source the output takes (PROTOCOL.md,
-   "Wire types"): a button for an LED, GPO or keyboard, a slider, 2D slider or an ADC
+   "Wire types"): a button or GPIO input for an LED, GPO, keyboard or light, a slider, 2D slider or an ADC
    for a PWM, and those or the core temperature for a plot. `types` lists the types it
    may be, ending in 0. */
-static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, 0 };
+static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, 0 };
 static const uint8_t FLOATING_HW[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, 0 };
 
@@ -93,7 +93,7 @@ static void check_config(const uint8_t *p, size_t len) {
             break;
         case MSG_UI_INDICATOR:
             if (it.len != r) fail("light message is not one source reference");
-            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a light is wired from something other than a button");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a light is wired from something other than a button or a GPIO input");
             break;
         case MSG_UI_SLIDER_2D:
             if (it.len != 4) fail("2D slider message is not its options, return speed and home");
@@ -115,6 +115,12 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_HW_CORE:
             if (it.len != 0) fail("core temperature message is not empty");
             break;
+        case MSG_HW_GPI:
+            if (it.len != 2) fail("GPIO input message is not 2 bytes; the device would skip it");
+            else if (!pin_usable(it.pay[0])) fail("GPIO input pin is not in PIN_USABLE_MASK");
+            else if (it.pay[1] & ~(GPI_PULL_MASK | GPI_INVERT)) fail("GPIO input options have unknown bits");
+            else if ((it.pay[1] & GPI_PULL_MASK) == GPI_PULL_MASK) fail("GPIO input has no such pull");
+            break;
         case MSG_HW_ADC:
             if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
             else if (it.pay[0] >= ADC_CHANNELS) fail("ADC channel is not below ADC_CHANNELS");
@@ -122,16 +128,16 @@ static void check_config(const uint8_t *p, size_t len) {
         /* unmarshal_controls only sets up outputs with exactly these lengths */
         case MSG_HW_LED:
             if (it.len != r) fail("LED message is not one source reference; the device would skip it");
-            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "an LED is wired from something other than a button");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "an LED is wired from something other than a button or a GPIO input");
             break;
         case MSG_HW_GPO:
             if (it.len != r + 1) fail("GPO message is not a source and a pin; the device would skip it");
             else if (!pin_usable(it.pay[r])) fail("GPO pin is not in PIN_USABLE_MASK");
-            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a GPO is wired from something other than a button");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a GPO is wired from something other than a button or a GPIO input");
             break;
         case MSG_HW_KEYBOARD:
             if (!keyboard_payload_valid(it.pay, it.len, it.flags)) fail("keyboard payload is not one the device types; it would skip it");
-            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a keyboard is wired from something other than a button");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a keyboard is wired from something other than a button or a GPIO input");
             break;
         case MSG_HW_PWM: {
             pwm_payload pwm;

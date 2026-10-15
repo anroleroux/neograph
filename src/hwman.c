@@ -423,6 +423,78 @@ static bool adc_setup(uint16_t id, uint8_t channel) {
     return true;
 }
 
+// ── GPIO inputs ──
+// Each GPIO input node's pin is read every GPI_SAMPLE_MS. A new state, held for
+// GPI_DEBOUNCE reads in a row so a bouncing switch changes it once, drives the
+// outputs wired to the node (VALUE_FULL on, 0 off), as a command from the browser
+// would, and is reported to core 0 for the browser. The state is also reported
+// every GPI_REPORT_MS, so a browser that connects later learns it.
+#define GPI_SAMPLE_MS       10
+#define GPI_DEBOUNCE        3
+#define GPI_REPORT_MS       1000
+#define GPI_NODES_MAX       16
+
+typedef struct {
+    uint16_t id;
+    uint8_t pin;
+    bool invert;                // on while the pin is low
+    bool on;                    // the debounced state
+    uint8_t differ;             // reads in a row that differ from it
+    bool drive;                 // drive the outputs at the next read, whatever the state
+    absolute_time_t reported_at;
+} gpi_node;
+
+static gpi_node gpi_nodes[GPI_NODES_MAX];
+static uint8_t gpi_node_count = 0;
+
+static void gpi_report(gpi_node *in, absolute_time_t now) {
+    push_to_core0(FIFO_TAG_GPI);
+    push_to_core0(fifo_gpi_word(in->pin, in->on));
+    in->reported_at = now;
+}
+
+static void gpi_poll(absolute_time_t now) {
+    for (uint8_t i = 0; i < gpi_node_count; i++) {
+        gpi_node *in = &gpi_nodes[i];
+        bool on = gpio_get(in->pin) != in->invert;
+        if (on == in->on) {
+            in->differ = 0;
+        } else if (++in->differ >= GPI_DEBOUNCE) {
+            in->on = on;
+            in->differ = 0;
+            in->drive = true;
+            gpi_report(in, now);
+        }
+        if (in->drive) {
+            in->drive = false;
+            drive_outputs(in->id, 0, in->on ? VALUE_FULL : 0, false);
+        }
+        if (absolute_time_diff_us(in->reported_at, now) >= GPI_REPORT_MS * 1000) gpi_report(in, now);
+    }
+}
+
+// Set up a GPIO input node on its pin, with its pull. Returns false if it can't
+// be: the pin isn't usable or is in use, or there are GPI_NODES_MAX nodes.
+static bool gpi_setup(uint16_t id, uint8_t pin, uint8_t options) {
+    if (!pin_usable(pin) || (used_pins & (1u << pin)) || gpi_node_count == GPI_NODES_MAX) return false;
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_IN);
+    switch (options & GPI_PULL_MASK) {
+    case GPI_PULL_UP: gpio_pull_up(pin); break;
+    case GPI_PULL_DOWN: gpio_pull_down(pin); break;
+    default: gpio_disable_pulls(pin); break;
+    }
+    used_pins |= 1u << pin;
+
+    // Reported and driven at the first read.
+    gpi_node *in = &gpi_nodes[gpi_node_count++];
+    *in = (gpi_node){ .id = id, .pin = pin, .invert = options & GPI_INVERT, .drive = true,
+                      .reported_at = from_us_since_boot(0) };
+    in->on = gpio_get(pin) != in->invert;
+    printf("GPI on GPIO %d for ID %d, options %02X\n", pin, id, options);
+    return true;
+}
+
 void core1_worker() {
     printf("(core1) started\n");
     
@@ -434,6 +506,7 @@ void core1_worker() {
     uint64_t next_coretm_timeout = 6;
     absolute_time_t next_adc_sample = start;
     absolute_time_t next_adc_report = start;
+    absolute_time_t next_gpi_sample = start;
 
     core1_running = true;
     __dmb();
@@ -457,6 +530,10 @@ void core1_worker() {
         if (time_reached(next_adc_report)) {
             adc_report(now);
             next_adc_report = delayed_by_ms(now, ADC_REPORT_MS);
+        }
+        if (time_reached(next_gpi_sample)) {
+            gpi_poll(now);
+            next_gpi_sample = delayed_by_ms(now, GPI_SAMPLE_MS);
         }
 
         uint32_t op;
@@ -536,11 +613,20 @@ void core1_worker() {
                     }
                     break;
 
+                case MSG_HW_GPI:
+                    // A source, as an ADC: its options word follows.
+                    multicore_fifo_pop_timeout_us(1000, &op);
+                    if (!gpi_setup(decop.id, decop.io, fifo_gpi_options(op))) {
+                        printf("hw man skipping GPI on ID %i: GPIO %d is not usable or in use\n",
+                               decop.id, decop.io);
+                    }
+                    break;
+
                 default:
                     break;
                 }
 
-                if (decop.control_type == MSG_HW_ADC) break;
+                if (decop.control_type == MSG_HW_ADC || decop.control_type == MSG_HW_GPI) break;
                 if (!usable) {
                     printf("hw man skipping control type %02X on ID %i: GPIO %d is not usable or in use\n",
                            decop.control_type, decop.id, decop.io);
@@ -549,9 +635,10 @@ void core1_worker() {
                 add_packet(decop);
                 printf("hw man adding control type %02X on ID %i\n",decop.control_type,decop.id);
 
-                // An output set up after its ADC source was sampled gets the
-                // source's value at the next sample, not at its next change.
+                // An output set up after its ADC or GPI source was read gets the
+                // source's value at the next read, not at its next change.
                 for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) adc_inputs[ch].drive = true;
+                for (uint8_t i = 0; i < gpi_node_count; i++) gpi_nodes[i].drive = true;
                 break;
             }
 
@@ -560,6 +647,7 @@ void core1_worker() {
                 memset(pwm_outs, 0, sizeof pwm_outs);
                 memset(adc_inputs, 0, sizeof adc_inputs);
                 adc_node_count = 0;
+                gpi_node_count = 0;
                 for (uint gpio = 0; gpio < PWM_PINS; gpio++) {
                     if (!(used_pins & (1u << gpio))) continue;
                     if (gpio_get_function(gpio) == GPIO_FUNC_PWM) {
