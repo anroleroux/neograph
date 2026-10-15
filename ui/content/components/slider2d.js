@@ -1,8 +1,12 @@
+// The longest return speed a 2D slider saves, in % of its range per second.
+const SLIDER_2D_SPEED_MAX = 255;
+
 // A 2D slider: a square pad in the Command view whose puck sets two floating
 // outputs, X (0 at the left to 1 at the right) and Y (0 at the bottom to 1 at
-// the top). A wire leaves it from the output picked in its settings. Let go,
-// it stays where it is, or with "Return to centre" springs back to 0.5, 0.5
-// like a joystick.
+// the top). A wire leaves it from the output picked in its settings, which
+// then turns to the other one. Let go, it stays where it is, or with "Return
+// to centre" goes back to 0.5, 0.5 like a joystick: in a straight line at its
+// return speed, or at once if the speed is 0.
 class uiSlider2D extends uiComponents {
     constructor(x = 0, y = 0) {
         super("slider2d", x, y);
@@ -27,6 +31,7 @@ class uiSlider2D extends uiComponents {
 
         this.values = [0, 0];
         this.returns = false;       // to the centre when let go
+        this.returnSpeed = 100;     // % of the range per second; 0 = at once
 
         this.buildGraphElement();
     }
@@ -60,10 +65,26 @@ class uiSlider2D extends uiComponents {
         this.returns = release === 'centre';
     }
 
+    // How fast it returns to the centre: a whole number of % of its range per
+    // second, 0 to SLIDER_2D_SPEED_MAX; 0 returns at once.
+    setReturnSpeed(speed) {
+        speed = String(speed).trim();
+        if (!/^\d+$/.test(speed) || Number(speed) > SLIDER_2D_SPEED_MAX) return false;
+        this.returnSpeed = Number(speed);
+    }
+
     // The output new wires leave from: 0 (X) or 1 (Y).
     setWireOutput(output) {
         this.actNum = output;
         if (wireMode && selected) highlightSelection();     // mark what that output can be wired to
+    }
+
+    // A wire from one output: the next leaves from the other.
+    addEdge(e) {
+        super.addEdge(e);
+        if (e.start.node !== this) return;
+        this.setWireOutput(1 - e.start.output);
+        if (selected === this) this.createSettings();
     }
 
     createSettings() {
@@ -72,13 +93,18 @@ class uiSlider2D extends uiComponents {
         settings.appendChild(choiceSetting('Wire from', {0: 'X', 1: 'Y'},
             () => String(this.actNum), (o) => this.setWireOutput(Number(o))));
         settings.appendChild(choiceSetting('When let go', {stay: 'Stay', centre: 'Return to centre'},
-            () => this.returns ? 'centre' : 'stay', (r) => this.setRelease(r)));
+            () => this.returns ? 'centre' : 'stay', (r) => { this.setRelease(r); this.createSettings(); }));
+        if (this.returns) {
+            settings.appendChild(editableSetting('Return speed (%/s, 0 = at once)', () => this.returnSpeed,
+                (v) => this.setReturnSpeed(v), {type: 'number', min: 0, max: SLIDER_2D_SPEED_MAX, step: 1}));
+        }
     }
 
     // In the Command view: a tile with the label, the values of X and Y from 0
     // to 1, and the pad. Dragging anywhere on the pad moves the puck there; the
     // arrow keys move it a step (Shift: ten). As a slider's, only a change of
-    // a value's byte is sent, with both values in one command.
+    // a value's byte is sent, with both values in one command. Returning to
+    // the centre sends each step on the way; touching the pad stops it.
     buildUI(commandInterface) {
         const control = document.createElement('div');
         control.className = 'control-pad';
@@ -109,13 +135,46 @@ class uiSlider2D extends uiComponents {
             show();
             this.sendValues(values);
         };
-        const release = () => { if (this.returns) move(VALUE_HALF, VALUE_HALF); };
+        // The return to the centre: one step each frame, in a straight line. The
+        // position is kept unrounded, so a slow return still moves.
+        let returning = null;
+        const stop = () => {
+            cancelAnimationFrame(returning);
+            returning = null;
+        };
+        const release = () => {
+            if (!this.returns) return;
+            stop();
+            if (this.returnSpeed === 0) {
+                move(VALUE_HALF, VALUE_HALF);
+                return;
+            }
+            let pos = this.values.map(v => v * VALUE_FULL);
+            let last = performance.now();
+            const step = (now) => {
+                if (!pad.isConnected) return;       // the Command view was rebuilt
+                const d = this.returnSpeed / 100 * VALUE_FULL * Math.max(0, now - last) / 1000;
+                last = now;
+                const dx = VALUE_HALF - pos[0], dy = VALUE_HALF - pos[1];
+                const left = Math.hypot(dx, dy);
+                if (left <= d) {
+                    returning = null;
+                    move(VALUE_HALF, VALUE_HALF);
+                    return;
+                }
+                pos = [pos[0] + dx / left * d, pos[1] + dy / left * d];
+                move(pos[0], pos[1]);
+                returning = requestAnimationFrame(step);
+            };
+            returning = requestAnimationFrame(step);
+        };
 
         const point = (e) => {
             const box = pad.getBoundingClientRect();
             move((e.clientX - box.left) / box.width * VALUE_FULL, (box.bottom - e.clientY) / box.height * VALUE_FULL);
         };
         pad.addEventListener('pointerdown', (e) => {
+            stop();
             pad.setPointerCapture(e.pointerId);
             point(e);
         });
@@ -128,6 +187,7 @@ class uiSlider2D extends uiComponents {
             const step = steps[e.key];
             if (!step) return;
             e.preventDefault();
+            stop();
             const n = e.shiftKey ? 10 : 1;
             move(this.values[0] * VALUE_FULL + step[0] * n, this.values[1] * VALUE_FULL + step[1] * n);
         });
@@ -136,10 +196,11 @@ class uiSlider2D extends uiComponents {
         commandInterface.appendChild(control);
     }
 
+    // Its options, then its return speed.
     marshal() {
         return [
-            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x01,
-            this.returns ? SLIDER_RETURN : 0x00,
+            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x02,
+            this.returns ? SLIDER_RETURN : 0x00, this.returnSpeed,
         ];
     }
 }

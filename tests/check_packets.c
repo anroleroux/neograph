@@ -92,7 +92,7 @@ static void check_config(const uint8_t *p, size_t len) {
             else if (it.pay[0] & ~SLIDER_VERTICAL) fail("slider orientation has bits other than SLIDER_VERTICAL");
             break;
         case MSG_UI_SLIDER_2D:
-            if (it.len != 1) fail("2D slider message is not 1 byte");
+            if (it.len != 2) fail("2D slider message is not its options and return speed");
             else if (it.pay[0] & ~SLIDER_RETURN) fail("2D slider options have bits other than SLIDER_RETURN");
             break;
         case MSG_UI_GRAPH:

@@ -126,7 +126,10 @@ function restoreGraph(msgs) {
         if (m.type === MSG_UI_SLIDER && m.len >= 1) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
-        if (m.type === MSG_UI_SLIDER_2D && m.len >= 1) elm.setRelease(m.pay[0] & SLIDER_RETURN ? 'centre' : 'stay');
+        if (m.type === MSG_UI_SLIDER_2D && m.len >= 1) {
+            elm.setRelease(m.pay[0] & SLIDER_RETURN ? 'centre' : 'stay');
+            elm.setReturnSpeed(m.len >= 2 ? m.pay[1] : 0);      // without a speed, at once
+        }
         if (m.type === MSG_UI_BUTTON && m.len >= 1) elm.setAction(m.pay[0] & BUTTON_MOMENTARY ? 'momentary' : 'toggle');
         if (m.type === MSG_HW_GPO && m.len >= r + 1) elm.setPin(m.pay[r]);
         if (m.type === MSG_HW_KEYBOARD && m.len >= r + 1) elm.setStroke(m.pay.slice(r));

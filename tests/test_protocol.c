@@ -477,8 +477,9 @@ void test_slider_2d_config(void)
     config_element_iterator it;
     messages(&it, example("slider-2d-config"));
 
-    assert_message(&it, MSG_UI_SLIDER_2D, 1, 1);
+    assert_message(&it, MSG_UI_SLIDER_2D, 1, 2);
     TEST_ASSERT_EQUAL_HEX8(SLIDER_RETURN, it.pay[0]);
+    TEST_ASSERT_EQUAL_UINT8(100, it.pay[1]);                      /* return speed, %/s */
     assert_message(&it, MSG_HW_PWM, 2, 17);
     pwm_payload pwm;
     TEST_ASSERT_TRUE(pwm_payload_read(it.pay, it.len, it.flags, &pwm));
