@@ -128,7 +128,11 @@ function restoreGraph(msgs) {
         }
         if (m.type === MSG_UI_SLIDER_2D && m.len >= 1) {
             elm.setRelease(m.pay[0] & SLIDER_RETURN ? 'centre' : 'stay');
-            elm.setReturnSpeed(m.len >= 2 ? m.pay[1] : 0);      // without a speed, at once
+            const ease = Object.keys(SLIDER_2D_EASES)
+                .find(e => SLIDER_2D_EASES[e].bits === (m.pay[0] & SLIDER_EASE_MASK));
+            elm.setReturnEase(ease);                            // an unknown one keeps the default
+            if (m.len >= 2) elm.setReturnSpeed(m.pay[1]);       // 0 keeps the default
+            else elm.setReturnEase('immediate');                // saved before returns had a speed
         }
         if (m.type === MSG_UI_BUTTON && m.len >= 1) elm.setAction(m.pay[0] & BUTTON_MOMENTARY ? 'momentary' : 'toggle');
         if (m.type === MSG_HW_GPO && m.len >= r + 1) elm.setPin(m.pay[r]);

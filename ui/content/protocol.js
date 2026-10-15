@@ -73,8 +73,13 @@ const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from h
 const SLIDER_VERTICAL        = 0x01;
 
 // 2D slider (MSG_UI_SLIDER_2D) payload byte 0, bit 0: 0 = it stays where it is let go,
-// 1 = it returns to the centre (VALUE_HALF on both outputs).
+// 1 = it returns to the centre (VALUE_HALF on both outputs). Bits 1-2: how it returns.
+// Byte 1: its return speed, 1-255 % of its range per second.
 const SLIDER_RETURN          = 0x01;
+const SLIDER_EASE_MASK       = 0x06;
+const SLIDER_EASE_IMMEDIATE  = 0x00;  // at once
+const SLIDER_EASE_LINEAR     = 0x02;  // at a steady speed
+const SLIDER_EASE_SIGMOID    = 0x04;  // speeding up, then slowing down (smoothstep)
 
 // Button (MSG_UI_BUTTON) payload byte 0, bit 0: 0 = each click toggles it, 1 = it is on
 // while held. A button without the byte is a toggle.

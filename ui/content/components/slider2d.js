@@ -1,12 +1,21 @@
-// The longest return speed a 2D slider saves, in % of its range per second.
+// The fastest return speed a 2D slider saves, in % of its range per second.
 const SLIDER_2D_SPEED_MAX = 255;
+
+// How a 2D slider returns to the centre: its SLIDER_EASE_ value, and the
+// fraction of the way it has gone at a fraction u of the time.
+const SLIDER_2D_EASES = {
+    immediate: { bits: SLIDER_EASE_IMMEDIATE },
+    linear: { bits: SLIDER_EASE_LINEAR, at: (u) => u },
+    sigmoid: { bits: SLIDER_EASE_SIGMOID, at: (u) => u * u * (3 - 2 * u) },
+};
 
 // A 2D slider: a square pad in the Command view whose puck sets two floating
 // outputs, X (0 at the left to 1 at the right) and Y (0 at the bottom to 1 at
 // the top). A wire leaves it from the output picked in its settings, which
 // then turns to the other one. Let go, it stays where it is, or with "Return
-// to centre" goes back to 0.5, 0.5 like a joystick: in a straight line at its
-// return speed, or at once if the speed is 0.
+// to centre" goes back to 0.5, 0.5 like a joystick: at once, or in a straight
+// line, linearly or in an S-curve, taking as long as its speed gives for the
+// distance.
 class uiSlider2D extends uiComponents {
     constructor(x = 0, y = 0) {
         super("slider2d", x, y);
@@ -31,7 +40,8 @@ class uiSlider2D extends uiComponents {
 
         this.values = [0, 0];
         this.returns = false;       // to the centre when let go
-        this.returnSpeed = 100;     // % of the range per second; 0 = at once
+        this.returnEase = 'linear'; // a key of SLIDER_2D_EASES
+        this.returnSpeed = 100;     // % of the range per second, on average
 
         this.buildGraphElement();
     }
@@ -65,11 +75,17 @@ class uiSlider2D extends uiComponents {
         this.returns = release === 'centre';
     }
 
-    // How fast it returns to the centre: a whole number of % of its range per
-    // second, 0 to SLIDER_2D_SPEED_MAX; 0 returns at once.
+    // How it returns to the centre: 'immediate', 'linear' or 'sigmoid'.
+    setReturnEase(ease) {
+        if (!Object.hasOwn(SLIDER_2D_EASES, ease)) return false;
+        this.returnEase = ease;
+    }
+
+    // How fast it returns to the centre, on average: a whole number of % of its
+    // range per second, 1 to SLIDER_2D_SPEED_MAX.
     setReturnSpeed(speed) {
         speed = String(speed).trim();
-        if (!/^\d+$/.test(speed) || Number(speed) > SLIDER_2D_SPEED_MAX) return false;
+        if (!/^\d+$/.test(speed) || Number(speed) < 1 || Number(speed) > SLIDER_2D_SPEED_MAX) return false;
         this.returnSpeed = Number(speed);
     }
 
@@ -94,9 +110,12 @@ class uiSlider2D extends uiComponents {
             () => String(this.actNum), (o) => this.setWireOutput(Number(o))));
         settings.appendChild(choiceSetting('When let go', {stay: 'Stay', centre: 'Return to centre'},
             () => this.returns ? 'centre' : 'stay', (r) => { this.setRelease(r); this.createSettings(); }));
-        if (this.returns) {
-            settings.appendChild(editableSetting('Return speed (%/s, 0 = at once)', () => this.returnSpeed,
-                (v) => this.setReturnSpeed(v), {type: 'number', min: 0, max: SLIDER_2D_SPEED_MAX, step: 1}));
+        if (!this.returns) return;
+        settings.appendChild(choiceSetting('Return', {immediate: 'Immediate', linear: 'Linear', sigmoid: 'Sigmoid'},
+            () => this.returnEase, (e) => { this.setReturnEase(e); this.createSettings(); }));
+        if (this.returnEase !== 'immediate') {
+            settings.appendChild(editableSetting('Speed (%/s)', () => this.returnSpeed,
+                (v) => this.setReturnSpeed(v), {type: 'number', min: 1, max: SLIDER_2D_SPEED_MAX, step: 1}));
         }
     }
 
@@ -135,8 +154,8 @@ class uiSlider2D extends uiComponents {
             show();
             this.sendValues(values);
         };
-        // The return to the centre: one step each frame, in a straight line. The
-        // position is kept unrounded, so a slow return still moves.
+        // The return to the centre: one step each frame, in a straight line, the
+        // ease giving how far along it is. It takes the distance over the speed.
         let returning = null;
         const stop = () => {
             cancelAnimationFrame(returning);
@@ -145,26 +164,21 @@ class uiSlider2D extends uiComponents {
         const release = () => {
             if (!this.returns) return;
             stop();
-            if (this.returnSpeed === 0) {
+            const ease = SLIDER_2D_EASES[this.returnEase].at;
+            const from = this.values.map(v => v * VALUE_FULL);
+            const distance = Math.hypot(VALUE_HALF - from[0], VALUE_HALF - from[1]);
+            const duration = distance / (this.returnSpeed / 100 * VALUE_FULL) * 1000;
+            if (!ease || duration === 0) {
                 move(VALUE_HALF, VALUE_HALF);
                 return;
             }
-            let pos = this.values.map(v => v * VALUE_FULL);
-            let last = performance.now();
+            const start = performance.now();
             const step = (now) => {
                 if (!pad.isConnected) return;       // the Command view was rebuilt
-                const d = this.returnSpeed / 100 * VALUE_FULL * Math.max(0, now - last) / 1000;
-                last = now;
-                const dx = VALUE_HALF - pos[0], dy = VALUE_HALF - pos[1];
-                const left = Math.hypot(dx, dy);
-                if (left <= d) {
-                    returning = null;
-                    move(VALUE_HALF, VALUE_HALF);
-                    return;
-                }
-                pos = [pos[0] + dx / left * d, pos[1] + dy / left * d];
-                move(pos[0], pos[1]);
-                returning = requestAnimationFrame(step);
+                const u = Math.min(1, Math.max(0, now - start) / duration);
+                const f = ease(u);
+                move(from[0] + (VALUE_HALF - from[0]) * f, from[1] + (VALUE_HALF - from[1]) * f);
+                returning = u < 1 ? requestAnimationFrame(step) : null;
             };
             returning = requestAnimationFrame(step);
         };
@@ -196,11 +210,11 @@ class uiSlider2D extends uiComponents {
         commandInterface.appendChild(control);
     }
 
-    // Its options, then its return speed.
+    // Its options (whether and how it returns), then its return speed.
     marshal() {
+        const options = (this.returns ? SLIDER_RETURN : 0x00) | SLIDER_2D_EASES[this.returnEase].bits;
         return [
-            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x02,
-            this.returns ? SLIDER_RETURN : 0x00, this.returnSpeed,
+            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x02, options, this.returnSpeed,
         ];
     }
 }

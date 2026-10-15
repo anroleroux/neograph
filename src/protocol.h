@@ -106,8 +106,13 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define SLIDER_VERTICAL         0x01
 
 /* 2D slider (MSG_UI_SLIDER_2D) payload byte 0, bit 0: 0 = it stays where it is let go,
-   1 = it returns to the centre (VALUE_HALF on both outputs). */
+   1 = it returns to the centre (VALUE_HALF on both outputs). Bits 1-2: how it returns.
+   Byte 1: its return speed, 1-255 % of its range per second. */
 #define SLIDER_RETURN           0x01
+#define SLIDER_EASE_MASK        0x06
+#define SLIDER_EASE_IMMEDIATE   0x00    /* at once */
+#define SLIDER_EASE_LINEAR      0x02    /* at a steady speed */
+#define SLIDER_EASE_SIGMOID     0x04    /* speeding up, then slowing down (smoothstep) */
 
 /* Button (MSG_UI_BUTTON) payload byte 0, bit 0: 0 = each click toggles it, 1 = it is on
    while held. A button without the byte is a toggle. */

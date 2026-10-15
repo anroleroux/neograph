@@ -358,17 +358,26 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add [title="Add a 2D slider"]').dispatchEvent('click');
     expect(await keyRows() === 'Label:|Wire from:|When let go:', 'a 2D slider does not show its settings: ' + await keyRows());
     await choice('When let go', 'Return to centre');
-    expect(await keyRows() === 'Label:|Wire from:|When let go:|Return speed (%/s, 0 = at once):',
-        'returning to the centre does not show its speed: ' + await keyRows());
+    expect(await keyRows() === 'Label:|Wire from:|When let go:|Return:|Speed (%/s):',
+        'returning to the centre does not show its shape and speed: ' + await keyRows());
+    // The speed's input has room to type in.
+    await page.locator('#settings .editable', { has: page.locator('.label:text-is("Speed (%/s):")') })
+        .locator('svg').first().dispatchEvent('click');
+    const speedInput = await page.locator('#settings .editable input').evaluate(i => [i.value, i.getBoundingClientRect().width]);
+    expect(speedInput[0] === '100' && speedInput[1] >= 50, 'the speed input is ' + JSON.stringify(speedInput));
+    await page.locator('#settings .editable input').fill('120');
+    await page.locator('#settings .editable input').press('Enter');
+    await page.evaluate(() => { document.body.scrollLeft = 0; });     // typing scrolled the settings into view
     const speeds = await page.evaluate(() => {
         const s = elements.n15;
-        const start = s.returnSpeed;
-        const rejected = s.setReturnSpeed('256') === false && s.setReturnSpeed('-1') === false
-            && s.setReturnSpeed('1.5') === false && s.setReturnSpeed('x') === false;
-        s.setReturnSpeed('0');      // at once, for the exact commands below
-        return { start, rejected, now: s.returnSpeed };
+        const typed = s.returnSpeed;
+        const rejected = s.setReturnSpeed('256') === false && s.setReturnSpeed('0') === false && s.setReturnSpeed('-1') === false
+            && s.setReturnSpeed('1.5') === false && s.setReturnSpeed('x') === false && s.setReturnEase('bounce') === false;
+        return { typed, rejected, ease: s.returnEase };
     });
-    expect(speeds.start === 100 && speeds.rejected && speeds.now === 0, 'the return speed settings gave ' + JSON.stringify(speeds));
+    expect(speeds.typed === 120 && speeds.rejected && speeds.ease === 'linear', 'the return settings gave ' + JSON.stringify(speeds));
+    await choice('Return', 'Immediate');        // for the exact commands below
+    expect(await keyRows() === 'Label:|Wire from:|When let go:|Return:', 'an immediate return shows ' + await keyRows());
     await choice('Wire from', 'Y');
     await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
@@ -544,21 +553,31 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const yTrace = await page.evaluate(() => elements.n16.samples.slice(-4).map(([, v]) => v.toFixed(2)).join());
     expect(yTrace === '1.00,0.50,0.50,0.50', 'the plot did not follow Y: ' + yTrace);
 
-    // At a return speed, letting go takes it back to the centre in steps, each
-    // nearer than the last.
-    await page.evaluate(() => elements.n15.setReturnSpeed('200'));
-    await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(padBox.x - 40, padBox.y + padBox.height + 40);     // past the bottom-left corner: 0, 0
-    await page.mouse.up();
-    await page.waitForFunction(() => document.querySelector('#command .control-pad .state').textContent === '0.50, 0.50');
-    const glides = await sent(page);
-    const glide = glides.map(p => [p[8], p[9]]);
-    const back = glide.slice(glide.findIndex(([x, y]) => x === 0 && y === 0));
-    const nearer = back.every(([x, y], i) => i === 0 || (x >= back[i - 1][0] && y >= back[i - 1][1] && x === y));
-    expect(back.length > 3 && nearer && back.at(-1).join() === '128,128',
-        'the gradual return sent ' + JSON.stringify(glide));
-    packets.push(...glides);
+    // A linear or sigmoid return takes it back to the centre in steps, each
+    // nearer than the last. Linear steps are even; sigmoid ones grow, then shrink.
+    for (const ease of ['linear', 'sigmoid']) {
+        await page.evaluate((ease) => { elements.n15.setReturnEase(ease); elements.n15.setReturnSpeed('100'); }, ease);
+        await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(padBox.x - 40, padBox.y + padBox.height + 40);     // past the bottom-left corner: 0, 0
+        const released = await page.evaluate(() => performance.now());
+        await page.mouse.up();
+        await page.waitForFunction(() => elements.n15.values.every(v => v === VALUE_HALF / VALUE_FULL));
+        const took = await page.evaluate((t) => performance.now() - t, released);
+        const glides = await sent(page);
+        const glide = glides.map(p => [p[8], p[9]]);
+        const back = glide.slice(glide.findIndex(([x, y]) => x === 0 && y === 0));
+        const nearer = back.every(([x, y], i) => i === 0 || (x >= back[i - 1][0] && y >= back[i - 1][1] && x === y));
+        expect(back.length > 3 && nearer && back.at(-1).join() === '128,128',
+            `the ${ease} return sent ` + JSON.stringify(glide));
+        // From a corner at 100 %/s: about 0.7 s, whatever the shape.
+        expect(took > 500 && took < 1500, `the ${ease} return took ${took} ms`);
+        const third = Math.floor(back.length / 3);
+        const gain = (a, b) => back[b][0] - back[a][0];
+        const [start, middle, end] = [gain(0, third), gain(third, 2 * third), gain(2 * third, back.length - 1)];
+        if (ease === 'sigmoid') expect(middle > start && middle > end, `the sigmoid return moved ${start}, ${middle}, ${end} by thirds`);
+        packets.push(...glides);
+    }
 
     // The device's temperature telemetry reaches the core node, its tile and its plot.
     await page.evaluate(() => window.__ws.receive('core 31.27'));
@@ -701,14 +720,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         buttons: document.querySelectorAll('#command .control-btn').length,
         keyboards: [elements.n12.describe(), elements.n12.sourceID(), elements.n13.momentary, elements.n1.momentary,
             JSON.stringify(elements.n14.text), elements.n14.sourceID()].join(),
-        pad: [elements.n15.returns, elements.n15.returnSpeed, elements.n16.sourceRef().join(':'), elements.n17.dutySource?.name, elements.n17.dutyOutput,
+        pad: [elements.n15.returns, elements.n15.returnEase, elements.n15.returnSpeed, elements.n16.sourceRef().join(':'), elements.n17.dutySource?.name, elements.n17.dutyOutput,
             elements.n17.freqSource?.name, elements.n17.freqOutput, elements.n17.inConns().map(c => c.outputName.textContent).join('')].join(),
         pads: document.querySelectorAll('#command .control-pad').length,
     }));
     expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting|Stick|Stick Y|Motor', 'labels not restored: ' + restored.labels);
     expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 12
         && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 4 && restored.readings === 2
-        && restored.pad === 'true,0,0:15:1,n15,0,n15,1,XY' && restored.pads === 1
+        && restored.pad === 'true,immediate,120,0:15:1,n15,0,n15,1,XY' && restored.pads === 1
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 2
         && restored.keyboards === 'Ctrl+Alt+Delete,13,true,false,"hello\\n",1',

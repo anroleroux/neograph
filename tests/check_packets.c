@@ -93,7 +93,9 @@ static void check_config(const uint8_t *p, size_t len) {
             break;
         case MSG_UI_SLIDER_2D:
             if (it.len != 2) fail("2D slider message is not its options and return speed");
-            else if (it.pay[0] & ~SLIDER_RETURN) fail("2D slider options have bits other than SLIDER_RETURN");
+            else if (it.pay[0] & ~(SLIDER_RETURN | SLIDER_EASE_MASK)) fail("2D slider options have unknown bits");
+            else if ((it.pay[0] & SLIDER_EASE_MASK) == SLIDER_EASE_MASK) fail("2D slider return has no such shape");
+            else if (it.pay[1] == 0) fail("2D slider return speed is 0");
             break;
         case MSG_UI_GRAPH:
             if (it.len < r + 1 || it.len > r + 1 + 16) fail("plot message is not a source and window plus a unit of up to 16");

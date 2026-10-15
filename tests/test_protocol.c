@@ -478,8 +478,10 @@ void test_slider_2d_config(void)
     messages(&it, example("slider-2d-config"));
 
     assert_message(&it, MSG_UI_SLIDER_2D, 1, 2);
-    TEST_ASSERT_EQUAL_HEX8(SLIDER_RETURN, it.pay[0]);
+    TEST_ASSERT_EQUAL_HEX8(SLIDER_RETURN | SLIDER_EASE_LINEAR, it.pay[0]);
     TEST_ASSERT_EQUAL_UINT8(100, it.pay[1]);                      /* return speed, %/s */
+    TEST_ASSERT_EQUAL_HEX8(0, SLIDER_RETURN & SLIDER_EASE_MASK);
+    TEST_ASSERT_EQUAL_HEX8(SLIDER_EASE_LINEAR | SLIDER_EASE_SIGMOID, SLIDER_EASE_MASK);
     assert_message(&it, MSG_HW_PWM, 2, 17);
     pwm_payload pwm;
     TEST_ASSERT_TRUE(pwm_payload_read(it.pay, it.len, it.flags, &pwm));
