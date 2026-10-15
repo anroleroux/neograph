@@ -107,7 +107,8 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 
 /* 2D slider (MSG_UI_SLIDER_2D) payload byte 0, bit 0: 0 = it stays where it is let go,
    1 = it returns to the centre (VALUE_HALF on both outputs). Bits 1-2: how it returns.
-   Byte 1: its return speed, 1-255 % of its range per second. */
+   Byte 1: its return speed, 1-255 % of its range per second. Bytes 2-3: its home, X then
+   Y as values (0 to VALUE_FULL): where it starts, and where it returns to. */
 #define SLIDER_RETURN           0x01
 #define SLIDER_EASE_MASK        0x06
 #define SLIDER_EASE_IMMEDIATE   0x00    /* at once */
@@ -171,6 +172,12 @@ static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len, uint8_
         if ((k[i] < 0x20 || k[i] > 0x7E) && k[i] != '\t' && k[i] != '\n') return 0;
     }
     return 1;
+}
+
+/* A 2D slider's home, X then Y as values: payload bytes 2-3, or without them the centre. */
+static inline void slider_2d_home(const uint8_t *pay, uint8_t len, uint8_t home[2]) {
+    home[0] = len >= 4 ? pay[2] : VALUE_HALF;
+    home[1] = len >= 4 ? pay[3] : VALUE_HALF;
 }
 
 /* A PWM (MSG_HW_PWM) payload, read by pwm_payload_read. */

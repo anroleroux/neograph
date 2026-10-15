@@ -92,7 +92,7 @@ static void check_config(const uint8_t *p, size_t len) {
             else if (it.pay[0] & ~SLIDER_VERTICAL) fail("slider orientation has bits other than SLIDER_VERTICAL");
             break;
         case MSG_UI_SLIDER_2D:
-            if (it.len != 2) fail("2D slider message is not its options and return speed");
+            if (it.len != 4) fail("2D slider message is not its options, return speed and home");
             else if (it.pay[0] & ~(SLIDER_RETURN | SLIDER_EASE_MASK)) fail("2D slider options have unknown bits");
             else if ((it.pay[0] & SLIDER_EASE_MASK) == SLIDER_EASE_MASK) fail("2D slider return has no such shape");
             else if (it.pay[1] == 0) fail("2D slider return speed is 0");

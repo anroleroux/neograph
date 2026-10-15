@@ -356,9 +356,23 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // a PWM's duty from its X and frequency from its Y: two wires from one node.
     await page.locator('#add .group[data-group="uii"]').dispatchEvent('click');
     await page.locator('#add [title="Add a 2D slider"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|Wire from:|When let go:', 'a 2D slider does not show its settings: ' + await keyRows());
-    await choice('When let go', 'Return to centre');
-    expect(await keyRows() === 'Label:|Wire from:|When let go:|Return:|Speed (%/s):',
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:', 'a 2D slider does not show its settings: ' + await keyRows());
+    // Its home: where it starts and returns to. The centre unless set.
+    const home = await page.evaluate(() => {
+        const s = elements.n15;
+        const centre = s.home.join() + '|' + s.values.map(v => v.toFixed(2)).join();
+        const rejected = s.setHome(0, '1.1') === false && s.setHome(1, '-0.1') === false && s.setHome(0, 'x') === false;
+        s.setHome(0, '0.25');
+        s.setHome(1, '.75');
+        s.createSettings();
+        const shown = [...document.querySelectorAll('#settings .editable')].slice(2, 4)
+            .map(row => row.querySelector('.value').textContent).join();
+        return { centre, rejected, home: s.home.join(), shown };
+    });
+    expect(home.centre === '128,128|0.50,0.50' && home.rejected && home.home === '64,191' && home.shown === '0.25,0.75',
+        'the home settings gave ' + JSON.stringify(home));
+    await choice('When let go', 'Return home');
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:|Speed (%/s):',
         'returning to the centre does not show its shape and speed: ' + await keyRows());
     // The speed's input has room to type in.
     await page.locator('#settings .editable', { has: page.locator('.label:text-is("Speed (%/s):")') })
@@ -377,7 +391,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(speeds.typed === 120 && speeds.rejected && speeds.ease === 'linear', 'the return settings gave ' + JSON.stringify(speeds));
     await choice('Return', 'Immediate');        // for the exact commands below
-    expect(await keyRows() === 'Label:|Wire from:|When let go:|Return:', 'an immediate return shows ' + await keyRows());
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:', 'an immediate return shows ' + await keyRows());
     await choice('Wire from', 'Y');
     await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
@@ -533,9 +547,9 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(anyRange.none === '0.0 0.5 1.0', 'the axis with no values is ' + anyRange.none);
 
     // ── Drag the 2D slider: from the middle out past its top-right corner (1, 1),
-    // and let go: it returns to the centre. Then nudge it right with a key. ──
+    // and let go: it returns home. Then nudge it right with a key. ──
     const padEl = page.locator('#command .control-pad .pad');
-    expect(await page.locator('#command .control-pad .state').textContent() === '0.00, 0.00', 'the 2D slider does not start at 0, 0');
+    expect(await page.locator('#command .control-pad .state').textContent() === '0.25, 0.75', 'the 2D slider does not start at home');
     const padBox = await padEl.boundingBox();
     await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
     await page.mouse.down();
@@ -546,15 +560,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const drags = await sent(page);
     const values = drags.map(p => hex(p).slice(0, 16) === '0100071300000f02' ? hex(p).slice(16) : hex(p));
     expect(corner === '1.00, 1.00', 'dragging past the corner shows ' + corner);
-    expect(values.length === 5 && values.slice(1).join() === 'ffff,8080,8180,8080',
+    expect(values.length === 5 && values.slice(1).join() === 'ffff,40bf,41bf,40bf',
         'dragging and nudging the 2D slider sent ' + values);
-    expect(await page.locator('#command .control-pad .state').textContent() === '0.50, 0.50', 'the 2D slider did not return to the centre');
+    expect(await page.locator('#command .control-pad .state').textContent() === '0.25, 0.75', 'the 2D slider did not return home');
     packets.push(...drags);
     const yTrace = await page.evaluate(() => elements.n16.samples.slice(-4).map(([, v]) => v.toFixed(2)).join());
-    expect(yTrace === '1.00,0.50,0.50,0.50', 'the plot did not follow Y: ' + yTrace);
+    expect(yTrace === '1.00,0.75,0.75,0.75', 'the plot did not follow Y: ' + yTrace);
 
-    // A linear or sigmoid return takes it back to the centre in steps, each
-    // nearer than the last. Linear steps are even; sigmoid ones grow, then shrink.
+    // A linear or sigmoid return takes it back home in steps, each nearer than
+    // the last. Linear steps are even; sigmoid ones grow, then shrink.
     for (const ease of ['linear', 'sigmoid']) {
         await page.evaluate((ease) => { elements.n15.setReturnEase(ease); elements.n15.setReturnSpeed('100'); }, ease);
         await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
@@ -562,18 +576,18 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.mouse.move(padBox.x - 40, padBox.y + padBox.height + 40);     // past the bottom-left corner: 0, 0
         const released = await page.evaluate(() => performance.now());
         await page.mouse.up();
-        await page.waitForFunction(() => elements.n15.values.every(v => v === VALUE_HALF / VALUE_FULL));
+        await page.waitForFunction(() => elements.n15.values.every((v, i) => v === elements.n15.home[i] / VALUE_FULL));
         const took = await page.evaluate((t) => performance.now() - t, released);
         const glides = await sent(page);
         const glide = glides.map(p => [p[8], p[9]]);
         const back = glide.slice(glide.findIndex(([x, y]) => x === 0 && y === 0));
-        const nearer = back.every(([x, y], i) => i === 0 || (x >= back[i - 1][0] && y >= back[i - 1][1] && x === y));
-        expect(back.length > 3 && nearer && back.at(-1).join() === '128,128',
+        const nearer = back.every(([x, y], i) => i === 0 || (x >= back[i - 1][0] && y >= back[i - 1][1]));
+        expect(back.length > 3 && nearer && back.at(-1).join() === '64,191',
             `the ${ease} return sent ` + JSON.stringify(glide));
-        // From a corner at 100 %/s: about 0.7 s, whatever the shape.
+        // From the corner to (0.25, 0.75) at 100 %/s: about 0.8 s, whatever the shape.
         expect(took > 500 && took < 1500, `the ${ease} return took ${took} ms`);
         const third = Math.floor(back.length / 3);
-        const gain = (a, b) => back[b][0] - back[a][0];
+        const gain = (a, b) => back[b][1] - back[a][1];      // Y, the longer way
         const [start, middle, end] = [gain(0, third), gain(third, 2 * third), gain(2 * third, back.length - 1)];
         if (ease === 'sigmoid') expect(middle > start && middle > end, `the sigmoid return moved ${start}, ${middle}, ${end} by thirds`);
         packets.push(...glides);
@@ -598,7 +612,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(reading.plot === ',1.6504', 'the ADC plot holds ' + reading.plot);
     await toCommandView(page);
     const plotStates = await page.$$eval('#command .control-plot .state', ss => ss.map(s => s.textContent).join('|'));
-    expect(plotStates.endsWith('|31.27 °C|1.65 V|0.502'), 'the plots show ' + plotStates);
+    expect(plotStates.endsWith('|31.27 °C|1.65 V|0.749'), 'the plots show ' + plotStates);
 
     // ── Network fields: both options, then name, SSID and password ──
     for (const nth of [0, 1]) {
@@ -720,14 +734,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         buttons: document.querySelectorAll('#command .control-btn').length,
         keyboards: [elements.n12.describe(), elements.n12.sourceID(), elements.n13.momentary, elements.n1.momentary,
             JSON.stringify(elements.n14.text), elements.n14.sourceID()].join(),
-        pad: [elements.n15.returns, elements.n15.returnEase, elements.n15.returnSpeed, elements.n16.sourceRef().join(':'), elements.n17.dutySource?.name, elements.n17.dutyOutput,
+        pad: [elements.n15.home.join(':'), elements.n15.returns, elements.n15.returnEase, elements.n15.returnSpeed, elements.n16.sourceRef().join(':'), elements.n17.dutySource?.name, elements.n17.dutyOutput,
             elements.n17.freqSource?.name, elements.n17.freqOutput, elements.n17.inConns().map(c => c.outputName.textContent).join('')].join(),
         pads: document.querySelectorAll('#command .control-pad').length,
     }));
     expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting|Stick|Stick Y|Motor', 'labels not restored: ' + restored.labels);
     expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 12
         && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 4 && restored.readings === 2
-        && restored.pad === 'true,immediate,120,0:15:1,n15,0,n15,1,XY' && restored.pads === 1
+        && restored.pad === '64:191,true,immediate,120,0:15:1,n15,0,n15,1,XY' && restored.pads === 1
         && restored.pwmSources === 'n5,n6'
         && restored.buttons === 2
         && restored.keyboards === 'Ctrl+Alt+Delete,13,true,false,"hello\\n",1',

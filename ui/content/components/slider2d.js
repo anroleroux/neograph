@@ -12,10 +12,11 @@ const SLIDER_2D_EASES = {
 // A 2D slider: a square pad in the Command view whose puck sets two floating
 // outputs, X (0 at the left to 1 at the right) and Y (0 at the bottom to 1 at
 // the top). A wire leaves it from the output picked in its settings, which
-// then turns to the other one. Let go, it stays where it is, or with "Return
-// to centre" goes back to 0.5, 0.5 like a joystick: at once, or in a straight
-// line, linearly or in an S-curve, taking as long as its speed gives for the
-// distance.
+// then turns to the other one. It starts at its home point (0.5, 0.5 unless
+// set), and the device puts its outputs there each time it takes a config.
+// Let go, it stays where it is, or with "Return home" goes back
+// like a joystick: at once, or in a straight line, linearly or in an S-curve,
+// taking as long as its speed gives for the distance.
 class uiSlider2D extends uiComponents {
     constructor(x = 0, y = 0) {
         super("slider2d", x, y);
@@ -38,7 +39,8 @@ class uiSlider2D extends uiComponents {
         this.actDir = "outputs";
         this.actNum = 0;
 
-        this.values = [0, 0];
+        this.home = [VALUE_HALF, VALUE_HALF];     // X and Y, as bytes: where it starts and returns to
+        this.values = this.home.map(b => b / VALUE_FULL);
         this.returns = false;       // to the centre when let go
         this.returnEase = 'linear'; // a key of SLIDER_2D_EASES
         this.returnSpeed = 100;     // % of the range per second, on average
@@ -75,7 +77,16 @@ class uiSlider2D extends uiComponents {
         this.returns = release === 'centre';
     }
 
-    // How it returns to the centre: 'immediate', 'linear' or 'sigmoid'.
+    // Its home on one axis (0 for X, 1 for Y): a number from 0 to 1, kept as a
+    // byte. The puck moves there, as the device's outputs will once saved.
+    setHome(axis, value) {
+        value = String(value).trim();
+        if (!/^(\d+\.?\d*|\.\d+)$/.test(value) || Number(value) > 1) return false;
+        this.home[axis] = Math.round(Number(value) * VALUE_FULL);
+        this.values[axis] = this.home[axis] / VALUE_FULL;
+    }
+
+    // How it returns home: 'immediate', 'linear' or 'sigmoid'.
     setReturnEase(ease) {
         if (!Object.hasOwn(SLIDER_2D_EASES, ease)) return false;
         this.returnEase = ease;
@@ -108,7 +119,10 @@ class uiSlider2D extends uiComponents {
         const settings = document.getElementById('settings');
         settings.appendChild(choiceSetting('Wire from', {0: 'X', 1: 'Y'},
             () => String(this.actNum), (o) => this.setWireOutput(Number(o))));
-        settings.appendChild(choiceSetting('When let go', {stay: 'Stay', centre: 'Return to centre'},
+        ['X', 'Y'].forEach((name, axis) => settings.appendChild(editableSetting(`Home ${name}`,
+            () => (this.home[axis] / VALUE_FULL).toFixed(2), (v) => this.setHome(axis, v),
+            {type: 'number', min: 0, max: 1, step: 0.01})));
+        settings.appendChild(choiceSetting('When let go', {stay: 'Stay', centre: 'Return home'},
             () => this.returns ? 'centre' : 'stay', (r) => { this.setRelease(r); this.createSettings(); }));
         if (!this.returns) return;
         settings.appendChild(choiceSetting('Return', {immediate: 'Immediate', linear: 'Linear', sigmoid: 'Sigmoid'},
@@ -154,8 +168,8 @@ class uiSlider2D extends uiComponents {
             show();
             this.sendValues(values);
         };
-        // The return to the centre: one step each frame, in a straight line, the
-        // ease giving how far along it is. It takes the distance over the speed.
+        // The return home: one step each frame, in a straight line, the ease
+        // giving how far along it is. It takes the distance over the speed.
         let returning = null;
         const stop = () => {
             cancelAnimationFrame(returning);
@@ -166,10 +180,11 @@ class uiSlider2D extends uiComponents {
             stop();
             const ease = SLIDER_2D_EASES[this.returnEase].at;
             const from = this.values.map(v => v * VALUE_FULL);
-            const distance = Math.hypot(VALUE_HALF - from[0], VALUE_HALF - from[1]);
+            const [hx, hy] = this.home;
+            const distance = Math.hypot(hx - from[0], hy - from[1]);
             const duration = distance / (this.returnSpeed / 100 * VALUE_FULL) * 1000;
             if (!ease || duration === 0) {
-                move(VALUE_HALF, VALUE_HALF);
+                move(hx, hy);
                 return;
             }
             const start = performance.now();
@@ -177,7 +192,7 @@ class uiSlider2D extends uiComponents {
                 if (!pad.isConnected) return;       // the Command view was rebuilt
                 const u = Math.min(1, Math.max(0, now - start) / duration);
                 const f = ease(u);
-                move(from[0] + (VALUE_HALF - from[0]) * f, from[1] + (VALUE_HALF - from[1]) * f);
+                move(from[0] + (hx - from[0]) * f, from[1] + (hy - from[1]) * f);
                 returning = u < 1 ? requestAnimationFrame(step) : null;
             };
             returning = requestAnimationFrame(step);
@@ -210,11 +225,11 @@ class uiSlider2D extends uiComponents {
         commandInterface.appendChild(control);
     }
 
-    // Its options (whether and how it returns), then its return speed.
+    // Its options (whether and how it returns), its return speed, then its home.
     marshal() {
         const options = (this.returns ? SLIDER_RETURN : 0x00) | SLIDER_2D_EASES[this.returnEase].bits;
         return [
-            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x02, options, this.returnSpeed,
+            this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x04, options, this.returnSpeed, ...this.home,
         ];
     }
 }

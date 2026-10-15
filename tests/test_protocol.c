@@ -477,9 +477,16 @@ void test_slider_2d_config(void)
     config_element_iterator it;
     messages(&it, example("slider-2d-config"));
 
-    assert_message(&it, MSG_UI_SLIDER_2D, 1, 2);
+    assert_message(&it, MSG_UI_SLIDER_2D, 1, 4);
     TEST_ASSERT_EQUAL_HEX8(SLIDER_RETURN | SLIDER_EASE_LINEAR, it.pay[0]);
     TEST_ASSERT_EQUAL_UINT8(100, it.pay[1]);                      /* return speed, %/s */
+    uint8_t home[2];
+    slider_2d_home(it.pay, it.len, home);
+    TEST_ASSERT_EQUAL_HEX8(0x40, home[0]);                        /* X 0.25 */
+    TEST_ASSERT_EQUAL_HEX8(0xBF, home[1]);                        /* Y 0.75 */
+    slider_2d_home(it.pay, 2, home);                              /* saved without one: the centre */
+    TEST_ASSERT_EQUAL_HEX8(VALUE_HALF, home[0]);
+    TEST_ASSERT_EQUAL_HEX8(VALUE_HALF, home[1]);
     TEST_ASSERT_EQUAL_HEX8(0, SLIDER_RETURN & SLIDER_EASE_MASK);
     TEST_ASSERT_EQUAL_HEX8(SLIDER_EASE_LINEAR | SLIDER_EASE_SIGMOID, SLIDER_EASE_MASK);
     assert_message(&it, MSG_HW_PWM, 2, 17);
@@ -525,7 +532,7 @@ void test_legacy_config(void)
 /* ── FIFO words ───────────────────────────────────────────────────────── */
 
 /* The words core 0 sends for a config payload (unmarshal_controls in src/config.c): a clean
- * setup, then the setup words. */
+ * setup, the setup words, then the action words for each 2D slider's home. */
 static void assert_setup_words(const char *name)
 {
     const struct fifo_example *words = fifo_example(name);
@@ -565,6 +572,15 @@ static void assert_setup_words(const char *name)
             TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(pwm.freq_source), words->words[n++]);
             TEST_ASSERT_EQUAL_HEX32(fifo_freq_word(pwm.freq_min, pwm.freq_max), words->words[n++]);
         }
+    }
+    messages(&it, example(name));
+    while (it.next(&it)) {
+        if (it.type != MSG_UI_SLIDER_2D) continue;
+        uint8_t home[2];
+        slider_2d_home(it.pay, it.len, home);
+        TEST_ASSERT_TRUE(n + 2 <= words->len);
+        TEST_ASSERT_EQUAL_HEX32(fifo_action_word(it.id, 0, home[0]), words->words[n++]);
+        TEST_ASSERT_EQUAL_HEX32(fifo_action_word(it.id, 1, home[1]), words->words[n++]);
     }
     TEST_ASSERT_EQUAL_UINT(words->len, n);
 }

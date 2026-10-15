@@ -452,6 +452,18 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
         }
     }
 
+    // A 2D slider starts at its home: drive its outputs there, now that they are set up.
+    itr.reset(&itr);
+    while (itr.next(&itr)) {
+        if (itr.type != MSG_UI_SLIDER_2D) continue;
+        uint8_t home[2];
+        slider_2d_home(itr.pay, itr.len, home);
+        for (uint8_t i = 0; i < 2; i++) {
+            multicore_fifo_push_blocking(fifo_action_word(itr.id, i, home[i]));
+        }
+        printf("send 2D slider %d home %u, %u\n", itr.id, home[0], home[1]);
+    }
+
     // while (offset + 4 <= length) {
     //     Control control = {0};
     //     control.type = data[offset++];

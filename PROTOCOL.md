@@ -338,7 +338,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 |---|---|---|
 | `10` Button | 0–1 | Byte 0, bit 0 (`BUTTON_MOMENTARY`): 0 = each click toggles it, 1 = it is on while held. Other bits are 0. The UI leaves the byte out for a toggle button (as buttons saved before it existed), and sends `01` for a momentary one. The device ignores button messages in a config. |
 | `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
-| `13` 2D slider | 1–2 | Byte 0, bit 0 (`SLIDER_RETURN`): 0 = it stays where it is let go (UI default), 1 = it returns to the centre. Bits 1–2 (`SLIDER_EASE_MASK`), how it returns: `SLIDER_EASE_IMMEDIATE` (`00`), `SLIDER_EASE_LINEAR` (`02`, UI default) or `SLIDER_EASE_SIGMOID` (`04`). Other bits are 0. Byte 1: the return speed, 1–255 % of its range per second (UI default 100); without it, the return is immediate. The device ignores 2D slider messages in a config. See [2D sliders](#2d-sliders). |
+| `13` 2D slider | 1–4 | Byte 0, bit 0 (`SLIDER_RETURN`): 0 = it stays where it is let go (UI default), 1 = it returns home. Bits 1–2 (`SLIDER_EASE_MASK`), how it returns: `SLIDER_EASE_IMMEDIATE` (`00`), `SLIDER_EASE_LINEAR` (`02`, UI default) or `SLIDER_EASE_SIGMOID` (`04`). Other bits are 0. Byte 1: the return speed, 1–255 % of its range per second (UI default 100); without it, the return is immediate. Bytes 2–3: its home, X then Y as values, `00`–`FF` (UI default `80 80`, the centre); without them, the centre. The device uses only the home: it drives the slider's outputs there (`slider_2d_home`). See [2D sliders](#2d-sliders). |
 | `02` Plot | 4–20 | Bytes 0–2: source reference (0 = not connected) · byte 3: time window, 1–255 s (UI default 10) · bytes 4…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
@@ -481,7 +481,7 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider whether it returns to the centre, a plot its time window and unit, an ADC its channel, a GPO its pin, a USB keyboard its keystroke, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPO its pin, a USB keyboard its keystroke, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
@@ -580,14 +580,19 @@ drives, either output can drive.
   wires leave from the output picked in the slider's settings ("Wire from"); once a
   wire leaves from one, the setting turns to the other, so wiring X then Y takes no
   trip to the settings.
-- **Let go** (`SLIDER_RETURN` clear), it stays where it is. With "Return to centre"
-  set, letting go of the puck, or of an arrow key, takes it back to `80 80`
-  (`VALUE_HALF`, about 0.5 each), like a joystick springing back. How it gets there
-  is its return shape:
+- **Home** (bytes 2–3, "Home X" and "Home Y" in the settings, 0 to 1): where the puck
+  starts, and where it returns to. The UI default is the centre, `80 80`
+  (`VALUE_HALF`, about 0.5 each).
+- **Starting at home.** Each time core 0 applies a config (a save, and each connect),
+  after the setup words it sends the action words for each 2D slider's home, so the
+  outputs wired to it start there rather than at 0, as the puck does in the browser.
+- **Let go** (`SLIDER_RETURN` clear), it stays where it is. With "Return home" set,
+  letting go of the puck, or of an arrow key, takes it back home, like a joystick
+  springing back. How it gets there is its return shape:
 
   | Return | Bits 1–2 | Moves |
   |---|---|---|
-  | Immediate | `SLIDER_EASE_IMMEDIATE` | Straight to the centre, in one command |
+  | Immediate | `SLIDER_EASE_IMMEDIATE` | Straight home, in one command |
   | Linear | `SLIDER_EASE_LINEAR` | In a straight line at a steady speed |
   | Sigmoid | `SLIDER_EASE_SIGMOID` | In a straight line, speeding up then slowing down: a fraction *u* of the way through the time, it is 3*u*² − 2*u*³ of the way there |
 
@@ -595,14 +600,13 @@ drives, either output can drive.
   the range per second, on average): at 100 a corner takes about 0.7 s. It sends a
   command each time a value's byte changes on the way. Touching the pad, or an arrow
   key, stops the return where it is.
-- **Until it is first moved**, both outputs read 0, as a slider's does.
 
-A 2D slider `n1` that returns to the centre, driving a PWM's duty cycle from its X and
-frequency from its Y:
+A 2D slider `n1` whose home is X 0.25, Y 0.75, and that returns there, driving a PWM's
+duty cycle from its X and frequency from its Y:
 
 ```hex example=slider-2d-config
-0A 00 1D                                        # Config, 29 bytes
-13 00 00 01 02  03 64                           # 2D slider n1, returns to the centre linearly at 100 %/s
+0A 00 1F                                        # Config, 31 bytes
+13 00 00 01 04  03 64 40 BF                     # 2D slider n1, returns linearly at 100 %/s to (0.25, 0.75)
 22 01 00 02 11  00 01 00 02 03 E8 03            # PWM n2: duty ← n1 X, pin 2, 1000 Hz, both from inputs
                 32 00 64  00 01 01 00 64 27 10  #   duty 50 %, 0–100 %; frequency ← n1 Y, 100–10000 Hz
 ```
@@ -789,7 +793,7 @@ Every exchange starts with an **operation word**:
 
 | `op` | Constant | Sent by | Followed by |
 |---|---|---|---|
-| 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per payload byte: the value of one output of the element | Nothing |
+| 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per payload byte: the value of one output of the element. Also `0A` config and each connect, after the setup words: a 2D slider's home | Nothing |
 | 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM/ADC/keyboard message | For an LED, GPO, PWM or keyboard, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel |
 | 3 | `FIFO_OP_CLEAN_SETUP` | `0A` config and on each connect, once, before the setup words | Nothing |
 
@@ -861,14 +865,16 @@ C0000000                    # clean setup
 00000000 00642710           #   no frequency source; 100–10000 Hz
 ```
 
-The words for the [slider-2d-config example](#2d-sliders). The 2D slider is skipped; the
-PWM's two reference words name its X and its Y:
+The words for the [slider-2d-config example](#2d-sliders). The PWM's two reference
+words name the slider's X and its Y; once everything is set up, the slider's home
+drives its outputs:
 
 ```fifo example=slider-2d-config
 C0000000                    # clean setup
 82000202 00010000           # setup PWM n2 on pin 2, duty source n1 output 0 (X)
 03E80003 32006400           #   1000 Hz, duty and frequency from inputs; duty 50 %, 0–100 %
 00010001 00642710           #   frequency source n1 output 1 (Y); 100–10000 Hz
+40000140 410001BF           # action: n1's home, X 40, Y BF
 ```
 
 The words for the [legacy-config example](#source-references): a reference saved

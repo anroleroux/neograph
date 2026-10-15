@@ -74,7 +74,8 @@ const SLIDER_VERTICAL        = 0x01;
 
 // 2D slider (MSG_UI_SLIDER_2D) payload byte 0, bit 0: 0 = it stays where it is let go,
 // 1 = it returns to the centre (VALUE_HALF on both outputs). Bits 1-2: how it returns.
-// Byte 1: its return speed, 1-255 % of its range per second.
+// Byte 1: its return speed, 1-255 % of its range per second. Bytes 2-3: its home, X then
+// Y as values (0 to VALUE_FULL): where it starts, and where it returns to.
 const SLIDER_RETURN          = 0x01;
 const SLIDER_EASE_MASK       = 0x06;
 const SLIDER_EASE_IMMEDIATE  = 0x00;  // at once

@@ -133,6 +133,9 @@ function restoreGraph(msgs) {
             elm.setReturnEase(ease);                            // an unknown one keeps the default
             if (m.len >= 2) elm.setReturnSpeed(m.pay[1]);       // 0 keeps the default
             else elm.setReturnEase('immediate');                // saved before returns had a speed
+            const home = [VALUE_HALF, VALUE_HALF];
+            if (m.len >= 4) home.splice(0, 2, m.pay[2], m.pay[3]);   // without one, the centre
+            home.forEach((b, axis) => elm.setHome(axis, b / VALUE_FULL));
         }
         if (m.type === MSG_UI_BUTTON && m.len >= 1) elm.setAction(m.pay[0] & BUTTON_MOMENTARY ? 'momentary' : 'toggle');
         if (m.type === MSG_HW_GPO && m.len >= r + 1) elm.setPin(m.pay[r]);
