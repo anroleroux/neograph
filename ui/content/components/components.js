@@ -16,6 +16,8 @@
 
 /* {{plot-js}} */
 
+/* {{indicator-js}} */
+
 /* {{core-js}} */
 
 /* {{adc-js}} */

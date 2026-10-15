@@ -50,7 +50,7 @@ static uint8_t outputs_of(uint8_t type) { return type == MSG_UI_SLIDER_2D ? 2 : 
 /* Whether a message holds source references, which the UI writes with their outputs. */
 static bool has_refs(uint8_t type) {
     return type == MSG_HW_LED || type == MSG_HW_GPO || type == MSG_HW_PWM || type == MSG_HW_KEYBOARD
-        || type == MSG_UI_GRAPH;
+        || type == MSG_UI_GRAPH || type == MSG_UI_INDICATOR;
 }
 
 /* A source reference must name an output of a source the output takes (PROTOCOL.md,
@@ -90,6 +90,10 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_UI_SLIDER:
             if (it.len != 1) fail("slider message is not 1 byte");
             else if (it.pay[0] & ~SLIDER_VERTICAL) fail("slider orientation has bits other than SLIDER_VERTICAL");
+            break;
+        case MSG_UI_INDICATOR:
+            if (it.len != r) fail("light message is not one source reference");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a light is wired from something other than a button");
             break;
         case MSG_UI_SLIDER_2D:
             if (it.len != 4) fail("2D slider message is not its options, return speed and home");

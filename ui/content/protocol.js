@@ -27,7 +27,7 @@ const MSG_HW_BIT             = 0x20;
 const MSG_INPUT_BIT          = 0x10;
 
 const MSG_UI_GAUGE           = 0x00;  // reserved
-const MSG_UI_INDICATOR       = 0x01;  // reserved
+const MSG_UI_INDICATOR       = 0x01;  // a light, drawn in the browser
 const MSG_UI_GRAPH           = 0x02;  // a plot, drawn in the browser
 const MSG_UI_BUTTON          = 0x10;
 const MSG_UI_SWITCH          = 0x11;  // reserved

@@ -338,7 +338,7 @@ void test_wires_join_matching_types(void)
         config_element_iterator it;
         messages(&it, ex);
         while (it.next(&it)) {
-            if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD) {
+            if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD || it.type == MSG_UI_INDICATOR) {
                 msg_ref src = msg_ref_at(it.pay, it.flags);
                 if (src.id) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_BUTTON, element_type(ex, src.id), ex->name);
                 TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, src.output, ex->name);
@@ -366,6 +366,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
 
 /* GPIO 0-22 and 26-28 are usable; 23, 24, 25 and 29 drive the WiFi chip. */
@@ -500,6 +501,19 @@ void test_slider_2d_config(void)
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
+void test_light_config(void)
+{
+    config_element_iterator it;
+    messages(&it, example("light-config"));
+
+    assert_message(&it, MSG_UI_BUTTON, 1, 1);
+    assert_message(&it, MSG_UI_INDICATOR, 2, 3);
+    TEST_ASSERT_EQUAL_HEX8(MSG_FLAG_OUTPUT, it.flags);
+    TEST_ASSERT_EQUAL_UINT16(1, msg_ref_at(it.pay, it.flags).id);
+    TEST_ASSERT_EQUAL_UINT8(0, msg_ref_at(it.pay, it.flags).output);
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
 /* A config saved before outputs: 2-byte references, read as output 0. */
 void test_legacy_config(void)
 {
@@ -590,6 +604,7 @@ void test_fifo_setup_words_match_adc_config(void) { assert_setup_words("adc-conf
 void test_fifo_setup_words_match_keyboard_config(void) { assert_setup_words("keyboard-config"); }
 void test_fifo_setup_words_match_slider_2d_config(void) { assert_setup_words("slider-2d-config"); }
 void test_fifo_setup_words_match_legacy_config(void) { assert_setup_words("legacy-config"); }
+void test_fifo_setup_words_match_light_config(void) { assert_setup_words("light-config"); }
 
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c):
  * one per payload byte, for the element's output of the same index. */
@@ -676,11 +691,13 @@ int main(void)
     RUN_TEST(test_keyboard_payload_valid);
     RUN_TEST(test_slider_2d_config);
     RUN_TEST(test_legacy_config);
+    RUN_TEST(test_light_config);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_setup_words_match_adc_config);
     RUN_TEST(test_fifo_setup_words_match_keyboard_config);
     RUN_TEST(test_fifo_setup_words_match_slider_2d_config);
     RUN_TEST(test_fifo_setup_words_match_legacy_config);
+    RUN_TEST(test_fifo_setup_words_match_light_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_action_words_match_command_slider_2d);

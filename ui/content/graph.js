@@ -26,6 +26,7 @@ const NODE_CLASSES = {
     [MSG_HW_GPO]: uiGPO,
     [MSG_HW_PWM]: uiPWM,
     [MSG_UI_GRAPH]: uiPlot,
+    [MSG_UI_INDICATOR]: uiIndicator,
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
     [MSG_HW_KEYBOARD]: uiKeyboard,

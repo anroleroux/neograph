@@ -7,6 +7,7 @@
 {{gpo-js}}:ui/content/components/gpo.js
 {{pwm-js}}:ui/content/components/pwm.js
 {{plot-js}}:ui/content/components/plot.js
+{{indicator-js}}:ui/content/components/indicator.js
 {{core-js}}:ui/content/components/core.js
 {{adc-js}}:ui/content/components/adc.js
 {{keyboard-js}}:ui/content/components/keyboard.js

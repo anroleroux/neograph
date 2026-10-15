@@ -308,7 +308,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | Type | Constant | Element | Status |
 |---|---|---|---|
 | `00` | `MSG_UI_GAUGE` | UI output gauge | Reserved |
-| `01` | `MSG_UI_INDICATOR` | UI output indicator | Reserved |
+| `01` | `MSG_UI_INDICATOR` | UI output indicator: a light | Implemented |
 | `02` | `MSG_UI_GRAPH` | UI output graph: a plot | Implemented |
 | `10` | `MSG_UI_BUTTON` | UI input button | Implemented |
 | `11` | `MSG_UI_SWITCH` | UI input switch | Reserved |
@@ -339,6 +339,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `10` Button | 0–1 | Byte 0, bit 0 (`BUTTON_MOMENTARY`): 0 = each click toggles it, 1 = it is on while held. Other bits are 0. The UI leaves the byte out for a toggle button (as buttons saved before it existed), and sends `01` for a momentary one. The device ignores button messages in a config. |
 | `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
 | `13` 2D slider | 1–4 | Byte 0, bit 0 (`SLIDER_RETURN`): 0 = it stays where it is let go (UI default), 1 = it returns home. Bits 1–2 (`SLIDER_EASE_MASK`), how it returns: `SLIDER_EASE_IMMEDIATE` (`00`), `SLIDER_EASE_LINEAR` (`02`, UI default) or `SLIDER_EASE_SIGMOID` (`04`). Other bits are 0. Byte 1: the return speed, 1–255 % of its range per second (UI default 100); without it, the return is immediate. Bytes 2–3: its home, X then Y as values, `00`–`FF` (UI default `80 80`, the centre); without them, the centre. The device uses only the home: it drives the slider's outputs there (`slider_2d_home`). See [2D sliders](#2d-sliders). |
+| `01` Light | 3 | Bytes 0–2: source reference (0 = not connected). The device ignores light messages in a config: the light is drawn in the browser (see [Lights](#lights)). |
 | `02` Plot | 4–20 | Bytes 0–2: source reference (0 = not connected) · byte 3: time window, 1–255 s (UI default 10) · bytes 4…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
@@ -415,7 +416,7 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button | `20` LED, `21` GPO, `23` USB keyboard | 0 or 1 (`00` / `FF`) |
+| Boolean | `10` button | `20` LED, `21` GPO, `23` USB keyboard, `01` light | 0 or 1 (`00` / `FF`) |
 | Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts in the browser, 0 to 1 on the device; the core temperature in °C |
 
 The core temperature's values reach only the browser, so it drives a plot but not a
@@ -476,7 +477,7 @@ When a config arrives, the UI rebuilds the graph from it:
 - **If the config has no control messages** (a first-boot config), the UI keeps the
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
-  (`10` button, `12` slider, `13` 2D slider, `02` plot, `20` LED, `21` GPO, `22` PWM,
+  (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
   `23` USB keyboard, `30` core temperature, `32` ADC) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
@@ -485,7 +486,7 @@ When a config arrives, the UI rebuilds the graph from it:
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
-  restored node of the output's [type](#wire-types): an LED's, GPO's or USB keyboard's button, a plot's slider, 2D slider, ADC or core temperature, and the sliders, 2D sliders or
+  restored node of the output's [type](#wire-types): an LED's, GPO's, USB keyboard's or light's button, a plot's slider, 2D slider, ADC or core temperature, and the sliders, 2D sliders or
   ADCs of a PWM's parameters that follow an input. A reference without an output
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
@@ -516,6 +517,30 @@ that time.
   slider. A unit set in the plot's settings (up to 16 bytes) overrides it, and is
   saved in the plot's message; clearing it, or setting "auto", goes back to the
   source's.
+
+### Lights
+
+A light (`01`) shows in the Command view whether the boolean signal wired into it, a
+[button](#control-payloads), is on or off: a lamp, green while it is on, with the
+label and "On" or "Off" below it.
+
+- **On from `VALUE_HALF`,** as an LED: a button's 1 lights it, its 0 puts it out.
+- **The values come from the source in the browser**, as a [plot's](#plots) do: a
+  button hands each value it sends to the lights wired to it. Nothing is sent for a
+  light, and the device stores its message but sends nothing to core 1 for it.
+- **Wiring it** shows the source's current state; without a source it shows `–`.
+
+A momentary button `n1` wired to a light `n2`:
+
+```hex example=light-config
+0A 00 0E                                        # Config, 14 bytes
+10 00 00 01 01  01                              # button n1, momentary
+01 01 00 02 03  00 01 00                        # light n2 ← n1
+```
+
+```fifo example=light-config
+C0000000                    # clean setup; the button and light are skipped
+```
 
 ### Core temperature
 
