@@ -14,7 +14,7 @@ class uiGPO extends uiComponents {
         this.actDir = "inputs";
         this.actNum = 0;
 
-        this.pin = 1;
+        this.pin = freePin(this, 1);     // 1, unless another node uses it
 
         this.buildGraphElement();
     }
@@ -43,10 +43,14 @@ class uiGPO extends uiComponents {
         this.pin = pin;
     }
 
+    usedPins() {
+        return [this.pin];
+    }
+
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        settings.appendChild(pinSetting(() => this.pin, (pin) => this.setPin(pin)));
+        settings.appendChild(pinSetting(this, () => this.pin, (pin) => this.setPin(pin)));
     }
 
     buildUI(commandInterface) {}

@@ -18,7 +18,7 @@ class uiPWM extends uiComponents {
         this.actDir = "inputs";
         this.actNum = 0;
 
-        this.pin = 2;
+        this.pin = freePin(this, 2);     // 2, unless another node uses it
 
         this.dutyFromInput = false;
         this.duty = 50;
@@ -143,10 +143,14 @@ class uiPWM extends uiComponents {
         if (selected === this) this.createSettings();
     }
 
+    usedPins() {
+        return [this.pin];
+    }
+
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        settings.appendChild(pinSetting(() => this.pin, (pin) => this.setPin(pin)));
+        settings.appendChild(pinSetting(this, () => this.pin, (pin) => this.setPin(pin)));
         this.paramSettings(settings, 'freq', 'Frequency', 'Hz', {type: 'number', min: PWM_FREQ_MIN, max: 0xFFFF, step: 1});
         this.paramSettings(settings, 'duty', 'Duty cycle', '%', {type: 'number', min: 0, max: PWM_DUTY_MAX, step: 1});
     }

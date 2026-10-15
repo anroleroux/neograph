@@ -115,9 +115,25 @@ function parsePin(pin) {
     return /^\d+$/.test(pin) && pinUsable(Number(pin)) ? Number(pin) : null;
 }
 
-// A settings field that picks a GPIO pin from the usable ones.
-function pinSetting(get, set) {
-    return selectSetting('GPIO pin', USABLE_PINS.map(pin => [pin, `GPIO ${pin}`]), get, set);
+// The GPIO pins the graph's nodes use (see usedPins), but `node`'s own.
+function pinsInUse(node) {
+    return new Set(Object.values(elements).filter(e => e !== node).flatMap(e => e.usedPins()));
+}
+
+// A usable pin no node but `node` uses: `preferred` if it is free, else the
+// lowest free one (`preferred` if none is).
+function freePin(node, preferred) {
+    const used = pinsInUse(node);
+    if (!used.has(preferred)) return preferred;
+    return USABLE_PINS.find(pin => !used.has(pin)) ?? preferred;
+}
+
+// A settings field that picks a GPIO pin for `node` from the usable ones that
+// no other node uses. Its own pin is always offered.
+function pinSetting(node, get, set) {
+    const used = pinsInUse(node);
+    const pins = USABLE_PINS.filter(pin => pin === get() || !used.has(pin));
+    return selectSetting('GPIO pin', pins.map(pin => [pin, `GPIO ${pin}`]), get, set);
 }
 
 // A source reference as saved (see MSG_FLAG_OUTPUT): the source node's ID, then
@@ -208,6 +224,11 @@ class uiComponents {
     sourceRef() {
         const conn = this.inConns()[0];
         return refBytes(conn?.start.node, conn?.start.output);
+    }
+
+    // The GPIO pins this node takes, which no other node may use: none for most.
+    usedPins() {
+        return [];
     }
 
     // The value of one of this source's outputs: most have one, `value`.

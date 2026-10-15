@@ -364,6 +364,10 @@ changing them cuts the device off the network.
 
 - The UI offers only the usable pins, and keeps the default pin when a config names
   another one.
+- **One node per pin.** A GPO, PWM or GPIO input is offered only the pins no other node
+  uses, and an ADC only the channels whose pin (GPIO 26–28) no other node uses. A new
+  node takes its default pin (GPO 1, PWM 2, GPIO input 3) if it is free, otherwise the
+  lowest free one; a new ADC the first free channel.
 - Core 1 doesn't set up a GPO or PWM on another pin, and logs that it skipped it.
 
 A PWM has two parameters, its **duty cycle** and its **frequency**. Each is constant, or
@@ -580,8 +584,10 @@ reading), and the [lights](#lights) wired to it show it too.
   that connects learns the state within a second.
 - **After a save.** The device reads a pin once a saved config has a GPIO input on it,
   so a new node's tile shows `–` until the graph is saved.
-- **The pin is the input's.** A GPO, PWM, ADC or other GPIO input on the same pin is
-  refused by core 1; the first setup on a pin wins (see [Known issues](#known-issues)).
+- **The pin is the input's.** The UI doesn't offer it to another node (see
+  [GPIO pins](#gpio-pins)), and core 1 refuses a GPO, PWM, ADC or other GPIO input on
+  the same pin from an older config: the first setup on a pin wins (see
+  [Known issues](#known-issues)).
 
 A GPIO input `n1` on GPIO 3, pulled up and on while low (a switch to ground), driving
 the onboard LED `n2` and a light `n3`:
@@ -614,8 +620,10 @@ wired to it draws it.
 - **After a save.** The device samples a channel once a saved config has an ADC node
   on it, so a new node's tile shows `–` until the graph is saved.
 - **ADC3** (GPIO 29) is the WiFi chip's clock on the Pico 2 W, so it isn't offered.
-- **The pin is the ADC's.** A GPO or PWM on the same pin is refused by core 1; the
-  first setup on a pin wins (see [Known issues](#known-issues)).
+- **The pin is the ADC's.** The UI doesn't offer it to another node (see
+  [GPIO pins](#gpio-pins)), and core 1 refuses a GPO, PWM or GPIO input on the same
+  pin from an older config: the first setup on a pin wins (see
+  [Known issues](#known-issues)).
 
 An ADC on ADC1 (GPIO 27) driving a PWM's duty cycle, and drawn on a plot:
 
@@ -1135,9 +1143,10 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 12. **PWM pins can share a slice.** Each PWM slice drives two pins (e.g. GPIO 0 and 1)
     at one frequency. Two PWM outputs on the same slice both run at the frequency of
     the one set up last; the UI doesn't warn about it.
-13. **The UI lets two nodes claim one pin.** Two GPOs, PWMs, GPIO inputs, or an ADC
-    and one of those, may name the same pin. Core 1 sets up the first and skips the others (it logs
-    each), but the UI doesn't warn about it.
+13. **A config can still give two nodes one pin.** The UI offers each node only free
+    pins, but a config saved before it did is restored as it was. Core 1 sets up the
+    first node on a pin and skips the others (it logs each), and the UI doesn't flag
+    them; picking another pin for one fixes it.
 14. **ADC readings carry power-supply noise.** The Pico 2 W's switching regulator
     runs in its power-saving mode, which adds ripple to the ADC's 3.3 V reference.
     Its quieter PWM mode is set through the WiFi chip (`WL_GPIO1`, the regulator's PS

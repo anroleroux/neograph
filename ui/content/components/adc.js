@@ -22,7 +22,9 @@ class uiADC extends uiComponents {
         this.actDir = "outputs";
         this.actNum = 0;
 
-        this.channel = 0;
+        // The first channel whose pin no other node uses.
+        this.channel = Math.max(0, [...Array(ADC_CHANNELS).keys()]
+            .findIndex(ch => !pinsInUse(this).has(ADC_PIN_FIRST + ch)));
         this.value = NaN;       // volts; no reading yet
         this.unit = 'V';
 
@@ -57,11 +59,19 @@ class uiADC extends uiComponents {
         this.update(NaN);
     }
 
+    // Its channel's pin.
+    usedPins() {
+        return [ADC_PIN_FIRST + this.channel];
+    }
+
+    // The channels offered are its own and those whose pin no other node uses.
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        const channels = Array.from({ length: ADC_CHANNELS },
-            (_, ch) => [ch, `ADC${ch} · GPIO ${ADC_PIN_FIRST + ch}`]);
+        const used = pinsInUse(this);
+        const channels = Array.from({ length: ADC_CHANNELS }, (_, ch) => ch)
+            .filter(ch => ch === this.channel || !used.has(ADC_PIN_FIRST + ch))
+            .map(ch => [ch, `ADC${ch} · GPIO ${ADC_PIN_FIRST + ch}`]);
         settings.appendChild(selectSetting('Channel', channels, () => this.channel, (ch) => this.setChannel(ch)));
     }
 

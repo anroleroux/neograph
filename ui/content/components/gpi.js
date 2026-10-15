@@ -18,7 +18,7 @@ class uiGPI extends uiComponents {
         this.actDir = "outputs";
         this.actNum = 0;
 
-        this.pin = 3;
+        this.pin = freePin(this, 3);     // 3, unless another node uses it
         this.pull = GPI_PULL_DOWN;
         this.invert = false;    // on while the pin is low
         this.value = null;      // true or false; null before the first reading
@@ -67,10 +67,14 @@ class uiGPI extends uiComponents {
         this.invert = level === 'low';
     }
 
+    usedPins() {
+        return [this.pin];
+    }
+
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
-        settings.appendChild(pinSetting(() => this.pin, (pin) => this.setPin(pin)));
+        settings.appendChild(pinSetting(this, () => this.pin, (pin) => this.setPin(pin)));
         settings.appendChild(choiceSetting('Pull', {[GPI_PULL_NONE]: 'None', [GPI_PULL_UP]: 'Up', [GPI_PULL_DOWN]: 'Down'},
             () => String(this.pull), (p) => this.setPull(p)));
         settings.appendChild(choiceSetting('On when', {high: 'High', low: 'Low'},

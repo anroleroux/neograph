@@ -205,11 +205,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         pwm.setDutyMax('80');
     });
 
-    // The pin is picked from the usable pins only.
-    const pins = await page.evaluate(() => [...document.querySelectorAll('#settings .editable.select')]
+    // The pin is picked from the usable pins only, less those another node uses:
+    // the GPO is on GPIO 7.
+    const pinOptions = () => page.evaluate(() => [...[...document.querySelectorAll('#settings .editable.select')]
         .find(row => row.querySelector('.label').textContent === 'GPIO pin:')
-        .querySelectorAll('option').length + '|' + USABLE_PINS.join());
-    expect(pins === '26|' + [...Array(23).keys(), 26, 27, 28].join(), 'the PWM offers GPIO pins ' + pins);
+        .querySelectorAll('option')].map(o => o.value).join());
+    const pins = await pinOptions();
+    expect(pins === [...Array(23).keys(), 26, 27, 28].filter(p => p !== 7).join(), 'the PWM offers GPIO pins ' + pins);
     await select('GPIO pin').selectOption('26');
     expect(await page.evaluate(() => elements.n4.pin) === 26, 'picking GPIO 26 did not set the PWM pin');
     await page.evaluate(() => elements.n4.setPin('15'));
@@ -476,6 +478,12 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add a GPIO input"]').dispatchEvent('click');
     expect(await keyRows() === 'Label:|GPIO pin:|Pull:|On when:', 'a GPIO input does not show its settings: ' + await keyRows());
+    // Its default, GPIO 3, is free; the pins of the GPO (7), the PWMs (15 and 2)
+    // and the ADC (ADC1, GPIO 27) are not offered.
+    const gpiPins = await pinOptions();
+    expect(await page.evaluate(() => elements.n19.pin) === 3
+        && gpiPins === [...Array(23).keys(), 26, 28].filter(p => ![2, 7, 15].includes(p)).join(),
+        'the GPIO input offers GPIO pins ' + gpiPins);
     await select('GPIO pin').selectOption('8');
     await choice('Pull', 'Up');
     await choice('On when', 'Low');
@@ -487,12 +495,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return {
             settings: [input.pin, input.pull, input.invert].join(),
             rejected: input.setPin('23') === false && input.setPull(3) === false && input.setActive('x') === false,
+            // A new node takes its default pin if free, else the lowest free one.
+            free: [freePin(null, 4), freePin(null, 7), freePin(null, 2)].join(),
             toPwm: createEdge('n19', 'n4') === null,
             toLight: createEdge('n19', 'n20') !== null && light.sourceID() === 19 && light.on === null,
             marshal: input.marshal().map(b => b.toString(16).padStart(2, '0')).join(''),
         };
     });
     expect(gpi.settings === '8,1,true' && gpi.rejected, 'the GPIO input settings gave ' + JSON.stringify(gpi));
+    expect(gpi.free === '4,0,0', 'free pins are ' + JSON.stringify(gpi));
     expect(gpi.toPwm, 'a GPIO input was wired to a PWM');
     expect(gpi.toLight, 'the GPIO input was not wired to the light, or the light shows a state before any reading');
     expect(gpi.marshal === '31000013' + '02' + '0805', 'the GPIO input marshals as ' + gpi.marshal);
@@ -772,6 +783,18 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(replaced.led === 'n22' && replaced.button === 'n3,n14' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
+    // An ADC channel is a pin too: with a GPO on GPIO 26, the ADC (on ADC1) is
+    // not offered ADC0.
+    const channelsLeft = await page.evaluate(() => {
+        const gpo = new uiGPO(400, 400);
+        gpo.setPin('26');
+        selectById(10);
+        const offered = [...document.querySelectorAll('#settings .editable.select option')].map(o => o.value).join();
+        gpo.remove();
+        clearSelection();
+        return offered;
+    });
+    expect(channelsLeft === '1,2', 'with GPIO 26 in use the ADC offers channels ' + channelsLeft);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
 
