@@ -59,6 +59,7 @@ static bool cei_next(config_element_iterator *it)
     
     // printf("here has next %02X %02X %02X %02X\n",p[0],p[1],p[2],p[3]);
     it->type = p[0];
+    it->flags = p[1];
 
     // /* Element ID (example: big-endian) */
     it->id = (uint16_t)p[2] << 8 | p[3];

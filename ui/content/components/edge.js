@@ -1,5 +1,7 @@
+// A wire from an output of a source node (start) into an output node (end).
+// `output` is which of the source's outputs, by default its active one.
 class gEdge {
-    constructor(n1, n2) {
+    constructor(n1, n2, output) {
         this.id = idEdgeCounter++;
         this.name = 'n' + this.id;
         this.start = {};
@@ -15,6 +17,7 @@ class gEdge {
         if (inp.conns.length >= inp.max) inp.conns[0].remove();
 
         this.start.node = n1;
+        this.start.output = output ?? n1.actNum;
         this.start.mvfunc = () => this.moveStart();
         this.start.handleDisplay = (display) => this.sHandle.classList.toggle('hide', !display);
         this.end.node = n2;
@@ -66,6 +69,19 @@ class gEdge {
         g.appendChild(hit);
         this.hit = hit;
 
+        // A source with several outputs names the one the wire leaves from.
+        if (this.start.node.outputs.length > 1) {
+            const name = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            name.setAttribute('font-size', 10);
+            name.setAttribute('text-anchor', 'middle');
+            name.setAttribute('dominant-baseline', 'central');
+            name.setAttribute('fill', '#BFCDE7');
+            name.textContent = this.start.node.outputs[this.start.output].name;
+            g.appendChild(name);
+            this.outputName = name;
+            this.placeOutputName();
+        }
+
         const sHandle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         sHandle.setAttribute('cx', `${xh1}`);
         sHandle.setAttribute('cy', `${yh1}`);
@@ -94,6 +110,14 @@ class gEdge {
         return g;
     }
 
+    // Beside the wire, just off the source.
+    placeOutputName() {
+        const [nx, ny] = this.start.node.coords();
+        const a = this.start.angle;
+        this.outputName.setAttribute('x', Math.round(10 * (nx + 60 * Math.cos(a) - 12 * Math.sin(a))) / 10);
+        this.outputName.setAttribute('y', Math.round(10 * (ny - 60 * Math.sin(a) - 12 * Math.cos(a))) / 10);
+    }
+
     // Show the wire as selected, with both handles, or not.
     highlight(on) {
         this.path.setAttribute('stroke', on ? '#4CAF50' : '#BFCDE7');
@@ -103,7 +127,7 @@ class gEdge {
 
     // Take the wire out of the graph: off both nodes, and off the page.
     remove() {
-        const out = this.start.node.outputs[this.start.node.actNum];
+        const out = this.start.node.outputs[this.start.output];
         out.conns = out.conns.filter(c => c !== this);
         const inp = this.end.node.inputs[this.end.node.actNum];
         inp.conns = inp.conns.filter(c => c !== this);
@@ -125,6 +149,7 @@ class gEdge {
         this.setPath(`M ${x},${y} C ${xh},${yh} ${match[1]},${match[2]} ${match[3]},${match[4]}`);
         this.sHandle.setAttribute('cx', `${xh}`);
         this.sHandle.setAttribute('cy', `${yh}`);
+        if (this.outputName) this.placeOutputName();
     }
     
     moveEnd() {

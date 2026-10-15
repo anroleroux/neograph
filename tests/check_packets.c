@@ -44,17 +44,31 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
     return 0;
 }
 
-/* A source reference must name a source the output takes (PROTOCOL.md, "Wire
-   types"): a button for an LED, GPO or keyboard, a slider or an ADC for a PWM, and those or
-   the core temperature for a plot. `types` lists the types it may be, ending in 0. */
-static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, 0 };
-static const uint8_t FLOATING_HW[] = { MSG_UI_SLIDER, MSG_HW_ADC, 0 };
-static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_HW_ADC, MSG_HW_CORE, 0 };
+/* The outputs a source of a type has: a 2D slider's X and Y, one for the others. */
+static uint8_t outputs_of(uint8_t type) { return type == MSG_UI_SLIDER_2D ? 2 : 1; }
 
-static void check_source(const uint8_t *p, size_t len, uint16_t src, const uint8_t *types, const char *what) {
-    if (src == 0) return;
-    uint8_t type = control_type(p, len, src);
+/* Whether a message holds source references, which the UI writes with their outputs. */
+static bool has_refs(uint8_t type) {
+    return type == MSG_HW_LED || type == MSG_HW_GPO || type == MSG_HW_PWM || type == MSG_HW_KEYBOARD
+        || type == MSG_UI_GRAPH;
+}
+
+/* A source reference must name an output of a source the output takes (PROTOCOL.md,
+   "Wire types"): a button for an LED, GPO or keyboard, a slider, 2D slider or an ADC
+   for a PWM, and those or the core temperature for a plot. `types` lists the types it
+   may be, ending in 0. */
+static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, 0 };
+static const uint8_t FLOATING_HW[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, 0 };
+static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, 0 };
+
+static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_t *types, const char *what) {
+    if (src.id == 0) {
+        if (src.output != 0) fail("an empty source reference has an output");
+        return;
+    }
+    uint8_t type = control_type(p, len, src.id);
     if (type == 0) { fail("a source reference names no element in the config"); return; }
+    if (src.output >= outputs_of(type)) fail("a source reference names an output its source does not have");
     for (; *types; types++) if (type == *types) return;
     fail(what);
 }
@@ -66,6 +80,9 @@ static void check_config(const uint8_t *p, size_t len) {
     config_element_iterator_init(&it, p + 3, len - 3);
     bool device = false;
     while (it.next(&it)) {
+        /* The UI writes every source reference with its output. */
+        uint8_t r = msg_ref_len(it.flags);
+        if (has_refs(it.type) && !(it.flags & MSG_FLAG_OUTPUT)) fail("source references are written without their outputs");
         switch (it.type) {
         case MSG_DEVICE:
             device = true;
@@ -74,10 +91,14 @@ static void check_config(const uint8_t *p, size_t len) {
             if (it.len != 1) fail("slider message is not 1 byte");
             else if (it.pay[0] & ~SLIDER_VERTICAL) fail("slider orientation has bits other than SLIDER_VERTICAL");
             break;
+        case MSG_UI_SLIDER_2D:
+            if (it.len != 1) fail("2D slider message is not 1 byte");
+            else if (it.pay[0] & ~SLIDER_RETURN) fail("2D slider options have bits other than SLIDER_RETURN");
+            break;
         case MSG_UI_GRAPH:
-            if (it.len < 3 || it.len > 3 + 16) fail("plot message is not 3 bytes plus a unit of up to 16");
-            else if (it.pay[2] == 0) fail("plot window is 0 seconds");
-            else check_source(p, len, it.pay[0] << 8 | it.pay[1], FLOATING,
+            if (it.len < r + 1 || it.len > r + 1 + 16) fail("plot message is not a source and window plus a unit of up to 16");
+            else if (it.pay[r] == 0) fail("plot window is 0 seconds");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), FLOATING,
                               "a plot is wired from something other than a slider, an ADC or the core temperature");
             break;
         case MSG_UI_BUTTON:
@@ -94,41 +115,45 @@ static void check_config(const uint8_t *p, size_t len) {
             break;
         /* unmarshal_controls only sets up outputs with exactly these lengths */
         case MSG_HW_LED:
-            if (it.len != 2) fail("LED message is not 2 bytes; the device would skip it");
-            else check_source(p, len, it.pay[0] << 8 | it.pay[1], BOOLEAN, "an LED is wired from something other than a button");
+            if (it.len != r) fail("LED message is not one source reference; the device would skip it");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "an LED is wired from something other than a button");
             break;
         case MSG_HW_GPO:
-            if (it.len != 3) fail("GPO message is not 3 bytes; the device would skip it");
-            else if (!pin_usable(it.pay[2])) fail("GPO pin is not in PIN_USABLE_MASK");
-            else check_source(p, len, it.pay[0] << 8 | it.pay[1], BOOLEAN, "a GPO is wired from something other than a button");
+            if (it.len != r + 1) fail("GPO message is not a source and a pin; the device would skip it");
+            else if (!pin_usable(it.pay[r])) fail("GPO pin is not in PIN_USABLE_MASK");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a GPO is wired from something other than a button");
             break;
         case MSG_HW_KEYBOARD:
-            if (!keyboard_payload_valid(it.pay, it.len)) fail("keyboard payload is not one the device types; it would skip it");
-            else check_source(p, len, it.pay[0] << 8 | it.pay[1], BOOLEAN, "a keyboard is wired from something other than a button");
+            if (!keyboard_payload_valid(it.pay, it.len, it.flags)) fail("keyboard payload is not one the device types; it would skip it");
+            else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a keyboard is wired from something other than a button");
             break;
-        case MSG_HW_PWM:
-            if (it.len != 15) fail("PWM message is not 15 bytes; the device would skip it");
-            else if (!pin_usable(it.pay[2])) fail("PWM pin is not in PIN_USABLE_MASK");
-            else if ((it.pay[3] << 8 | it.pay[4]) < PWM_FREQ_MIN
-                     || (it.pay[11] << 8 | it.pay[12]) < PWM_FREQ_MIN
-                     || (it.pay[13] << 8 | it.pay[14]) < PWM_FREQ_MIN) fail("a PWM frequency is under PWM_FREQ_MIN");
-            else if (it.pay[5] & ~(PWM_DUTY_INPUT | PWM_FREQ_INPUT | PWM_FREQ_LOG)) fail("PWM options have unknown bits");
-            else if (it.pay[6] > PWM_DUTY_MAX || it.pay[7] > PWM_DUTY_MAX || it.pay[8] > PWM_DUTY_MAX)
+        case MSG_HW_PWM: {
+            pwm_payload pwm;
+            if (!pwm_payload_read(it.pay, it.len, it.flags, &pwm)) fail("PWM message is not a PWM's length; the device would skip it");
+            else if (!pin_usable(pwm.pin)) fail("PWM pin is not in PIN_USABLE_MASK");
+            else if (pwm.freq < PWM_FREQ_MIN || pwm.freq_min < PWM_FREQ_MIN || pwm.freq_max < PWM_FREQ_MIN)
+                fail("a PWM frequency is under PWM_FREQ_MIN");
+            else if (pwm.options & ~(PWM_DUTY_INPUT | PWM_FREQ_INPUT | PWM_FREQ_LOG)) fail("PWM options have unknown bits");
+            else if (pwm.duty > PWM_DUTY_MAX || pwm.duty_min > PWM_DUTY_MAX || pwm.duty_max > PWM_DUTY_MAX)
                 fail("a PWM duty cycle is over PWM_DUTY_MAX");
-            else if ((it.pay[0] | it.pay[1]) && !(it.pay[5] & PWM_DUTY_INPUT))
+            else if (pwm.duty_source.id && !(pwm.options & PWM_DUTY_INPUT))
                 fail("a PWM has a duty source but a constant duty");
-            else if ((it.pay[9] | it.pay[10]) && !(it.pay[5] & PWM_FREQ_INPUT))
+            else if (pwm.freq_source.id && !(pwm.options & PWM_FREQ_INPUT))
                 fail("a PWM has a frequency source but a constant frequency");
             else {
-                check_source(p, len, it.pay[0] << 8 | it.pay[1], FLOATING_HW, "a PWM's duty is wired from something other than a slider or an ADC");
-                check_source(p, len, it.pay[9] << 8 | it.pay[10], FLOATING_HW, "a PWM's frequency is wired from something other than a slider or an ADC");
+                check_source(p, len, pwm.duty_source, FLOATING_HW, "a PWM's duty is wired from something other than a slider or an ADC");
+                check_source(p, len, pwm.freq_source, FLOATING_HW, "a PWM's frequency is wired from something other than a slider or an ADC");
             }
             break;
+        }
         case MSG_STRING:
         case MSG_LAYOUT:
         case MSG_WIRE: {
-            if (it.type == MSG_STRING ? it.len == 0 : it.type == MSG_WIRE ? (it.len != 4 && it.len != 6) : it.len != 4)
+            /* A wire into a PWM ends with its source reference, written with its output. */
+            if (it.type == MSG_STRING ? it.len == 0 : it.type == MSG_WIRE ? (it.len != 4 && it.len != 4 + 3) : it.len != 4)
                 fail("label, position or wire has the wrong length");
+            else if (it.type == MSG_WIRE && it.len > 4 && !(it.flags & MSG_FLAG_OUTPUT))
+                fail("a wire's source reference is written without its output");
             bool found = false;
             config_element_iterator_init(&ctl, p + 3, len - 3);
             while (ctl.next(&ctl))
@@ -151,8 +176,9 @@ static void check_command(const uint8_t *p, size_t len) {
     config_element_iterator_init(&it, p + 3, len - 3);
     while (it.next(&it)) {
         if ((it.type & (MSG_HW_BIT | MSG_INPUT_BIT)) != MSG_INPUT_BIT) fail("command from an element that is not a UI input");
-        /* handle_packet sends pay[0], then the rest in 4-byte words */
-        if (it.len < 1 || (it.len - 1) % 4 != 0) fail("command payload is not 1 + 4n bytes");
+        /* handle_packet sends one action word per payload byte: a value for each output */
+        if (it.len != outputs_of(it.type)) fail("command payload is not one byte per output of its element");
+        if (it.len > FIFO_OUTPUTS_MAX) fail("command has more values than an action word can name outputs");
     }
 }
 
@@ -228,7 +254,7 @@ int main(int argc, char **argv) {
         config_element_iterator it;
         config_element_iterator_init(&it, p + 3, data_length);
         while (it.next(&it))
-            if (it.pay[-4] != 0x00) fail("a message's reserved byte is not 0");
+            if (it.flags & ~MSG_FLAG_OUTPUT) fail("a message's flags set a bit other than MSG_FLAG_OUTPUT");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");
 
         switch (p[0]) {

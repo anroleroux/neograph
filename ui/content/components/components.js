@@ -6,6 +6,8 @@
 
 /* {{slider-js}} */
 
+/* {{slider2d-js}} */
+
 /* {{led-js}} */
 
 /* {{gpo-js}} */

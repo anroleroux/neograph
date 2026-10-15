@@ -14,7 +14,13 @@ const PKT_DEVICE_ID          = 0x0D;  // HW -> UI
 const PKT_CONFIG_MAX         = 4096;  // largest 0A packet, header included: the flash config region
 
 // ── Messages (the body of a packet)
-const MSG_HEADER_LEN         = 5;     // type (1), reserved (1), element ID (2, BE), payload length (1)
+const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE), payload length (1)
+
+// Message header byte 1, bit 0: each source reference in the payload is 3 bytes, the
+// element ID then the index of its output (MSG_FLAG_OUTPUT). Without it, a reference
+// is the 2-byte element ID, and means the element's output 0: messages saved before
+// sources had several outputs. Other bits are 0.
+const MSG_FLAG_OUTPUT        = 0x01;
 
 // Control element types (0x00-0x3F): bit 5 set = HW, bit 4 set = input.
 const MSG_HW_BIT             = 0x20;
@@ -26,7 +32,7 @@ const MSG_UI_GRAPH           = 0x02;  // a plot, drawn in the browser
 const MSG_UI_BUTTON          = 0x10;
 const MSG_UI_SWITCH          = 0x11;  // reserved
 const MSG_UI_SLIDER          = 0x12;
-const MSG_UI_SLIDER_2D       = 0x13;  // reserved
+const MSG_UI_SLIDER_2D       = 0x13;  // two outputs: X (0) and Y (1)
 const MSG_UI_MULTI_SLIDER    = 0x14;  // reserved
 const MSG_UI_DIAL            = 0x15;  // reserved
 const MSG_UI_TIMER           = 0x16;  // reserved
@@ -65,6 +71,10 @@ const VALUE_HALF             = 0x80;  // on/off outputs (LED, GPO) are on from h
 
 // Slider (MSG_UI_SLIDER) payload byte 0, bit 0: 0 = horizontal, 1 = vertical.
 const SLIDER_VERTICAL        = 0x01;
+
+// 2D slider (MSG_UI_SLIDER_2D) payload byte 0, bit 0: 0 = it stays where it is let go,
+// 1 = it returns to the centre (VALUE_HALF on both outputs).
+const SLIDER_RETURN          = 0x01;
 
 // Button (MSG_UI_BUTTON) payload byte 0, bit 0: 0 = each click toggles it, 1 = it is on
 // while held. A button without the byte is a toggle.

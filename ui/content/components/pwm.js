@@ -1,6 +1,7 @@
 // A PWM output. Its duty cycle and its frequency are each constant, or from an
-// input: a floating source node (a slider), picked in the settings, whose value
-// 0 gives the parameter's min and 1 its max. The PWM's wires are those sources.
+// input: an output of a floating source node (a slider, a 2D slider's X or Y),
+// picked in the settings, whose value 0 gives the parameter's min and 1 its
+// max. The PWM's wires are those sources.
 class uiPWM extends uiComponents {
     constructor(x = 0, y = 0) {
         super("pwm",x,y);
@@ -23,7 +24,8 @@ class uiPWM extends uiComponents {
         this.duty = 50;
         this.dutyMin = 0;
         this.dutyMax = 100;
-        this.dutySource = null;
+        this.dutySource = null;    // the source node, and which of its outputs
+        this.dutyOutput = 0;
 
         this.freqFromInput = false;
         this.freq = 1000;
@@ -31,6 +33,7 @@ class uiPWM extends uiComponents {
         this.freqMax = 10000;
         this.freqLog = false;      // from the input: min to max logarithmically, not linearly
         this.freqSource = null;
+        this.freqOutput = 0;
 
         this.buildGraphElement();
     }
@@ -87,44 +90,56 @@ class uiPWM extends uiComponents {
         if (mode === 'constant') this.setSource(param, null);
     }
 
-    // Drive a parameter from a floating source node, or from none, and redraw
-    // the wires. A source of another type is refused.
-    setSource(param, node) {
-        if (node && !this.takesType(node)) return false;
+    // Drive a parameter from an output of a floating source node (its first by
+    // default), or from none, and redraw the wires. A source of another type is refused.
+    setSource(param, node, output = 0) {
+        if (node && !this.takesType(node, output)) return false;
         this[param + 'Source'] = node;
+        this[param + 'Output'] = node ? output : 0;
         this.syncWires();
     }
 
-    // The sources the parameters use.
+    // Whether a parameter is driven by output `output` of `node`.
+    drivenBy(param, node, output) {
+        return this[param + 'Source'] === node && this[param + 'Output'] === output;
+    }
+
+    // The source outputs the parameters use, as {node, output}, each once.
     sources() {
-        return [...new Set([this.dutySource, this.freqSource].filter(Boolean))];
+        const refs = ['duty', 'freq'].filter(p => this[p + 'Source'])
+            .map(p => ({ node: this[p + 'Source'], output: this[p + 'Output'] }));
+        return refs.filter((r, i) => !refs.slice(0, i).some(q => q.node === r.node && q.output === r.output));
     }
 
     // Make the wires into this PWM match its sources: one from each.
     syncWires() {
         const sources = this.sources();
-        this.inConns().filter(c => !sources.includes(c.start.node)).forEach(c => c.remove());
-        sources.filter(n => !this.inConns().some(c => c.start.node === n))
-            .forEach(n => new gEdge(n, this));
+        const wired = (c, r) => c.start.node === r.node && c.start.output === r.output;
+        this.inConns().filter(c => !sources.some(r => wired(c, r))).forEach(c => c.remove());
+        sources.filter(r => !this.inConns().some(c => wired(c, r)))
+            .forEach(r => new gEdge(r.node, this, r.output));
     }
 
     // A wire drawn into the PWM drives the duty cycle if that has no source
     // yet, otherwise the frequency; the parameter it drives is from the input.
     addEdge(e) {
         super.addEdge(e);
-        const src = e.start.node;
-        if (this.sources().includes(src)) return;
+        const src = e.start.node, output = e.start.output;
+        if (this.drivenBy('duty', src, output) || this.drivenBy('freq', src, output)) return;
         const param = this.dutySource ? 'freq' : 'duty';
         this[param + 'FromInput'] = true;
         this[param + 'Source'] = src;
+        this[param + 'Output'] = output;
         if (selected === this) this.createSettings();
     }
 
     // A wire taken out of the PWM takes its source off the parameters.
     edgeRemoved(e) {
-        const src = e.start.node;
-        if (this.dutySource === src) this.dutySource = null;
-        if (this.freqSource === src) this.freqSource = null;
+        for (const param of ['duty', 'freq']) {
+            if (!this.drivenBy(param, e.start.node, e.start.output)) continue;
+            this[param + 'Source'] = null;
+            this[param + 'Output'] = 0;
+        }
         if (selected === this) this.createSettings();
     }
 
@@ -150,12 +165,20 @@ class uiPWM extends uiComponents {
                 (v) => this['set' + cap](v), attrs));
             return;
         }
-        // Any floating input node (a slider) can be picked; picking one draws its wire.
-        const choices = Object.values(elements).filter(n => this.takesType(n))
-            .map(n => [n.name, `${n.label} (${n.name})`]);
+        // Any floating output of a node (a slider, a 2D slider's X or Y) can be
+        // picked, as "n5:0"; picking one draws its wire.
+        const choices = Object.values(elements).flatMap(n => n.outputs
+            .map((out, i) => [n, out, i]).filter(([, , i]) => this.takesType(n, i))
+            .map(([n, out, i]) => [`${n.name}:${i}`,
+                n.outputs.length > 1 ? `${n.label} ${out.name} (${n.name})` : `${n.label} (${n.name})`]));
+        const source = this[param + 'Source'];
         settings.appendChild(selectSetting('Input', [['', 'None'], ...choices],
-            () => this[param + 'Source']?.name ?? '',
-            (name) => { this.setSource(param, elements[name] ?? null); this.createSettings(); }));
+            () => source ? `${source.name}:${this[param + 'Output']}` : '',
+            (pick) => {
+                const [name, output] = pick.split(':');
+                this.setSource(param, elements[name] ?? null, Number(output));
+                this.createSettings();
+            }));
         settings.appendChild(editableSetting(`${label} at 0 (${unit})`, () => this[param + 'Min'],
             (v) => this['set' + cap + 'Min'](v), attrs));
         settings.appendChild(editableSetting(`${label} at 1 (${unit})`, () => this[param + 'Max'],
@@ -175,13 +198,13 @@ class uiPWM extends uiComponents {
         const options = (this.dutyFromInput ? PWM_DUTY_INPUT : 0) | (this.freqFromInput ? PWM_FREQ_INPUT : 0)
             | (this.freqLog ? PWM_FREQ_LOG : 0);
         return [
-            this.tc, 0x00, ...id16(this.id), 15,
-            ...id16(this.dutySource?.id ?? 0),
+            this.tc, MSG_FLAG_OUTPUT, ...id16(this.id), 17,
+            ...refBytes(this.dutySource, this.dutyOutput),
             this.pin,
             ...id16(this.freq),
             options,
             this.duty, this.dutyMin, this.dutyMax,
-            ...id16(this.freqSource?.id ?? 0),
+            ...refBytes(this.freqSource, this.freqOutput),
             ...id16(this.freqMin), ...id16(this.freqMax),
         ];
     }

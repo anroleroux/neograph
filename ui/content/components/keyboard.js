@@ -177,11 +177,11 @@ class uiKeyboard extends uiComponents {
     buildUI(commandInterface) {}
 
     marshal() {
-        const sourceID = this.sourceID();
+        const source = this.sourceRef();
         const stroke = this.mode === KEYBOARD_TEXT
             ? [KEYBOARD_TEXT, ...Array.from(this.text, c => c.charCodeAt(0))]
             : [KEYBOARD_COMBO, this.modifiers, this.key];
-        return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 2 + stroke.length,
-            (sourceID >> 8) & 0xFF, sourceID & 0xFF, ...stroke];
+        return [this.tc, MSG_FLAG_OUTPUT, (this.id >> 8) & 0xFF, this.id & 0xFF, source.length + stroke.length,
+            ...source, ...stroke];
     }
 }

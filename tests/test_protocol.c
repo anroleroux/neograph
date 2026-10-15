@@ -71,7 +71,7 @@ void test_every_packet_example_is_well_formed(void)
         messages(&it, ex);
         size_t count = 0;
         while (it.next(&it)) {
-            TEST_ASSERT_EQUAL_HEX8_MESSAGE(0x00, it.pay[-4], ex->name);   /* reserved byte */
+            TEST_ASSERT_EQUAL_HEX8_MESSAGE(0x00, it.flags & ~MSG_FLAG_OUTPUT, ex->name);   /* unknown flags */
             count++;
         }
         TEST_ASSERT_TRUE_MESSAGE(count > 0, ex->name);
@@ -111,6 +111,19 @@ void test_command_slider(void)
     messages(&it, ex);
     assert_message(&it, MSG_UI_SLIDER, 4, 1);
     TEST_ASSERT_EQUAL_UINT8(191, it.pay[0]);                       /* round(0.75 * 255) */
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
+void test_command_slider_2d(void)
+{
+    const struct protocol_example *ex = example("command-slider-2d");
+    TEST_ASSERT_EQUAL_HEX8(PKT_COMMAND, ex->bytes[0]);
+
+    config_element_iterator it;
+    messages(&it, ex);
+    assert_message(&it, MSG_UI_SLIDER_2D, 6, 2);                   /* one byte per output */
+    TEST_ASSERT_EQUAL_HEX8(VALUE_FULL, it.pay[0]);                 /* X: 1 */
+    TEST_ASSERT_EQUAL_HEX8(VALUE_HALF, it.pay[1]);                 /* Y: 0.5 */
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
@@ -193,8 +206,10 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_EQUAL_INT16(-200, (int16_t)(it.pay[0] << 8 | it.pay[1]));
     TEST_ASSERT_EQUAL_INT16(-40, (int16_t)(it.pay[2] << 8 | it.pay[3]));
 
-    assert_message(&it, MSG_HW_LED, 2, 2);
-    TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
+    assert_message(&it, MSG_HW_LED, 2, 3);
+    TEST_ASSERT_EQUAL_HEX8(MSG_FLAG_OUTPUT, it.flags);
+    TEST_ASSERT_EQUAL_UINT16(1, msg_ref_at(it.pay, it.flags).id);  /* source n1 */
+    TEST_ASSERT_EQUAL_UINT8(0, msg_ref_at(it.pay, it.flags).output);
     assert_message(&it, MSG_STRING, 2, 12);
     TEST_ASSERT_EQUAL_MEMORY("Pompe \xC3\xA0 eau", it.pay, 12);   /* UTF-8 */
     assert_message(&it, MSG_LAYOUT, 2, 4);
@@ -204,9 +219,10 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_EQUAL_HEX16(0xF562, it.pay[0] << 8 | it.pay[1]);
     TEST_ASSERT_EQUAL_HEX16(0x7562, it.pay[2] << 8 | it.pay[3]);
 
-    assert_message(&it, MSG_HW_GPO, 3, 3);
-    TEST_ASSERT_EQUAL_UINT16(1, it.pay[0] << 8 | it.pay[1]);       /* source n1 */
-    TEST_ASSERT_EQUAL_UINT8(1, it.pay[2]);                         /* pin 1 */
+    assert_message(&it, MSG_HW_GPO, 3, 4);
+    TEST_ASSERT_EQUAL_HEX8(MSG_FLAG_OUTPUT, it.flags);
+    TEST_ASSERT_EQUAL_UINT16(1, msg_ref_at(it.pay, it.flags).id);  /* source n1 */
+    TEST_ASSERT_EQUAL_UINT8(1, it.pay[3]);                         /* pin 1 */
     assert_message(&it, MSG_STRING, 3, 3);
     TEST_ASSERT_EQUAL_MEMORY("GPO", it.pay, 3);
     assert_message(&it, MSG_LAYOUT, 3, 4);
@@ -216,26 +232,30 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_EQUAL_HEX16(0xFBF0, it.pay[0] << 8 | it.pay[1]);
     TEST_ASSERT_EQUAL_HEX16(0x7BF0, it.pay[2] << 8 | it.pay[3]);
 
-    assert_message(&it, MSG_HW_PWM, 4, 15);
-    TEST_ASSERT_EQUAL_UINT16(5, it.pay[0] << 8 | it.pay[1]);       /* duty source n5 */
-    TEST_ASSERT_EQUAL_UINT8(2, it.pay[2]);                         /* pin 2 */
-    TEST_ASSERT_EQUAL_UINT16(1000, it.pay[3] << 8 | it.pay[4]);    /* 1000 Hz */
-    TEST_ASSERT_EQUAL_HEX8(PWM_DUTY_INPUT, it.pay[5]);             /* duty from input, constant frequency */
-    TEST_ASSERT_EQUAL_UINT8(50, it.pay[6]);                        /* constant duty 50 % */
-    TEST_ASSERT_EQUAL_UINT8(0, it.pay[7]);                         /* duty at 0: 0 % */
-    TEST_ASSERT_EQUAL_UINT8(100, it.pay[8]);                       /* duty at 1: 100 % */
-    TEST_ASSERT_EQUAL_UINT16(0, it.pay[9] << 8 | it.pay[10]);      /* no frequency source */
-    TEST_ASSERT_EQUAL_UINT16(100, it.pay[11] << 8 | it.pay[12]);   /* frequency at 0 */
-    TEST_ASSERT_EQUAL_UINT16(10000, it.pay[13] << 8 | it.pay[14]); /* frequency at 1 */
+    assert_message(&it, MSG_HW_PWM, 4, 17);
+    pwm_payload pwm;
+    TEST_ASSERT_TRUE(pwm_payload_read(it.pay, it.len, it.flags, &pwm));
+    TEST_ASSERT_EQUAL_UINT16(5, pwm.duty_source.id);               /* duty source n5 */
+    TEST_ASSERT_EQUAL_UINT8(0, pwm.duty_source.output);
+    TEST_ASSERT_EQUAL_UINT8(2, pwm.pin);                           /* pin 2 */
+    TEST_ASSERT_EQUAL_UINT16(1000, pwm.freq);                      /* 1000 Hz */
+    TEST_ASSERT_EQUAL_HEX8(PWM_DUTY_INPUT, pwm.options);           /* duty from input, constant frequency */
+    TEST_ASSERT_EQUAL_UINT8(50, pwm.duty);                         /* constant duty 50 % */
+    TEST_ASSERT_EQUAL_UINT8(0, pwm.duty_min);                      /* duty at 0: 0 % */
+    TEST_ASSERT_EQUAL_UINT8(100, pwm.duty_max);                    /* duty at 1: 100 % */
+    TEST_ASSERT_EQUAL_UINT16(0, pwm.freq_source.id);               /* no frequency source */
+    TEST_ASSERT_EQUAL_UINT16(100, pwm.freq_min);                   /* frequency at 0 */
+    TEST_ASSERT_EQUAL_UINT16(10000, pwm.freq_max);                 /* frequency at 1 */
     assert_message(&it, MSG_STRING, 4, 3);
     TEST_ASSERT_EQUAL_MEMORY("PWM", it.pay, 3);
     assert_message(&it, MSG_LAYOUT, 4, 4);
     TEST_ASSERT_EQUAL_INT16(200, (int16_t)(it.pay[0] << 8 | it.pay[1]));
     TEST_ASSERT_EQUAL_INT16(120, (int16_t)(it.pay[2] << 8 | it.pay[3]));
-    assert_message(&it, MSG_WIRE, 4, 6);                          /* wire n5 -> n4, with its source */
+    assert_message(&it, MSG_WIRE, 4, 7);                          /* wire n5 -> n4, with its source */
     TEST_ASSERT_EQUAL_HEX16(0x0000, it.pay[0] << 8 | it.pay[1]);
     TEST_ASSERT_EQUAL_HEX16(0x8000, it.pay[2] << 8 | it.pay[3]);
-    TEST_ASSERT_EQUAL_UINT16(5, it.pay[4] << 8 | it.pay[5]);
+    TEST_ASSERT_EQUAL_UINT16(5, msg_ref_at(it.pay + 4, it.flags).id);
+    TEST_ASSERT_EQUAL_UINT8(0, msg_ref_at(it.pay + 4, it.flags).output);
 
     assert_message(&it, MSG_UI_SLIDER, 5, 1);
     TEST_ASSERT_EQUAL_HEX8(0, it.pay[0] & SLIDER_VERTICAL);        /* horizontal */
@@ -248,9 +268,13 @@ void test_save_config_keeps_device_config_then_appends_graph(void)
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
+/* Two source references are to the same output of the same element. */
+static bool same_ref(msg_ref a, msg_ref b) { return a.id == b.id && a.output == b.output; }
+
 /* Every label, position and wire in a config example describes a control element in
  * the same config. Positions are exactly 4 bytes. A wire belongs to an output with a
- * source: 4 bytes into an LED or GPO, 6 into a PWM, ending with one of its sources. */
+ * source: 4 bytes into an LED or GPO, 4 and a source reference into a PWM, which is
+ * one of its sources. */
 void test_graph_messages_belong_to_controls(void)
 {
     for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
@@ -268,15 +292,15 @@ void test_graph_messages_belong_to_controls(void)
             messages(&controls, ex);
             while (controls.next(&controls)) {
                 if (controls.type > 0x3F || controls.id != labels.id) continue;
-                uint16_t src = controls.pay[0] << 8 | controls.pay[1];
+                pwm_payload pwm;
                 if (labels.type != MSG_WIRE)
                     found = true;
                 else if (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO)
-                    found = labels.len == 4 && src != 0;
-                else if (controls.type == MSG_HW_PWM) {
-                    uint16_t wired = labels.pay[4] << 8 | labels.pay[5];
-                    found = labels.len == 6 && wired != 0
-                        && (wired == src || wired == (controls.pay[9] << 8 | controls.pay[10]));
+                    found = labels.len == 4 && msg_ref_at(controls.pay, controls.flags).id != 0;
+                else if (controls.type == MSG_HW_PWM && pwm_payload_read(controls.pay, controls.len, controls.flags, &pwm)) {
+                    msg_ref wired = msg_ref_at(labels.pay + 4, labels.flags);
+                    found = labels.len == 4 + msg_ref_len(labels.flags) && wired.id != 0
+                        && (same_ref(wired, pwm.duty_source) || same_ref(wired, pwm.freq_source));
                 }
             }
             TEST_ASSERT_TRUE_MESSAGE(found, ex->name);
@@ -294,8 +318,17 @@ static uint8_t element_type(const struct protocol_example *ex, uint16_t id)
     return 0;
 }
 
+/* A floating output the device has: a slider's, a 2D slider's X or Y, or an ADC's. */
+static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
+{
+    if (src.id == 0) return;
+    uint8_t type = element_type(ex, src.id);
+    TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC, ex->name);
+    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);
+}
+
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
- * driven by a button, a PWM by sliders. */
+ * driven by a button, a PWM by sliders, 2D sliders or ADCs. */
 void test_wires_join_matching_types(void)
 {
     for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
@@ -306,15 +339,14 @@ void test_wires_join_matching_types(void)
         messages(&it, ex);
         while (it.next(&it)) {
             if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD) {
-                uint16_t src = it.pay[0] << 8 | it.pay[1];
-                if (src) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_BUTTON, element_type(ex, src), ex->name);
+                msg_ref src = msg_ref_at(it.pay, it.flags);
+                if (src.id) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_BUTTON, element_type(ex, src.id), ex->name);
+                TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, src.output, ex->name);
             } else if (it.type == MSG_HW_PWM) {
-                uint16_t duty = it.pay[0] << 8 | it.pay[1], freq = it.pay[9] << 8 | it.pay[10];
-                /* A floating source the device has: a slider or an ADC. */
-                if (duty) TEST_ASSERT_TRUE_MESSAGE(element_type(ex, duty) == MSG_UI_SLIDER
-                                                   || element_type(ex, duty) == MSG_HW_ADC, ex->name);
-                if (freq) TEST_ASSERT_TRUE_MESSAGE(element_type(ex, freq) == MSG_UI_SLIDER
-                                                   || element_type(ex, freq) == MSG_HW_ADC, ex->name);
+                pwm_payload pwm;
+                TEST_ASSERT_TRUE_MESSAGE(pwm_payload_read(it.pay, it.len, it.flags, &pwm), ex->name);
+                assert_floating_hw(ex, pwm.duty_source);
+                assert_floating_hw(ex, pwm.freq_source);
             }
         }
     }
@@ -326,6 +358,7 @@ void test_element_type_bits(void)
 {
     TEST_ASSERT_EQUAL_HEX8(MSG_INPUT_BIT, MSG_UI_BUTTON & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_INPUT_BIT, MSG_UI_SLIDER & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_INPUT_BIT, MSG_UI_SLIDER_2D & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_LED & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_GPO & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -388,46 +421,102 @@ void test_keyboard_config(void)
 
     assert_message(&it, MSG_UI_BUTTON, 1, 1);
     TEST_ASSERT_EQUAL_HEX8(BUTTON_MOMENTARY, it.pay[0]);
-    assert_message(&it, MSG_HW_KEYBOARD, 2, 5);
-    TEST_ASSERT_TRUE(keyboard_payload_valid(it.pay, it.len));
-    TEST_ASSERT_EQUAL_HEX8(KEYBOARD_COMBO, it.pay[2]);
-    TEST_ASSERT_EQUAL_HEX8(0x05, it.pay[3]);                     /* Ctrl + Alt */
-    TEST_ASSERT_EQUAL_HEX8(0x4C, it.pay[4]);                     /* Delete */
+    assert_message(&it, MSG_HW_KEYBOARD, 2, 6);
+    TEST_ASSERT_TRUE(keyboard_payload_valid(it.pay, it.len, it.flags));
+    TEST_ASSERT_EQUAL_UINT16(1, msg_ref_at(it.pay, it.flags).id);
+    TEST_ASSERT_EQUAL_HEX8(KEYBOARD_COMBO, it.pay[3]);
+    TEST_ASSERT_EQUAL_HEX8(0x05, it.pay[4]);                     /* Ctrl + Alt */
+    TEST_ASSERT_EQUAL_HEX8(0x4C, it.pay[5]);                     /* Delete */
     assert_message(&it, MSG_UI_BUTTON, 3, 0);                    /* a toggle */
-    assert_message(&it, MSG_HW_KEYBOARD, 4, 9);
-    TEST_ASSERT_TRUE(keyboard_payload_valid(it.pay, it.len));
-    TEST_ASSERT_EQUAL_HEX8(KEYBOARD_TEXT, it.pay[2]);
-    TEST_ASSERT_EQUAL_MEMORY("hello\n", it.pay + 3, 6);
+    assert_message(&it, MSG_HW_KEYBOARD, 4, 10);
+    TEST_ASSERT_TRUE(keyboard_payload_valid(it.pay, it.len, it.flags));
+    TEST_ASSERT_EQUAL_HEX8(KEYBOARD_TEXT, it.pay[3]);
+    TEST_ASSERT_EQUAL_MEMORY("hello\n", it.pay + 4, 6);
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
-/* The payloads unmarshal_controls sets up (src/config.c): a combo of 5 bytes, or
- * text of 1 to KEYBOARD_TEXT_MAX characters the keyboard can type. */
+/* The payloads unmarshal_controls sets up (src/config.c): a source reference, then a
+ * combo of 3 bytes, or text of 1 to KEYBOARD_TEXT_MAX characters the keyboard can type.
+ * The reference is 3 bytes with MSG_FLAG_OUTPUT, 2 in configs saved without it. */
 void test_keyboard_payload_valid(void)
 {
-    uint8_t p[3 + KEYBOARD_TEXT_MAX + 1] = { 0x00, 0x01, KEYBOARD_COMBO, 0x08, 0x0F };
-    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 5));
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 4));
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 6));
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 2));
+    for (uint8_t flags = 0; flags <= MSG_FLAG_OUTPUT; flags++) {
+        uint8_t r = msg_ref_len(flags);
+        uint8_t p[3 + 1 + KEYBOARD_TEXT_MAX + 1] = { 0x00, 0x01, 0x00 };
+        uint8_t *k = p + r;
+        k[0] = KEYBOARD_COMBO; k[1] = 0x08; k[2] = 0x0F;
+        TEST_ASSERT_TRUE(keyboard_payload_valid(p, r + 3, flags));
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 2, flags));
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 4, flags));
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r, flags));
 
-    p[2] = KEYBOARD_TEXT;
-    memset(p + 3, 'a', KEYBOARD_TEXT_MAX + 1);
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 3));                        /* no text */
-    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 4));
-    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 3 + KEYBOARD_TEXT_MAX));
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 3 + KEYBOARD_TEXT_MAX + 1));
-    p[3] = '\t'; p[4] = '\n'; p[5] = ' '; p[6] = '~';
-    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 7));
-    p[4] = '\r';
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 7));
-    p[4] = 0x7F;
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 7));
-    p[4] = 0xC3;                                                            /* UTF-8 */
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 7));
+        k[0] = KEYBOARD_TEXT;
+        memset(k + 1, 'a', KEYBOARD_TEXT_MAX + 1);
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 1, flags));                  /* no text */
+        TEST_ASSERT_TRUE(keyboard_payload_valid(p, r + 2, flags));
+        TEST_ASSERT_TRUE(keyboard_payload_valid(p, r + 1 + KEYBOARD_TEXT_MAX, flags));
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 1 + KEYBOARD_TEXT_MAX + 1, flags));
+        k[1] = '\t'; k[2] = '\n'; k[3] = ' '; k[4] = '~';
+        TEST_ASSERT_TRUE(keyboard_payload_valid(p, r + 5, flags));
+        k[2] = '\r';
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 5, flags));
+        k[2] = 0x7F;
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 5, flags));
+        k[2] = 0xC3;                                                              /* UTF-8 */
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 5, flags));
 
-    p[2] = 0x02;                                                            /* no such mode */
-    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 5));
+        k[0] = 0x02;                                                              /* no such mode */
+        TEST_ASSERT_FALSE(keyboard_payload_valid(p, r + 3, flags));
+    }
+}
+
+/* ── Source references and 2D sliders ─────────────────────────────────── */
+
+void test_slider_2d_config(void)
+{
+    config_element_iterator it;
+    messages(&it, example("slider-2d-config"));
+
+    assert_message(&it, MSG_UI_SLIDER_2D, 1, 1);
+    TEST_ASSERT_EQUAL_HEX8(SLIDER_RETURN, it.pay[0]);
+    assert_message(&it, MSG_HW_PWM, 2, 17);
+    pwm_payload pwm;
+    TEST_ASSERT_TRUE(pwm_payload_read(it.pay, it.len, it.flags, &pwm));
+    TEST_ASSERT_EQUAL_UINT16(1, pwm.duty_source.id);
+    TEST_ASSERT_EQUAL_UINT8(0, pwm.duty_source.output);           /* X */
+    TEST_ASSERT_EQUAL_UINT16(1, pwm.freq_source.id);
+    TEST_ASSERT_EQUAL_UINT8(1, pwm.freq_source.output);           /* Y */
+    TEST_ASSERT_EQUAL_HEX8(PWM_DUTY_INPUT | PWM_FREQ_INPUT, pwm.options);
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
+/* A config saved before outputs: 2-byte references, read as output 0. */
+void test_legacy_config(void)
+{
+    config_element_iterator it;
+    messages(&it, example("legacy-config"));
+
+    assert_message(&it, MSG_UI_BUTTON, 1, 0);
+    assert_message(&it, MSG_HW_LED, 2, 2);
+    TEST_ASSERT_EQUAL_HEX8(0, it.flags);
+    TEST_ASSERT_EQUAL_UINT8(2, msg_ref_len(it.flags));
+    TEST_ASSERT_EQUAL_UINT16(1, msg_ref_at(it.pay, it.flags).id);
+    TEST_ASSERT_EQUAL_UINT8(0, msg_ref_at(it.pay, it.flags).output);
+    TEST_ASSERT_FALSE(it.next(&it));
+
+    /* A PWM's payload is 15 bytes without outputs, 17 with them. */
+    const uint8_t old_pwm[15] = { 0, 5, 2, 0x03, 0xE8, PWM_DUTY_INPUT | PWM_FREQ_INPUT, 50, 0, 100,
+                                  0, 6, 0, 100, 0x27, 0x10 };
+    pwm_payload pwm;
+    TEST_ASSERT_FALSE(pwm_payload_read(old_pwm, 15, MSG_FLAG_OUTPUT, &pwm));
+    TEST_ASSERT_TRUE(pwm_payload_read(old_pwm, 15, 0, &pwm));
+    TEST_ASSERT_EQUAL_UINT16(5, pwm.duty_source.id);
+    TEST_ASSERT_EQUAL_UINT8(2, pwm.pin);
+    TEST_ASSERT_EQUAL_UINT16(1000, pwm.freq);
+    TEST_ASSERT_EQUAL_UINT16(6, pwm.freq_source.id);
+    TEST_ASSERT_EQUAL_UINT8(0, pwm.freq_source.output);
+    TEST_ASSERT_EQUAL_UINT16(100, pwm.freq_min);
+    TEST_ASSERT_EQUAL_UINT16(10000, pwm.freq_max);
 }
 
 /* ── FIFO words ───────────────────────────────────────────────────────── */
@@ -446,11 +535,15 @@ static void assert_setup_words(const char *name)
     size_t n = 1;
     while (it.next(&it)) {
         uint8_t pin;
+        pwm_payload pwm;
         switch (it.type) {
         case MSG_HW_LED: pin = 0; break;
         case MSG_HW_KEYBOARD: pin = 0; break;   /* core 0 keeps the keystroke */
-        case MSG_HW_GPO: pin = it.pay[2]; break;
-        case MSG_HW_PWM: pin = it.pay[2]; break;
+        case MSG_HW_GPO: pin = it.pay[msg_ref_len(it.flags)]; break;
+        case MSG_HW_PWM:
+            TEST_ASSERT_TRUE(pwm_payload_read(it.pay, it.len, it.flags, &pwm));
+            pin = pwm.pin;
+            break;
         case MSG_HW_ADC:
             /* The channel, and no reference word: an ADC is a source. */
             TEST_ASSERT_TRUE(n + 1 <= words->len);
@@ -460,15 +553,14 @@ static void assert_setup_words(const char *name)
         }
         TEST_ASSERT_TRUE(n + 2 <= words->len);
         TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, pin), words->words[n++]);
-        TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(it.pay[0] << 8 | it.pay[1]), words->words[n++]);
+        TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(msg_ref_at(it.pay, it.flags)), words->words[n++]);
         if (it.type == MSG_HW_PWM) {
             TEST_ASSERT_TRUE(n + 1 <= words->len);
-            TEST_ASSERT_EQUAL_HEX32(fifo_pwm_word(it.pay[3] << 8 | it.pay[4], it.pay[5]), words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_pwm_word(pwm.freq, pwm.options), words->words[n++]);
             TEST_ASSERT_TRUE(n + 3 <= words->len);
-            TEST_ASSERT_EQUAL_HEX32(fifo_duty_word(it.pay[6], it.pay[7], it.pay[8]), words->words[n++]);
-            TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(it.pay[9] << 8 | it.pay[10]), words->words[n++]);
-            TEST_ASSERT_EQUAL_HEX32(fifo_freq_word(it.pay[11] << 8 | it.pay[12], it.pay[13] << 8 | it.pay[14]),
-                                    words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_duty_word(pwm.duty, pwm.duty_min, pwm.duty_max), words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(pwm.freq_source), words->words[n++]);
+            TEST_ASSERT_EQUAL_HEX32(fifo_freq_word(pwm.freq_min, pwm.freq_max), words->words[n++]);
         }
     }
     TEST_ASSERT_EQUAL_UINT(words->len, n);
@@ -477,22 +569,29 @@ static void assert_setup_words(const char *name)
 void test_fifo_setup_words_match_save_config(void) { assert_setup_words("save-config"); }
 void test_fifo_setup_words_match_adc_config(void) { assert_setup_words("adc-config"); }
 void test_fifo_setup_words_match_keyboard_config(void) { assert_setup_words("keyboard-config"); }
+void test_fifo_setup_words_match_slider_2d_config(void) { assert_setup_words("slider-2d-config"); }
+void test_fifo_setup_words_match_legacy_config(void) { assert_setup_words("legacy-config"); }
 
-/* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c). */
-static void assert_action_word(const char *name)
+/* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c):
+ * one per payload byte, for the element's output of the same index. */
+static void assert_action_words(const char *name)
 {
     const struct fifo_example *words = fifo_example(name);
     config_element_iterator it;
     messages(&it, example(name));
 
     TEST_ASSERT_TRUE(it.next(&it));
-    TEST_ASSERT_EQUAL_UINT(1, words->len);
-    TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_CONTROL_ACTION, it.type, it.id, it.pay[0]),
-                            words->words[0]);
+    TEST_ASSERT_EQUAL_UINT(it.len, words->len);
+    for (uint8_t i = 0; i < it.len; i++) {
+        TEST_ASSERT_EQUAL_HEX32(fifo_action_word(it.id, i, it.pay[i]), words->words[i]);
+        TEST_ASSERT_EQUAL_UINT8(FIFO_OP_CONTROL_ACTION, fifo_op(words->words[i]));
+        TEST_ASSERT_EQUAL_UINT8(i, fifo_op_output(words->words[i]));
+    }
 }
 
-void test_fifo_action_word_matches_command_button(void) { assert_action_word("command-button"); }
-void test_fifo_action_word_matches_command_slider(void) { assert_action_word("command-slider"); }
+void test_fifo_action_word_matches_command_button(void) { assert_action_words("command-button"); }
+void test_fifo_action_word_matches_command_slider(void) { assert_action_words("command-slider"); }
+void test_fifo_action_words_match_command_slider_2d(void) { assert_action_words("command-slider-2d"); }
 
 void test_fifo_words_decode(void)
 {
@@ -501,7 +600,15 @@ void test_fifo_words_decode(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_GPO, fifo_op_type(setup));
     TEST_ASSERT_EQUAL_HEX16(0x1234, fifo_op_id(setup));
     TEST_ASSERT_EQUAL_UINT8(28, fifo_op_value(setup));
-    TEST_ASSERT_EQUAL_HEX16(0xBEEF, fifo_ref_source(fifo_ref_word(0xBEEF)));
+    const msg_ref ref = { 0xBEEF, 1 };
+    TEST_ASSERT_EQUAL_HEX16(0xBEEF, fifo_ref_source(fifo_ref_word(ref)));
+    TEST_ASSERT_EQUAL_UINT8(1, fifo_ref_output(fifo_ref_word(ref)));
+
+    uint32_t action = fifo_action_word(0x1234, FIFO_OUTPUTS_MAX - 1, VALUE_HALF);
+    TEST_ASSERT_EQUAL_UINT8(FIFO_OP_CONTROL_ACTION, fifo_op(action));
+    TEST_ASSERT_EQUAL_UINT8(FIFO_OUTPUTS_MAX - 1, fifo_op_output(action));
+    TEST_ASSERT_EQUAL_HEX16(0x1234, fifo_op_id(action));
+    TEST_ASSERT_EQUAL_UINT8(VALUE_HALF, fifo_op_value(action));
 
     uint32_t pwm = fifo_pwm_word(65535, PWM_DUTY_INPUT);
     TEST_ASSERT_EQUAL_UINT16(65535, fifo_pwm_freq(pwm));
@@ -521,11 +628,11 @@ void test_fifo_words_decode(void)
     TEST_ASSERT_EQUAL_UINT16(ADC_RAW_FULL, fifo_adc_raw(adc));
 }
 
-/* Current behaviour (PROTOCOL.md, Part 3): only 5 type bits travel and core 1 forces bit 5. */
-void test_fifo_ui_type_arrives_as_hw_type(void)
+/* PROTOCOL.md, Part 3: only 5 type bits travel in a setup word, and core 1 forces bit 5. */
+void test_fifo_setup_type_arrives_as_hw_type(void)
 {
-    uint32_t action = fifo_op_word(FIFO_OP_CONTROL_ACTION, MSG_UI_BUTTON, 1, 1);
-    TEST_ASSERT_EQUAL_HEX8(MSG_UI_BUTTON | MSG_HW_BIT, fifo_op_type(action));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_ADC, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_ADC, 1, 0)));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_KEYBOARD, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_KEYBOARD, 1, 0)));
 }
 
 int main(void)
@@ -536,6 +643,7 @@ int main(void)
     RUN_TEST(test_device_id);
     RUN_TEST(test_command_button);
     RUN_TEST(test_command_slider);
+    RUN_TEST(test_command_slider_2d);
     RUN_TEST(test_update_examples);
     RUN_TEST(test_default_config);
     RUN_TEST(test_save_config_keeps_device_config_then_appends_graph);
@@ -547,13 +655,18 @@ int main(void)
     RUN_TEST(test_net_address_usable);
     RUN_TEST(test_keyboard_config);
     RUN_TEST(test_keyboard_payload_valid);
+    RUN_TEST(test_slider_2d_config);
+    RUN_TEST(test_legacy_config);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_setup_words_match_adc_config);
     RUN_TEST(test_fifo_setup_words_match_keyboard_config);
+    RUN_TEST(test_fifo_setup_words_match_slider_2d_config);
+    RUN_TEST(test_fifo_setup_words_match_legacy_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
+    RUN_TEST(test_fifo_action_words_match_command_slider_2d);
     RUN_TEST(test_fifo_words_decode);
-    RUN_TEST(test_fifo_ui_type_arrives_as_hw_type);
+    RUN_TEST(test_fifo_setup_type_arrives_as_hw_type);
 
     return UNITY_END();
 }

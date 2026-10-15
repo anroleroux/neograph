@@ -40,13 +40,13 @@ typedef struct {
         uint8_t io;
         uint8_t value;
     };
-    uint16_t source_id;
+    uint32_t source;    // the output driving it, as source_key
     uint8_t drives;     // PWM: the parameter this source drives, PWM_DRIVES_DUTY or _FREQ
     bool on;            // keyboard: whether its input is on, to type once each time it goes on
 } hwel;
 
 typedef struct {
-    uint16_t id;
+    uint32_t key;       // source_key: the source's element ID and output
     uint8_t len;
     uint8_t size;
     hwel *hwels;
@@ -67,8 +67,12 @@ hwel decode_hwel(uint32_t op) {
     return result;
 }
 
+// Outputs are kept by the output of a source that drives them: its element ID,
+// and which of its outputs (a 2D slider has two).
+static uint32_t source_key(uint16_t id, uint8_t output) { return (uint32_t)id << 8 | output; }
+
 void decode_hwrf(uint32_t rf,hwel *decop) {
-    decop->source_id = fifo_ref_source(rf);
+    decop->source = source_key(fifo_ref_source(rf), fifo_ref_output(rf));
 }
 
 static hwel_sources *hwel_source_table = NULL;
@@ -217,7 +221,7 @@ static void push_to_core0(uint32_t word) {
 void add_packet(hwel el) {
     // First check if one with the same ID already exists
     hwel_sources *existing = NULL;
-    HASH_FIND(hh, hwel_source_table, &el.source_id, sizeof(uint16_t), existing);
+    HASH_FIND(hh, hwel_source_table, &el.source, sizeof(uint32_t), existing);
     if (existing) {
         if (existing->len == existing->size) {
             existing->size += 5;
@@ -230,14 +234,14 @@ void add_packet(hwel el) {
             existing->hwels = temp;
 
         }
-        printf("adding another hwel allocation to src_id:%d, type:%02X, id:%d\n",existing->id, el.control_type,el.id);
+        printf("adding another hwel allocation to src:%lX, type:%02X, id:%d\n",(unsigned long)existing->key, el.control_type,el.id);
         existing->len++;
         existing->hwels[existing->len-1] = el;
 
         return;
     }
 
-    printf("new hwel_sources allocation, src_id:%d\n",el.source_id);
+    printf("new hwel_sources allocation, src:%lX\n",(unsigned long)el.source);
     hwel_sources *new_srcsel = malloc(sizeof(hwel_sources));
     if (new_srcsel == NULL) {
         printf("hwel_sources allocation failed\n");
@@ -253,14 +257,14 @@ void add_packet(hwel el) {
         return;
     }
     new_srcsel->hwels[0] = el;
-    new_srcsel->id = el.source_id;
+    new_srcsel->key = el.source;
 
-    HASH_ADD(hh, hwel_source_table, id, sizeof(uint16_t), new_srcsel);
+    HASH_ADD(hh, hwel_source_table, key, sizeof(uint32_t), new_srcsel);
 }
 
-hwel_sources *find_packet(uint16_t id) {
+hwel_sources *find_packet(uint32_t key) {
     hwel_sources *srcsel = NULL;
-    HASH_FIND(hh, hwel_source_table, &id, sizeof(uint16_t), srcsel);
+    HASH_FIND(hh, hwel_source_table, &key, sizeof(uint32_t), srcsel);
     return srcsel;
 }
 
@@ -273,11 +277,11 @@ void delete_all_packets() {
     }
 }
 
-// Drive the outputs wired to a source with its new value, 0 to VALUE_FULL.
-// Returns false if nothing is wired to it. `log` prints each output driven: a
-// command from the browser logs, an ADC reading, which changes often, doesn't.
-static bool drive_outputs(uint16_t source_id, uint8_t value, bool log) {
-    hwel_sources *hw_srcs = find_packet(source_id);
+// Drive the outputs wired to an output of a source with its new value, 0 to
+// VALUE_FULL. Returns false if nothing is wired to it. `log` prints each output
+// driven: a command from the browser logs, an ADC reading, which changes often, doesn't.
+static bool drive_outputs(uint16_t source_id, uint8_t output, uint8_t value, bool log) {
+    hwel_sources *hw_srcs = find_packet(source_key(source_id, output));
     if (!hw_srcs) return false;
 
     bool on = value >= VALUE_HALF;     // for the on/off outputs
@@ -379,7 +383,7 @@ static void adc_poll(void) {
         in->drive = false;
         in->value = value;
         for (uint8_t i = 0; i < adc_node_count; i++) {
-            if (adc_nodes[i].channel == ch) drive_outputs(adc_nodes[i].id, value, false);
+            if (adc_nodes[i].channel == ch) drive_outputs(adc_nodes[i].id, 0, value, false);
         }
     }
 }
@@ -518,8 +522,8 @@ void core1_worker() {
                     decop.drives = PWM_DRIVES_DUTY;
                     hwel freq_el = decop;
                     freq_el.drives = PWM_DRIVES_FREQ;
-                    freq_el.source_id = fifo_ref_source(w[3]);
-                    if (freq_el.source_id) add_packet(freq_el);
+                    decode_hwrf(w[3], &freq_el);
+                    if (fifo_ref_source(w[3])) add_packet(freq_el);
                     break;
                 }
 
@@ -572,8 +576,8 @@ void core1_worker() {
 
             case FIFO_OP_CONTROL_ACTION:
                 printf("hw man buffer %02X %02X %02X %02X\n",op>>24&0xFF,op>>16&0xFF,op>>8&0xFF,op&0xFF);
-                if (!drive_outputs(decop.id, decop.value, true)) {
-                    printf("hw sources with ID %d not found\n",decop.id);
+                if (!drive_outputs(decop.id, fifo_op_output(op), decop.value, true)) {
+                    printf("hw sources with ID %d, output %d not found\n",decop.id,fifo_op_output(op));
                 }
                 break;
             }
