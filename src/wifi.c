@@ -13,6 +13,14 @@
 
 #include "wifi.h"
 #include "config.h"
+#include "protocol.h"
+
+_Static_assert(NET_LEASE_FIRST == DHCPS_BASE_IP && NET_LEASE_COUNT == DHCPS_MAX_IP,
+               "the DHCP server leases the addresses protocol.h keeps the access point off");
+
+static void ip_from_bytes(ip4_addr_t *ip, const uint8_t a[4]) {
+    IP4_ADDR(ip, a[0], a[1], a[2], a[3]);
+}
 
 // Connection retry parameters
 #define MAX_RETRIES 5
@@ -62,10 +70,7 @@ void create_wifi_access_point(const network_config nc) {
 
 int create_network(tcpserver *state) {
     network_setup ns;
-    memset(ns.device.name, 0, sizeof(ns.device.name));
-    memset(ns.network.name, 0, sizeof(ns.network.name));
-    memset(ns.network.ssid, 0, sizeof(ns.network.ssid));
-    memset(ns.network.pass, 0, sizeof(ns.network.pass));
+    memset(&ns, 0, sizeof ns);
 
     retrieve_networking_config(&ns);
 
@@ -84,13 +89,21 @@ int create_network(tcpserver *state) {
         printf("Create network access point\n");
         create_wifi_access_point(ns.network);
 
-        // struct netif *ap_netif = &cyw43_state.netif[CYW43_ITF_AP];
-
-        // Start the dhcp server
+        // Its address, set or the default 192.168.4.1, on a /24. It is also the
+        // gateway its DHCP server hands out.
         ip4_addr_t mask;
         mask.addr = PP_HTONL(CYW43_DEFAULT_IP_MASK);
+        if (net_ap_address_usable(ns.network.ap_address)) {
+            ip_from_bytes(&state->gw, ns.network.ap_address);
+        } else if (net_address_usable(ns.network.ap_address)) {
+            const uint8_t *a = ns.network.ap_address;
+            printf("Access point address %u.%u.%u.%u is one its DHCP server leases; using the default\n",
+                   a[0], a[1], a[2], a[3]);
+        }
+        netif_set_addr(&cyw43_state.netif[CYW43_ITF_AP], &state->gw, &mask, &state->gw);
+        printf("Access point address: %s\n", ip4addr_ntoa(&state->gw));
 
-        // dhcp_server_init(&state->dhcp_server, ap_netif, &mask);
+        // Start the dhcp server
         dhcp_server_init(&state->dhcp_server, &state->gw, &mask);
     } else {
         printf("Connect to WiFi\n");
@@ -100,10 +113,6 @@ int create_network(tcpserver *state) {
 }
 
 int connect_to_wifi(const network_config nw) {
-    const char* static_ip = NULL;
-    const char* static_netmask = NULL;
-    const char* static_gateway = NULL;
-
     cyw43_arch_enable_sta_mode();
 
     printf("Connecting to WiFi, SSID: %s\n", nw.ssid);
@@ -128,56 +137,24 @@ int connect_to_wifi(const network_config nw) {
     }
     print_wifi_status(result);
 
-    if (static_ip != NULL) {
+    if (net_address_usable(nw.static_address)) {
+        // A fixed address. Joining got a DHCP lease first, which gives the
+        // network's mask, and its gateway unless one is set.
+        struct netif *sta = &cyw43_state.netif[CYW43_ITF_STA];
         ip4_addr_t ip, netmask, gateway;
-        dhcp_stop(netif_list);
-        
-        // Parse IP addresses
-        if (!ip4addr_aton(static_ip, &ip)) {
-            printf("Error: Invalid static IP address format: %s\n", static_ip);
-            return 3;
-        }
+        ip_from_bytes(&ip, nw.static_address);
+        netmask = *netif_ip4_netmask(sta);
+        if (ip4_addr_isany_val(netmask)) IP4_ADDR(&netmask, 255, 255, 255, 0);
+        if (net_address_usable(nw.gateway)) ip_from_bytes(&gateway, nw.gateway);
+        else gateway = *netif_ip4_gw(sta);
 
-        // Use default netmask if not provided
-        if (static_netmask != NULL) {
-            if (!ip4addr_aton(static_netmask, &netmask)) {
-                printf("Error: Invalid netmask format: %s\n", static_netmask);
-                return 3;
-            }
-        } else {
-            // Default to 255.255.255.0
-            IP4_ADDR(&netmask, 255, 255, 255, 0);
-        }
-        
-        // Use default gateway if not provided
-        if (static_gateway != NULL) {
-            if (!ip4addr_aton(static_gateway, &gateway)) {
-                printf("Error: Invalid gateway format: %s\n", static_gateway);
-                return 3;
-            }
-        } else {
-            // Try to use the router's IP (usually .1 in the same subnet)
-            gateway = ip;
-            ip4_addr_set_u32(&gateway, (ip4_addr_get_u32(&ip) & ip4_addr_get_u32(&netmask)) | PP_HTONL(1));
-        }
-        
-        printf("Setting static IP configuration:\n");
+        dhcp_release_and_stop(sta);
+        netif_set_addr(sta, &ip, &netmask, &gateway);
+
+        printf("Static IP configuration:\n");
         printf("  IP: %s\n", ip4addr_ntoa(&ip));
         printf("  Netmask: %s\n", ip4addr_ntoa(&netmask));
         printf("  Gateway: %s\n", ip4addr_ntoa(&gateway));
-        
-        // Set the static IP configuration
-        netif_set_addr(netif_list, &ip, &netmask, &gateway);
-        
-        // Verify the configuration was applied
-        sleep_ms(1000);
-        ip4_addr_t current_ip = netif_list->ip_addr;
-        if (!ip4_addr_cmp(&current_ip, &ip)) {
-            printf("Warning: Static IP may not have been set correctly\n");
-            printf("Expected: %s, Got: %s\n", ip4addr_ntoa(&ip), ip4addr_ntoa(&current_ip));
-        } else {
-            printf("Static IP configuration applied successfully!\n");
-        }
     } else {
         printf("Connected to WiFi successfully!\n");
         ip4_addr_t gw = netif_list->gw;

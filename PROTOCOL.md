@@ -6,9 +6,10 @@ and listed under [Known issues](#known-issues).
 
 ```mermaid
 flowchart LR
-    UI["Browser UI<br/>(ui/)"] -- "Part 1: packets over WebSocket" --- C0["Core 0<br/>network, flash, WiFi LED"]
+    UI["Browser UI<br/>(ui/)"] -- "Part 1: packets over WebSocket" --- C0["Core 0<br/>network, flash, WiFi LED,<br/>USB keyboard"]
     C0 -- "Part 3: 32-bit FIFO words" --- C1["Core 1<br/>GPIO, ADC"]
     C0 --- F[("Flash<br/>Part 2: config")]
+    C0 -- "USB keyboard" --- PC["PC"]
 ```
 
 | Part | What it covers | Code |
@@ -16,6 +17,7 @@ flowchart LR
 | [1. Transport](#part-1-transport-ui--hw) | Packets between the browser UI and the device | `src/websockets.c`, `src/tcpserver.c`, `ui/content/network.js` |
 | [2. Config model](#part-2-config-model) | Messages, element types, the graph, networking, flash storage | `src/config.c`, `ui/content/graph.js`, `ui/content/components/` |
 | [3. Inter-core FIFO](#part-3-inter-core-fifo-core-0--core-1) | Words between the two RP2350 cores | `src/hwman.c`, `src/main.c`, `src/config.c` |
+| [USB keyboards](#usb-keyboards) | Keystrokes typed to the PC the device is plugged into | `src/keyboard.c`, `src/usb_descriptors.c`, `ui/content/components/keyboard.js` |
 
 ## Conventions
 
@@ -61,13 +63,13 @@ sequenceDiagram
     UI->>C0: WebSocket upgrade
     C0-->>UI: 101 Switching Protocols
     C0-->>UI: 0x0D Device ID
-    C0->>C1: setup words for each stored LED/GPO/PWM/ADC
+    C0->>C1: setup words for each stored LED/GPO/PWM/ADC/keyboard
     C0-->>UI: 0x0A Config (if one is stored)
     Note over UI: user edits network fields
     UI->>C0: 0x0B / 0x0C field update (written to flash)
     Note over UI: user saves the graph
     UI->>C0: 0x0A Config (written to flash)
-    C0->>C1: setup words for each LED/GPO/PWM/ADC
+    C0->>C1: setup words for each LED/GPO/PWM/ADC/keyboard
     Note over UI: user presses a button
     UI->>C0: 0x01 Command
     C0->>C1: action word
@@ -142,7 +144,8 @@ that was operated, with its new value as the payload.
 
 **Values** run from 0 to 1, sent as one byte, `round(value × 255)`:
 
-- **Button:** `00` released / `FF` pressed (toggles on each click).
+- **Button:** `00` released / `FF` pressed. A toggle button changes on each click; a
+  momentary one (`BUTTON_MOMENTARY`) sends `FF` when pressed and `00` when let go.
 - **Slider:** its position, `00`–`FF` (shown as 0.00–1.00). Dragging sends a command
   each time the byte changes.
 
@@ -173,9 +176,15 @@ The device looks through the stored messages for one with the **same type, eleme
 ID and field ID** (first payload byte), and replaces that message with the new one.
 `0B` edits the config store; `0C` edits the secrets store.
 
-- If no stored message matches, or the result would not fit its flash region,
-  nothing changes, and nothing is reported. These packets can change a field but
-  cannot add one.
+- **`0B` adds a field** the device or network doesn't have yet (a `B1` or `B3`): the
+  message goes after the element's last message, so fields added later, such as
+  the [addresses](#network-addresses), can be set on a device configured before them.
+  `0C` only replaces.
+- **A password is never stored by `0B`:** the config store is sent to the UI.
+- If the element isn't stored (`0B`) or no stored message matches (`0C`), or the
+  result would not fit its flash region, nothing changes, and nothing is reported.
+- The UI applies each `0B` to its copy of the config too, so saving the graph, which
+  sends the networking messages back, keeps the change.
 - The change is only written to flash. Networking reads it at the next boot.
 
 ```hex example=update-ssid
@@ -186,6 +195,11 @@ B3 00 00 00 03  02 58 59    # network 0, field SSID = "XY"
 ```hex example=update-options
 0B 00 07                    # Update config field, 7 bytes
 B2 00 00 00 02  00 00       # network 0, field options = 0 (access point)
+```
+
+```hex example=update-ap-address
+0B 00 0A                    # Update config field, 10 bytes
+B3 00 00 00 05  04 0A 00 00 01   # network 0, field access point address = 10.0.0.1
 ```
 
 ```hex example=update-password
@@ -274,6 +288,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `20` | `MSG_HW_LED` | HW output: onboard LED | Implemented |
 | `21` | `MSG_HW_GPO` | HW output: GPIO pin | Implemented |
 | `22` | `MSG_HW_PWM` | HW output: PWM pin | Implemented |
+| `23` | `MSG_HW_KEYBOARD` | HW output: a keystroke typed to the PC over USB | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Reserved |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
@@ -289,7 +304,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 
 | Element | Payload length | Payload |
 |---|---|---|
-| `10` Button | 0 | None. The device ignores button messages in a config. |
+| `10` Button | 0–1 | Byte 0, bit 0 (`BUTTON_MOMENTARY`): 0 = each click toggles it, 1 = it is on while held. Other bits are 0. The UI leaves the byte out for a toggle button (as buttons saved before it existed), and sends `01` for a momentary one. The device ignores button messages in a config. |
 | `12` Slider | 1 | Byte 0, bit 0 (`SLIDER_VERTICAL`): 0 = horizontal (UI default), 1 = vertical. Other bits are 0. The device ignores slider messages in a config: the orientation is for the Command view. |
 | `02` Plot | 3–19 | Bytes 0–1: source element ID (0 = not connected) · byte 2: time window, 1–255 s (UI default 10) · bytes 3…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
@@ -297,6 +312,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `20` LED | 2 | Bytes 0–1: source element ID (0 = not connected) |
 | `21` GPO | 3 | Bytes 0–1: source element ID (0 = not connected) · byte 2: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
 | `22` PWM | 15 | See below |
+| `23` USB keyboard | 5, or 4–67 | Bytes 0–1: source element ID (0 = not connected) · byte 2: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
 
 #### GPIO pins
 
@@ -358,7 +374,7 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button | `20` LED, `21` GPO | 0 or 1 (`00` / `FF`) |
+| Boolean | `10` button | `20` LED, `21` GPO, `23` USB keyboard | 0 or 1 (`00` / `FF`) |
 | Floating | `12` slider, `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider 0 to 1 (`00`–`FF`); an ADC in volts in the browser, 0 to 1 on the device; the core temperature in °C |
 
 The core temperature's values reach only the browser, so it drives a plot but not a
@@ -419,16 +435,16 @@ When a config arrives, the UI rebuilds the graph from it:
 - **If the config has no control messages** (a first-boot config), the UI keeps the
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
-  (`10` button, `12` slider, `02` plot, `20` LED, `21` GPO, `22` PWM, `30` core
-  temperature, `32` ADC) becomes a node with the message's ID. If an ID
+  (`10` button, `12` slider, `02` plot, `20` LED, `21` GPO, `22` PWM, `23` USB
+  keyboard, `30` core temperature, `32` ADC) becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a slider takes its orientation, a plot its time window and unit, an ADC its channel, a GPO its pin, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a plot its time window and unit, an ADC its channel, a GPO its pin, a USB keyboard its keystroke, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source ID of an output that is a restored node of the
-  output's [type](#wire-types): an LED's or GPO's button, a plot's slider, ADC or core temperature, and the sliders or
+  output's [type](#wire-types): an LED's, GPO's or USB keyboard's button, a plot's slider, ADC or core temperature, and the sliders or
   ADCs of a PWM's parameters that follow an input. Each is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
@@ -507,6 +523,53 @@ An ADC on ADC1 (GPIO 27) driving a PWM's duty cycle, and drawn on a plot:
 02 00 00 03 03  00 01 0A                        # plot n3 ← n1, 10 s
 ```
 
+### USB keyboards
+
+A USB keyboard node (`23`) types a keystroke to the PC the device is plugged into,
+over its USB port, once each time its input goes on. Its input is boolean: a
+[button](#control-payloads).
+
+- **The USB port is two devices.** The PC sees a keyboard and, as before, the serial
+  console that `printf` writes to. Both come up whatever the graph; the keyboard
+  types only when a keyboard node's input goes on.
+- **Once per press.** The keystroke is typed when the input goes from off to on
+  (`VALUE_HALF` and up), and not again until it has gone off. A toggle button types on
+  every other click, when it turns on; a momentary button types on every press, so
+  it is the one to wire to a keyboard.
+- **A key combo** (`KEYBOARD_COMBO`) presses one key while holding modifiers, then
+  lets them all go: Ctrl+Alt+Delete, Win+L, F13. Byte 3 is the HID modifier bits,
+  byte 4 the HID key (usage page 7), or 0 for the modifiers alone. The UI offers left
+  Ctrl `01`, Shift `02`, Alt `04` and Win `08` (Command on a Mac, Super on Linux), and
+  letters, digits, punctuation, F1–F24, Enter, Escape, Backspace, Tab, Space,
+  arrows, Insert, Delete, Home, End, Page Up and Down, Print Screen, Scroll Lock,
+  Pause, Caps Lock and Menu.
+- **Text** (`KEYBOARD_TEXT`) types 1 to `KEYBOARD_TEXT_MAX` (64) characters, one key
+  at a time: printable ASCII (`20`–`7E`), tab (`09`, Tab) and newline (`0A`, Enter).
+  Each character is typed as on a US keyboard: the PC turns the key into a character
+  with its own layout, so on another layout some characters come out differently. In
+  the UI's settings, Enter is written `\n`, Tab `\t` and a backslash `\\`.
+- **Typing speed.** The PC reads a key down or up each millisecond, so 64 characters
+  take about 130 ms. Keystrokes from several presses wait their turn, up to 8; more
+  are dropped.
+- **No PC, no keystroke.** A press while nothing is listening on USB (unplugged, a
+  charger, the PC asleep) is dropped, and unplugging drops the keystrokes waiting, so
+  nothing is typed later out of context.
+- **On the device.** Core 0 keeps each node's keystroke (up to 16 nodes) and types it;
+  core 1 tells it when (see [Core 1 behaviour](#core-1-behaviour)). A button in the
+  browser reaches it as a command; a hardware input on core 1 would reach it without
+  the browser.
+
+A momentary button `n1` typing Ctrl+Alt+Delete, and a toggle button `n3` typing
+`hello` and Enter:
+
+```hex example=keyboard-config
+0A 00 23                                        # Config, 35 bytes
+10 00 00 01 01  01                              # button n1, momentary
+23 00 00 02 05  00 01 00 05 4C                  # keyboard n2 ← n1: combo, Ctrl+Alt, Delete
+10 00 00 03 00                                  # button n3, toggle
+23 00 00 04 09  00 03 01 68 65 6C 6C 6F 0A      # keyboard n4 ← n3: text "hello\n"
+```
+
 ### Labels, positions and wires
 
 A node's label, position and incoming wire are each a message whose element ID is
@@ -551,10 +614,35 @@ Four element types describe devices and networks. The payload of each starts wit
 | | `01` name | `FIELD_NETWORK_NAME` | ASCII, up to 31 bytes | config |
 | | `02` SSID | `FIELD_NETWORK_SSID` | ASCII, up to 31 bytes | config |
 | | `03` password | `FIELD_NETWORK_PASSWORD` | ASCII, up to 31 bytes | **secrets** |
+| | `04` access point address | `FIELD_NETWORK_AP_ADDRESS` | 4 bytes, IPv4 | config |
+| | `05` fixed address | `FIELD_NETWORK_STATIC_ADDRESS` | 4 bytes, IPv4 | config |
+| | `06` gateway | `FIELD_NETWORK_GATEWAY` | 4 bytes, IPv4 | config |
 
 Network options, bit 0 (`NET_OPT_JOIN`): `0` = start an access point (with a DHCP
 server) using the SSID and password; `1` = join an existing network. Other bits are
 unused.
+
+#### Network addresses
+
+Address fields hold an IPv4 address as 4 bytes, most significant first
+(`C0 A8 04 01` is 192.168.4.1). A network without the field, or with `00 00 00 00`,
+hasn't set it. The UI shows the field for the mode the network is in; each mode keeps
+its own.
+
+- **Access point** (`04`): the device's address on its own network, and the gateway
+  and DNS server its DHCP server hands out. The network is the address's /24; the
+  DHCP server leases hosts `NET_LEASE_FIRST` (16) to 23 of it, so the access point
+  can't take one of those, or .0 or .255. Not set: 192.168.4.1. Phones that join
+  the access point open `http://<address>`.
+- **Joining, fixed address** (`05`): the device joins with DHCP as before, then
+  releases the lease and takes this address, keeping the lease's netmask. Not set:
+  it keeps the DHCP address. The address must be free on that network: the device
+  doesn't check.
+- **Joining, gateway** (`06`): with a fixed address, the network's gateway. Not set:
+  the one DHCP gave. The UI shows it only when a fixed address is set.
+- **Usable addresses** (`net_address_usable` in `src/protocol.h`, `addressUsable` in
+  the UI): unicast, not loopback (127), and not .0 or .255. The device ignores a field
+  that isn't usable, and the UI refuses it.
 
 At boot, the device finds the `B0` whose DID matches its own, reads that device's
 fields, then reads the fields of the network it points to. It reads the config store
@@ -598,7 +686,8 @@ The RP2350's two cores share a pair of hardware FIFOs, one in each direction, th
 carry 32-bit words.
 
 - **Core 0** runs networking and flash, and drives the onboard LED. The LED is
-  attached to the WiFi chip, which only core 0 talks to.
+  attached to the WiFi chip, which only core 0 talks to. It also runs USB: the
+  serial console and the [USB keyboards](#usb-keyboards).
 - **Core 1** owns the GPIO pins and the ADC.
 
 ### Core 0 → core 1
@@ -615,7 +704,7 @@ Every exchange starts with an **operation word**:
 | `op` | Constant | Sent by | Followed by |
 |---|---|---|---|
 | 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per message | One word per further 4 payload bytes (none for a button) |
-| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM/ADC message | For an LED, GPO or PWM, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel |
+| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM/ADC/keyboard message | For an LED, GPO, PWM or keyboard, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel |
 | 3 | `FIFO_OP_CLEAN_SETUP` | `0A` config and on each connect, once, before the setup words | Nothing |
 
 Only the low 5 bits of the element type travel. Core 1 sets bit 5 on decode, so it
@@ -684,6 +773,17 @@ C0000000                    # clean setup
 00000000 00642710           #   no frequency source; 100–10000 Hz
 ```
 
+The words for the [keyboard-config example](#usb-keyboards). A keyboard's setup word
+carries nothing in its low byte, and is followed by its reference word: core 0 keeps
+the keystroke, and core 1 only needs to know which source drives it. The buttons are
+skipped:
+
+```fifo example=keyboard-config
+C0000000                    # clean setup
+83000200 00010000           # setup keyboard n2, type 23 → 03, source n1
+83000400 00030000           # setup keyboard n4, source n3
+```
+
 The action word for the [command-button example](#01-command):
 
 ```fifo example=command-button
@@ -710,6 +810,7 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   A GPO or PWM on a pin that isn't [usable](#gpio-pins), or that another GPO, PWM or
   ADC already uses, is skipped: it reads its further words but doesn't touch the pin
   or go in the table.
+  A keyboard goes in the table under its source, and touches no pin.
 - **ADC setup** (`op` 2, type `32`): starts sampling the channel in the low byte, on
   GPIO 26 + channel, unless another GPO or PWM uses that pin. Several ADC nodes may
   share a channel; up to 16 ADC nodes are kept.
@@ -733,7 +834,9 @@ Core 1 keeps a table from **source ID → the outputs wired to it**.
   drives; a parameter that follows its input becomes min + (max − min) × value /
   `VALUE_FULL`, or for a logarithmic frequency min × (max / min)^(value / `VALUE_FULL`),
   rounded; a constant one ignores it. An LED is passed
-  back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0.
+  back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0. A keyboard
+  is passed back with a keyboard tag (below) when the value goes from below
+  `VALUE_HALF` to `VALUE_HALF` or up; each keyboard remembers whether its input is on.
 - **Clean setup** (`op` 3): clears the table, the PWM states and the ADC nodes, and
   turns off the pins it set up as GPO, PWM or ADC pins, making them inputs again. Other pins are left
   alone: on the Pico 2 W, GPIO 23, 24, 25 and 29 drive the WiFi chip.
@@ -778,6 +881,7 @@ Each message is two words: a **tag**, then a **value**.
 | 1 | `FIFO_TAG_TEMPERATURE` | `float` bits, °C | Sends text frame `core T` |
 | 2 | `FIFO_TAG_LED` | 0 or 1 | Sets the onboard LED |
 | 3 | `FIFO_TAG_ADC` | Bits 31–16 the channel, 15–0 the reading, 0–4095 (`fifo_adc_word`) | Sends text frame `adc C R` |
+| 4 | `FIFO_TAG_KEYBOARD` | The keyboard's element ID | Types its keystroke (see [USB keyboards](#usb-keyboards)) |
 
 Uptime is first sent at tick 5 and temperature at tick 6, then each every 5 ticks.
 Core 0 takes every waiting message each pass of its main loop, which waits at most
@@ -793,15 +897,15 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 
 1. **Only the latest connection is tracked.** Every new TCP connection takes
    `clients[0]`, so only the most recent client receives telemetry.
-2. **`0B`/`0C` fail silently** when no stored message matches, and the UI has no way
-   to tell.
+2. **`0B`/`0C` fail silently** when nothing can be changed (see
+   [`0B`](#0b-update-config-field-0c-update-secret-field)), and the UI has no way to tell.
 
 **Config and graph**
 
 3. **Unknown control types are lost.** Control types the UI doesn't know are skipped
    on restore and dropped on the next save.
-4. **The button config payload is empty.** The earlier reference described a 7-byte
-   payload (label ID, X, Y, style) that was never implemented.
+4. **The button config payload holds only its action.** The earlier reference
+   described a 7-byte payload (label ID, X, Y, style) that was never implemented.
 5. **Network IDs above 255 are misread in the UI.** `unmarshalConfigs` uses `||`
    instead of `|` to combine the ID bytes.
 6. **Field values are copied without a length check.** The device copies names, SSIDs
@@ -842,6 +946,16 @@ Current behaviour that is probably not intended. Each one is a candidate for its
     Its quieter PWM mode is set through the WiFi chip (`WL_GPIO1`, the regulator's PS
     pin), and the firmware doesn't set it. Core 1's averaging and hysteresis hide most
     of the noise, at the cost of resolution.
+
+**USB keyboard**
+
+16. **Text is typed for a US layout.** The device sends keys, not characters, so a PC
+    set to another layout types some characters differently (`y` and `z` on German,
+    most punctuation on French).
+17. **Caps Lock inverts typed letters.** Text is typed with Shift for capitals, so
+    with Caps Lock on the PC, the case of each letter is swapped.
+18. **The USB IDs are TinyUSB's test IDs** (vendor `CAFE`, product `4005`). They are
+    fine on your own PC; a board for others needs IDs of its own.
 
 ---
 

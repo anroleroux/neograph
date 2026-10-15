@@ -15,6 +15,8 @@ It allows you to interact with the controller through a browser — defining con
   Receive live data from the controller and visualize it on the web interface.  
 - **Standalone Operation:**  
   Configure the controller to continue running independently after setup.  
+- **USB Keyboard:**  
+  Plugged into a PC, the controller is also a USB keyboard: a keyboard node types a key combo or a line of text each time the button wired to it is pressed.  
 - **Built-in WiFi Access Point:**  
   Connect directly to the controller’s WiFi network — no external router required.
 

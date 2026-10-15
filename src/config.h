@@ -28,6 +28,9 @@ typedef struct {
     char name[32];
     char ssid[32];
     char pass[32];
+    uint8_t ap_address[4];      // 0.0.0.0: not set (FIELD_NETWORK_AP_ADDRESS and the others)
+    uint8_t static_address[4];
+    uint8_t gateway[4];
 } network_config;
 
 typedef struct {

@@ -50,10 +50,17 @@ async function open(browser) {
                 this.url = url;
                 this.readyState = FakeWebSocket.CONNECTING;
                 window.__ws = this;
+                // window.__wsRefuse: the device can't be reached, as the browser
+                // reports it: a close with code 1006 and no open.
                 setTimeout(() => {
+                    if (window.__wsRefuse) {
+                        this.readyState = FakeWebSocket.CLOSED;
+                        if (this.onclose) this.onclose({ code: 1006 });
+                        return;
+                    }
                     this.readyState = FakeWebSocket.OPEN;
                     if (this.onopen) this.onopen();
-                }, 0);
+                }, 50);
             }
             send(data) {
                 if (this.readyState !== FakeWebSocket.OPEN) throw new Error('send while not open');
@@ -64,7 +71,7 @@ async function open(browser) {
             }
             close() {
                 this.readyState = FakeWebSocket.CLOSED;
-                if (this.onclose) this.onclose();
+                if (this.onclose) this.onclose({ code: 1005 });
             }
             // The device's side: a binary frame, or a text frame for a string.
             receive(data) {
@@ -89,6 +96,12 @@ async function connect(page, config) {
         window.__ws.receive(cfg);
         window.__ws.receive('uptime 5');     // telemetry text frame
     }, [DEVICE_ID, config]);
+}
+
+// Show the Network view, once it has slid in.
+async function toNetworkView(page) {
+    await page.evaluate(() => toNetwork());
+    await page.waitForTimeout(500);
 }
 
 // Show the Command view, and give the plots a frame to draw.
@@ -140,8 +153,27 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         gEdges[0].start.mvfunc();
     });
 
-    // Add a PWM output from the add menu, set it up and wire the button to it.
+    // The add menu: the plus shows the four groups; a group shows its nodes, one
+    // group at a time, and the plus folds it all.
+    const menu = () => page.evaluate(() => {
+        const showing = (sel) => [...document.querySelectorAll(sel)]
+            .filter(b => getComputedStyle(b).pointerEvents !== 'none').map(b => b.textContent.trim()).join(' ');
+        return showing('#add .group') + ' | ' + showing('#add .node');
+    });
+    expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO | ', 'the plus shows ' + await menu());
+    const groups = [];
+    for (const g of ['uii', 'hwo', 'hwi', 'uio']) {
+        await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
+        groups.push((await menu()).split(' | ')[1]);
+    }
+    expect(groups.join(', ') === 'BTN SLD, LED GPO PWM KEY, TMP ADC, PLT', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO | ', 'clicking the open group again left ' + await menu());
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+
+    // Add a PWM output from the add menu, set it up and wire the button to it.
     await page.locator('#add [title="Add a PWM output"]').dispatchEvent('click');
     const rows = () => page.$$eval('#settings .editable .label', ls => ls.slice(2).map(l => l.textContent).join('|'));
     const select = (label) => page.locator('#settings .editable.select', { has: page.locator(`.label:text-is("${label}:")`) })
@@ -273,6 +305,52 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(adc.forPwm, 'a PWM does not take the ADC');
     expect(adc.toPlot, 'the ADC was not wired to the plot');
 
+    // Add a USB keyboard typing Ctrl+Alt+Delete, set from its settings, and a
+    // momentary button to press it. A keyboard takes a button, not a slider.
+    await page.locator('#add [title="Add a USB keyboard"]').dispatchEvent('click');
+    const keyRows = () => page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
+    expect(await keyRows() === 'Label:|Types:|Hold:|Key:', 'a new keyboard does not show a key combo: ' + await keyRows());
+    await choice('Hold', 'Ctrl');
+    await choice('Hold', 'Alt');
+    await select('Key').selectOption(String(0x4C));
+    expect(await page.evaluate(() => elements.n12.describe()) === 'Ctrl+Alt+Delete',
+        'the keyboard settings made ' + await page.evaluate(() => elements.n12.describe()));
+    await choice('Types', 'Text');
+    expect(await keyRows() === 'Label:|Types:|Text:', 'text does not show its text: ' + await keyRows());
+    const text = await page.evaluate(() => {
+        const kb = elements.n12;
+        const rejected = kb.setText('') === false && kb.setText('é') === false && kb.setText('\r') === false
+            && kb.setText('x'.repeat(KEYBOARD_TEXT_MAX + 1)) === false && kb.setKey('256') === false;
+        kb.setText(keyboardUnescape('a\\tb\\\\'));
+        return { rejected, text: JSON.stringify(kb.text), shown: keyboardEscape(kb.text) };
+    });
+    expect(text.rejected, 'keystrokes the keyboard cannot type were accepted');
+    expect(text.text === '"a\\tb\\\\"' && text.shown === 'a\\tb\\\\', 'escaped text reads as ' + JSON.stringify(text));
+    await choice('Types', 'Key');
+    await page.locator('#add [title="Add a button"]').dispatchEvent('click');
+    await choice('Action', 'Momentary');
+    await page.locator('#add [title="Add a USB keyboard"]').dispatchEvent('click');
+    const keyboard = await page.evaluate(() => {
+        elements.n12.setLabel('Lock');
+        elements.n13.setLabel('Press');
+        elements.n14.setLabel('Greeting');
+        elements.n14.setMode(KEYBOARD_TEXT);
+        elements.n14.setText('hello\n');
+        return {
+            momentary: elements.n13.momentary,
+            fromSlider: createEdge('n5', 'n12') === null,
+            fromButton: createEdge('n13', 'n12') !== null && elements.n12.sourceID() === 13,
+            fromToggle: createEdge('n1', 'n14') !== null,
+            marshal: [elements.n12, elements.n13, elements.n14, elements.n1].map(n => n.marshal()),
+        };
+    });
+    expect(keyboard.momentary, 'the Action choice did not make the button momentary');
+    expect(keyboard.fromSlider, 'a slider was wired to the keyboard');
+    expect(keyboard.fromButton && keyboard.fromToggle, 'the buttons were not wired to the keyboards');
+    const marshalled = keyboard.marshal.map(hex).join();
+    expect(marshalled === '2300000c05000d00054c,1000000d0101,2300000e09000101' + '68656c6c6f0a,1000000100',
+        'the keyboards and buttons marshal as ' + marshalled);
+
     // A plot shows its source's unit, unless it is given its own.
     const units = await page.evaluate(() => {
         const [speed, temp, level] = [elements.n7, elements.n9, elements.n11];
@@ -311,6 +389,22 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(commands.length === 2 && commands.every(p => p[0] === 0x01), 'pressing the button did not send two commands');
     expect(commands[0][8] === 0xFF && commands[1][8] === 0x00, 'the button did not send 1 then 0');
     packets.push(...commands);
+
+    // ── Hold the momentary button: on while held, with the mouse, then Space ──
+    await toCommandView(page);
+    await page.waitForTimeout(500);     // the view slides in
+    const held = page.locator('#command .control-btn').nth(1);
+    const box = await held.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    expect(await held.getAttribute('aria-pressed') === 'true', 'the momentary button is not on while held');
+    await page.mouse.up();
+    expect(await held.getAttribute('aria-pressed') === 'false', 'the momentary button is not off when let go');
+    await held.press(' ');
+    const holds = await sent(page);
+    expect(holds.map(hex).join() === ['0100061000000d01ff', '0100061000000d0100', '0100061000000d01ff', '0100061000000d0100'].join(),
+        'holding the momentary button sent ' + holds.map(hex));
+    packets.push(...holds);
 
     // ── Move the slider: 0.75, the same again (no command), then 0 ──
     const slider = page.locator('#command .control-slider input').first();
@@ -389,18 +483,58 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         'field updates are not 4 config and 1 secret');
     packets.push(...updates);
 
+    // ── Addresses: joining, a fixed address and its gateway; as an access point,
+    // its address, refusing one its DHCP server leases. The first-boot config has
+    // none of them, so the device adds each. ──
+    const editField = async (label, field, value) => {
+        await page.locator('.editable', { has: page.locator(`text=${label}:`) }).locator('svg').first().dispatchEvent('click');
+        await page.locator(`#input-0-${field}`).fill(value);
+        await page.locator('.editable', { has: page.locator(`#input-0-${field}`) }).locator('svg').first().dispatchEvent('click');
+    };
+    expect(await page.locator('.editable', { has: page.locator('text=Gateway:') }).count() === 0,
+        'the gateway shows without a fixed address');
+    await editField('Static IP', 'staticAddress', ' 192.168.1.50 ');
+    await editField('Gateway', 'gateway', '192.168.1.1');
+    await page.locator('.netconn-buttons > div').nth(0).dispatchEvent('click');
+    expect(await page.locator('.editable .value', { hasText: '192.168.4.1 (default)' }).count() === 1,
+        'the access point does not show its default address');
+    await editField('IP address', 'apAddress', '192.168.4.20');
+    const refused = await page.locator('#input-0-apAddress').getAttribute('aria-invalid');
+    await page.locator('#input-0-apAddress').fill('10.0.0.1');
+    await page.locator('.editable', { has: page.locator('#input-0-apAddress') }).locator('svg').first().dispatchEvent('click');
+    const addresses = await sent(page);
+    expect(refused === 'true', 'an address the access point leases was not refused');
+    expect(addresses.map(hex).join() === [
+        '0b000ab300000005' + '05c0a80132',     // fixed address 192.168.1.50
+        '0b000ab300000005' + '06c0a80101',     // gateway 192.168.1.1
+        '0b0007b200000002' + '0000',           // access point
+        '0b000ab300000005' + '040a000001',     // access point address 10.0.0.1
+    ].join(), 'the address updates were ' + addresses.map(hex));
+    packets.push(...addresses);
+    expect(await page.locator('.editable .value', { hasText: '10.0.0.1' }).count() === 1,
+        'the access point does not show its new address');
+
+    // Saving the graph sends the networking messages back: with the updates in them.
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const withAddresses = await sent(page);
+    const fields = hex(withAddresses[0]);
+    expect(withAddresses.length === 1 && fields.includes('b300000005' + '05c0a80132')
+        && fields.includes('b300000005' + '06c0a80101') && fields.includes('b300000005' + '040a000001')
+        && fields.includes('b2000000020000'), 'saving the graph lost the network updates: ' + fields);
+    packets.push(...withAddresses);
+
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
     // slider (floating) a PWM.
     const types = await page.evaluate(() => {
-        const pwm = new uiPWM(400, 300);      // n12, no wires yet
-        new uiButton(-400, 300);              // n13
+        const pwm = new uiPWM(400, 300);      // n15, no wires yet
+        new uiButton(-400, 300);              // n16
         const marked = () => Object.values(elements).filter(e => e.marked).map(e => e.name).join();
         toggleConnectMode();
-        selectById(12);
+        selectById(15);
         const fromPwm = marked();
         clearSelection();
         toggleConnectMode();
-        selectById(12);
+        selectById(15);
         pwm.setMode('duty', 'input');
         pwm.createSettings();
         const input = [...document.querySelectorAll('#settings .editable.select')]
@@ -410,7 +544,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             fromPwm,
             picks,
             sliderToLed: createEdge('n5', 'n2') === null && elements.n2.inConns()[0].start.node.name === 'n1',
-            buttonToPwm: createEdge('n13', 'n12') === null && pwm.setSource('duty', elements.n13) === false
+            buttonToPwm: createEdge('n16', 'n15') === null && pwm.setSource('duty', elements.n16) === false
                 && pwm.inConns().length === 0,
         };
     });
@@ -421,14 +555,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
 
     // A wire into an output that has one replaces it, on both nodes.
     const replaced = await page.evaluate(() => {
-        createEdge('n13', 'n2');
+        createEdge('n16', 'n2');
         return {
             led: elements.n2.inConns()[0].start.node.name,
             button: elements.n1.outputs[0].conns.map(c => c.end.node.name).join(),
             wires: gEdges.filter(e => e.end.node === elements.n2).length,
         };
     });
-    expect(replaced.led === 'n13' && replaced.button === 'n3' && replaced.wires === 1,
+    expect(replaced.led === 'n16' && replaced.button === 'n3,n14' && replaced.wires === 1,
         'a second wire into the LED did not replace the first: ' + JSON.stringify(replaced));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
@@ -451,18 +585,32 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         wires: gEdges.length,
         pwmSources: [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join(),
         buttons: document.querySelectorAll('#command .control-btn').length,
+        keyboards: [elements.n12.describe(), elements.n12.sourceID(), elements.n13.momentary, elements.n1.momentary,
+            JSON.stringify(elements.n14.text), elements.n14.sourceID()].join(),
     }));
-    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level', 'labels not restored: ' + restored.labels);
-    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 7
+    expect(restored.labels.join('|') === 'Start|Pompe à eau|GPO|PWM|Speed|Pitch|Speed plot|Core temperature|Temperature|Level sensor|Level|Lock|Press|Greeting', 'labels not restored: ' + restored.labels);
+    expect(restored.pin === 7 && restored.pwm === '15,20000,true,75,20,80,true,200,2000,true' && restored.vertical && restored.wires === 9
         && restored.plot === '20,5,8,10' && restored.adc === 1 && restored.units === 'rpm|rpm|°C||V' && restored.plots === 3 && restored.readings === 2
         && restored.pwmSources === 'n5,n6'
-        && restored.buttons === 1,
+        && restored.buttons === 2
+        && restored.keyboards === 'Ctrl+Alt+Delete,13,true,false,"hello\\n",1',
         'graph not restored: ' + JSON.stringify(restored));
 
     await page.locator('#graph .write svg').dispatchEvent('click');
     const resaved = await sent(page);
     expect(resaved.length === 1 && hex(resaved[0]) === hex(saved), 'saving the restored graph changed the config');
     packets.push(...resaved);
+
+    // A config with addresses shows them; one without shows none, not the last one's.
+    const shown = await page.evaluate(([cfg, firstBoot]) => {
+        const read = () => [networks[0].options, networks[0].apAddress, networks[0].staticAddress, networks[0].gateway].join('|');
+        unmarshalConfigs(Uint8Array.from(cfg).slice(3));
+        const withAddresses = read();
+        unmarshalConfigs(Uint8Array.from(firstBoot).slice(3));
+        return [withAddresses, read()];
+    }, [withAddresses[0], FIRST_BOOT_CONFIG]);
+    expect(shown[0] === '0|10.0.0.1|192.168.1.50|192.168.1.1' && shown[1] === '1|||',
+        'the addresses read from configs are ' + JSON.stringify(shown));
 
     // A config saved before wire types were checked may wire a slider to an LED or a
     // button to a PWM: restoring it drops those wires and keeps the matching one.
@@ -478,6 +626,31 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             + '|' + [elements.n4.dutySource?.name, elements.n4.freqSource?.name].join();
     });
     expect(mixed === 'n2>n4|,n2', 'restoring mismatched wires gave ' + mixed);
+
+    // ── The connection switch: on while connected, off with no message when
+    // switched off, pulsing while connecting, and a message when it fails or drops ──
+    await toNetworkView(page);
+    const toggle = page.locator('.device-connect');
+    const switchState = () => page.evaluate(() => [
+        document.querySelector('.device-connect').className.replace('device-connect ', ''),
+        document.querySelector('.device-message')?.textContent ?? ''].join('|'));
+    expect(await switchState() === 'connected|', 'the switch is not on while connected: ' + await switchState());
+    await toggle.dispatchEvent('click');
+    expect(await switchState() === 'disconnected|', 'switching off left ' + await switchState());
+    await page.evaluate(() => { window.__wsRefuse = true; });
+    await toggle.dispatchEvent('click');
+    const connecting = await switchState();
+    const pulse = await page.evaluate(() => getComputedStyle(document.querySelector('.device-connect .light')).animationName);
+    await page.waitForFunction(() => document.querySelector('.device-connect.disconnected'));
+    const unreachable = await switchState();
+    expect(connecting === 'connecting|' && pulse === 'connecting-pulse', `connecting shows ${connecting}, animation ${pulse}`);
+    expect(unreachable.startsWith("disconnected|Couldn't connect to "), 'an unreachable device shows ' + unreachable);
+    await page.evaluate(() => { window.__wsRefuse = false; });
+    await toggle.dispatchEvent('click');
+    await page.waitForFunction(() => document.querySelector('.device-connect.connected'));
+    expect(await switchState() === 'connected|', 'connecting again did not clear the message: ' + await switchState());
+    await page.evaluate(() => window.__ws.close());       // the device goes away
+    expect((await switchState()).startsWith('disconnected|Lost the connection to '), 'a dropped connection shows ' + await switchState());
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

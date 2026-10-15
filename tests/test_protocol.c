@@ -294,8 +294,8 @@ static uint8_t element_type(const struct protocol_example *ex, uint16_t id)
     return 0;
 }
 
-/* Wires join matching types (PROTOCOL.md, "Wire types"): an LED or GPO is driven by
- * a button, a PWM by sliders. */
+/* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
+ * driven by a button, a PWM by sliders. */
 void test_wires_join_matching_types(void)
 {
     for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
@@ -305,7 +305,7 @@ void test_wires_join_matching_types(void)
         config_element_iterator it;
         messages(&it, ex);
         while (it.next(&it)) {
-            if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO) {
+            if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD) {
                 uint16_t src = it.pay[0] << 8 | it.pay[1];
                 if (src) TEST_ASSERT_EQUAL_HEX8_MESSAGE(MSG_UI_BUTTON, element_type(ex, src), ex->name);
             } else if (it.type == MSG_HW_PWM) {
@@ -329,6 +329,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_LED & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_GPO & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_KEYBOARD & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -341,6 +342,92 @@ void test_pin_usable(void)
         int want = pin <= 22 || (pin >= 26 && pin <= 28);
         TEST_ASSERT_EQUAL_INT_MESSAGE(want, pin_usable((uint8_t)pin), "pin_usable");
     }
+}
+
+/* ── Network addresses ────────────────────────────────────────────────── */
+
+void test_update_ap_address(void)
+{
+    config_element_iterator it;
+    messages(&it, example("update-ap-address"));
+    assert_message(&it, MSG_NETWORK_FIELD, 0, 5);
+    TEST_ASSERT_EQUAL_HEX8(FIELD_NETWORK_AP_ADDRESS, it.pay[0]);
+    TEST_ASSERT_TRUE(net_ap_address_usable(it.pay + 1));
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
+void test_net_address_usable(void)
+{
+    const uint8_t ok[][4] = { {192, 168, 4, 1}, {10, 0, 0, 1}, {172, 16, 5, 254}, {192, 168, 4, 15}, {192, 168, 4, 24} };
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++) {
+        TEST_ASSERT_TRUE(net_address_usable(ok[i]));
+        TEST_ASSERT_TRUE(net_ap_address_usable(ok[i]));
+    }
+    const uint8_t bad[][4] = { {0, 0, 0, 0}, {127, 0, 0, 1}, {224, 0, 0, 1}, {255, 255, 255, 255},
+                               {192, 168, 4, 0}, {192, 168, 4, 255} };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        TEST_ASSERT_FALSE(net_address_usable(bad[i]));
+        TEST_ASSERT_FALSE(net_ap_address_usable(bad[i]));
+    }
+    /* the access point's DHCP server leases .16 to .23: a fixed address on a joined
+       network may be one of those, the access point may not */
+    for (uint8_t host = NET_LEASE_FIRST; host < NET_LEASE_FIRST + NET_LEASE_COUNT; host++) {
+        const uint8_t leased[4] = { 192, 168, 4, host };
+        TEST_ASSERT_TRUE(net_address_usable(leased));
+        TEST_ASSERT_FALSE(net_ap_address_usable(leased));
+    }
+}
+
+/* ── USB keyboards ────────────────────────────────────────────────────── */
+
+void test_keyboard_config(void)
+{
+    const struct protocol_example *ex = example("keyboard-config");
+    config_element_iterator it;
+    messages(&it, ex);
+
+    assert_message(&it, MSG_UI_BUTTON, 1, 1);
+    TEST_ASSERT_EQUAL_HEX8(BUTTON_MOMENTARY, it.pay[0]);
+    assert_message(&it, MSG_HW_KEYBOARD, 2, 5);
+    TEST_ASSERT_TRUE(keyboard_payload_valid(it.pay, it.len));
+    TEST_ASSERT_EQUAL_HEX8(KEYBOARD_COMBO, it.pay[2]);
+    TEST_ASSERT_EQUAL_HEX8(0x05, it.pay[3]);                     /* Ctrl + Alt */
+    TEST_ASSERT_EQUAL_HEX8(0x4C, it.pay[4]);                     /* Delete */
+    assert_message(&it, MSG_UI_BUTTON, 3, 0);                    /* a toggle */
+    assert_message(&it, MSG_HW_KEYBOARD, 4, 9);
+    TEST_ASSERT_TRUE(keyboard_payload_valid(it.pay, it.len));
+    TEST_ASSERT_EQUAL_HEX8(KEYBOARD_TEXT, it.pay[2]);
+    TEST_ASSERT_EQUAL_MEMORY("hello\n", it.pay + 3, 6);
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
+/* The payloads unmarshal_controls sets up (src/config.c): a combo of 5 bytes, or
+ * text of 1 to KEYBOARD_TEXT_MAX characters the keyboard can type. */
+void test_keyboard_payload_valid(void)
+{
+    uint8_t p[3 + KEYBOARD_TEXT_MAX + 1] = { 0x00, 0x01, KEYBOARD_COMBO, 0x08, 0x0F };
+    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 5));
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 4));
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 6));
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 2));
+
+    p[2] = KEYBOARD_TEXT;
+    memset(p + 3, 'a', KEYBOARD_TEXT_MAX + 1);
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 3));                        /* no text */
+    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 4));
+    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 3 + KEYBOARD_TEXT_MAX));
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 3 + KEYBOARD_TEXT_MAX + 1));
+    p[3] = '\t'; p[4] = '\n'; p[5] = ' '; p[6] = '~';
+    TEST_ASSERT_TRUE(keyboard_payload_valid(p, 7));
+    p[4] = '\r';
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 7));
+    p[4] = 0x7F;
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 7));
+    p[4] = 0xC3;                                                            /* UTF-8 */
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 7));
+
+    p[2] = 0x02;                                                            /* no such mode */
+    TEST_ASSERT_FALSE(keyboard_payload_valid(p, 5));
 }
 
 /* ── FIFO words ───────────────────────────────────────────────────────── */
@@ -361,6 +448,7 @@ static void assert_setup_words(const char *name)
         uint8_t pin;
         switch (it.type) {
         case MSG_HW_LED: pin = 0; break;
+        case MSG_HW_KEYBOARD: pin = 0; break;   /* core 0 keeps the keystroke */
         case MSG_HW_GPO: pin = it.pay[2]; break;
         case MSG_HW_PWM: pin = it.pay[2]; break;
         case MSG_HW_ADC:
@@ -388,6 +476,7 @@ static void assert_setup_words(const char *name)
 
 void test_fifo_setup_words_match_save_config(void) { assert_setup_words("save-config"); }
 void test_fifo_setup_words_match_adc_config(void) { assert_setup_words("adc-config"); }
+void test_fifo_setup_words_match_keyboard_config(void) { assert_setup_words("keyboard-config"); }
 
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c). */
 static void assert_action_word(const char *name)
@@ -454,8 +543,13 @@ int main(void)
     RUN_TEST(test_wires_join_matching_types);
     RUN_TEST(test_element_type_bits);
     RUN_TEST(test_pin_usable);
+    RUN_TEST(test_update_ap_address);
+    RUN_TEST(test_net_address_usable);
+    RUN_TEST(test_keyboard_config);
+    RUN_TEST(test_keyboard_payload_valid);
     RUN_TEST(test_fifo_setup_words_match_save_config);
     RUN_TEST(test_fifo_setup_words_match_adc_config);
+    RUN_TEST(test_fifo_setup_words_match_keyboard_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_words_decode);

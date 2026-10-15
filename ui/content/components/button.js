@@ -14,6 +14,7 @@ class uiButton extends uiComponents {
         this.actNum = 0;
 
         this.value = false;
+        this.momentary = false;     // on while held, rather than toggled by each click
 
         this.buildGraphElement();
     }
@@ -36,8 +37,22 @@ class uiButton extends uiComponents {
         this.gElmHighlight = g.children[3];
     }
 
+    setAction(action) {
+        if (action !== 'toggle' && action !== 'momentary') return false;
+        this.momentary = action === 'momentary';
+    }
+
+    createSettings() {
+        super.createSettings();
+        const settings = document.getElementById('settings');
+        settings.appendChild(choiceSetting('Action', {toggle: 'Toggle', momentary: 'Momentary'},
+            () => this.momentary ? 'momentary' : 'toggle', (a) => this.setAction(a)));
+    }
+
     // In the Command view: a tile with the label, the state below it, and a
-    // light that is green while the button is on.
+    // light that is green while the button is on. A toggle button changes on
+    // each click; a momentary one is on while the pointer, or Space or Enter,
+    // holds it down.
     buildUI(commandInterface) {
         const control = document.createElement('button');
         control.type = 'button';
@@ -51,10 +66,34 @@ class uiButton extends uiComponents {
             control.querySelector('.state').textContent = this.value ? 'On' : 'Off';
         };
         show();
-        control.addEventListener('click', () => {
-            this.handleClick();
-            show();
-        });
+        if (this.momentary) {
+            const press = (down) => {
+                if (this.value === down) return;
+                this.value = down;
+                this.sendValue(down ? 1 : 0);
+                show();
+            };
+            control.addEventListener('pointerdown', (e) => {
+                control.setPointerCapture(e.pointerId);
+                press(true);
+            });
+            control.addEventListener('pointerup', () => press(false));
+            control.addEventListener('pointercancel', () => press(false));
+            control.addEventListener('keydown', (e) => {
+                if (e.key !== ' ' && e.key !== 'Enter') return;
+                e.preventDefault();
+                press(true);
+            });
+            control.addEventListener('keyup', (e) => {
+                if (e.key === ' ' || e.key === 'Enter') press(false);
+            });
+            control.addEventListener('blur', () => press(false));
+        } else {
+            control.addEventListener('click', () => {
+                this.handleClick();
+                show();
+            });
+        }
         commandInterface.appendChild(control);
     }
 
@@ -64,7 +103,9 @@ class uiButton extends uiComponents {
         buffer.push(this.tc);
         buffer.push(0x00);
         buffer.push((this.id >> 8) & 0xFF, this.id & 0xFF);
-        buffer.push(0x00);
+        // A toggle button has no options byte, as buttons saved before there was one.
+        if (this.momentary) buffer.push(0x01, BUTTON_MOMENTARY);
+        else buffer.push(0x00);
 
         return buffer;
     }

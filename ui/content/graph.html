@@ -5,46 +5,72 @@
                 <path stroke="#BFCDE7C0" stroke-width="2" stroke-linecap="round" d="M12 6V18M6 12H18"/>
             </svg>
         </div>
-        <!-- GUI inputs -->
-        <div style="--col: 1; --row: 2" title="Add a button" onclick="addNode(MSG_UI_BUTTON)">
+        <!-- The groups, under the plus -->
+        <div class="group" data-group="uii" style="--col: 1; --row: 2" title="UI inputs" onclick="toggleAddGroup('uii')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">UII</text>
+            </svg>
+        </div>
+        <div class="group" data-group="hwo" style="--col: 2; --row: 2" title="Hardware outputs" onclick="toggleAddGroup('hwo')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">HWO</text>
+            </svg>
+        </div>
+        <div class="group" data-group="hwi" style="--col: 1; --row: 3" title="Hardware inputs" onclick="toggleAddGroup('hwi')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">HWI</text>
+            </svg>
+        </div>
+        <div class="group" data-group="uio" style="--col: 2; --row: 3" title="UI outputs" onclick="toggleAddGroup('uio')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">UIO</text>
+            </svg>
+        </div>
+        <!-- UI inputs, under the groups -->
+        <div class="node" data-group="uii" style="--col: 1; --row: 4" title="Add a button" onclick="addNode(MSG_UI_BUTTON)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">BTN</text>
             </svg>
         </div>
-        <div style="--col: 2; --row: 2" title="Add a slider" onclick="addNode(MSG_UI_SLIDER)">
+        <div class="node" data-group="uii" style="--col: 2; --row: 4" title="Add a slider" onclick="addNode(MSG_UI_SLIDER)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">SLD</text>
             </svg>
         </div>
-        <!-- HW outputs -->
-        <div style="--col: 4; --row: 2" title="Add an LED" onclick="addNode(MSG_HW_LED)">
+        <!-- HW outputs, under the groups -->
+        <div class="node" data-group="hwo" style="--col: 1; --row: 4" title="Add an LED" onclick="addNode(MSG_HW_LED)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">LED</text>
             </svg>
         </div>
-        <div style="--col: 5; --row: 2" title="Add a GPIO output" onclick="addNode(MSG_HW_GPO)">
+        <div class="node" data-group="hwo" style="--col: 2; --row: 4" title="Add a GPIO output" onclick="addNode(MSG_HW_GPO)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">GPO</text>
             </svg>
         </div>
-        <div style="--col: 6; --row: 2" title="Add a PWM output" onclick="addNode(MSG_HW_PWM)">
+        <div class="node" data-group="hwo" style="--col: 3; --row: 4" title="Add a PWM output" onclick="addNode(MSG_HW_PWM)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">PWM</text>
             </svg>
         </div>
-        <!-- HW inputs -->
-        <div style="--col: 1; --row: 4" title="Add the core temperature" onclick="addNode(MSG_HW_CORE)">
+        <div class="node" data-group="hwo" style="--col: 4; --row: 4" title="Add a USB keyboard" onclick="addNode(MSG_HW_KEYBOARD)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">KEY</text>
+            </svg>
+        </div>
+        <!-- HW inputs, under the groups -->
+        <div class="node" data-group="hwi" style="--col: 1; --row: 4" title="Add the core temperature" onclick="addNode(MSG_HW_CORE)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">TMP</text>
             </svg>
         </div>
-        <div style="--col: 2; --row: 4" title="Add an ADC input" onclick="addNode(MSG_HW_ADC)">
+        <div class="node" data-group="hwi" style="--col: 2; --row: 4" title="Add an ADC input" onclick="addNode(MSG_HW_ADC)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">ADC</text>
             </svg>
         </div>
-        <!-- GUI outputs -->
-        <div style="--col: 6; --row: 4" title="Add a plot" onclick="addNode(MSG_UI_GRAPH)">
+        <!-- UI outputs, under the groups -->
+        <div class="node" data-group="uio" style="--col: 1; --row: 4" title="Add a plot" onclick="addNode(MSG_UI_GRAPH)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">PLT</text>
             </svg>

@@ -27,6 +27,7 @@ const NODE_CLASSES = {
     [MSG_UI_GRAPH]: uiPlot,
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
+    [MSG_HW_KEYBOARD]: uiKeyboard,
 };
 
 // Rebuild the Command view from the graph's UI inputs and outputs.
@@ -119,7 +120,9 @@ function restoreGraph(msgs) {
         if (m.type === MSG_UI_SLIDER && m.len >= 1) {
             elm.setOrientation(m.pay[0] & SLIDER_VERTICAL ? 'vertical' : 'horizontal');
         }
+        if (m.type === MSG_UI_BUTTON && m.len >= 1) elm.setAction(m.pay[0] & BUTTON_MOMENTARY ? 'momentary' : 'toggle');
         if (m.type === MSG_HW_GPO && m.len >= 3) elm.setPin(m.pay[2]);
+        if (m.type === MSG_HW_KEYBOARD && m.len >= 3) elm.setStroke(m.pay.slice(2));
         if (m.type === MSG_UI_GRAPH && m.len >= 3) {
             elm.setWindow(m.pay[2]);
             elm.setUnit(decoder.decode(m.pay.slice(3)));
@@ -177,21 +180,43 @@ function restoreGraph(msgs) {
     buildCommandInterface();
 }
 
-// Show or hide the add-node buttons. Folded, each sits on the plus: its offset
-// from the plus is measured first (layout offsets, which ignore the transform),
-// without a transition, so the buttons fold to where the plus is now.
-function toggleAddMenu() {
-    const menu = document.getElementById('add');
+// The add-node menu: the plus shows the four groups of nodes, and a group shows
+// its nodes. Folded, a button sits on the button that opens it, so before each
+// change every button's offset from that one is measured (layout offsets, which
+// ignore the transform), without a transition, so it folds to where that is now.
+function measureAddMenu(menu) {
     const plus = menu.querySelector('.toggle');
     const buttons = [...menu.children].filter(b => b !== plus);
     buttons.forEach(b => {
+        const from = b.classList.contains('node') ? menu.querySelector(`.group[data-group="${b.dataset.group}"]`) : plus;
         b.style.transition = 'none';
-        b.style.setProperty('--dx', `${plus.offsetLeft - b.offsetLeft}px`);
-        b.style.setProperty('--dy', `${plus.offsetTop - b.offsetTop}px`);
+        b.style.setProperty('--dx', `${from.offsetLeft - b.offsetLeft}px`);
+        b.style.setProperty('--dy', `${from.offsetTop - b.offsetTop}px`);
     });
     void menu.offsetWidth;      // apply the offsets before the transition comes back
     buttons.forEach(b => b.style.transition = '');
+}
+
+// Show a group's nodes, folding the open group's; the open group, or null, folds them.
+function showAddGroup(menu, group) {
+    menu.querySelectorAll('.group').forEach(b => b.classList.toggle('sel', b.dataset.group === group));
+    menu.querySelectorAll('.node').forEach(b => b.classList.toggle('shown', b.dataset.group === group));
+}
+
+// The plus: show the groups, or fold the whole menu.
+function toggleAddMenu() {
+    const menu = document.getElementById('add');
+    measureAddMenu(menu);
     menu.classList.toggle('open');
+    if (!menu.classList.contains('open')) showAddGroup(menu, null);
+}
+
+// A group: show its nodes, or fold them if they are showing.
+function toggleAddGroup(group) {
+    const menu = document.getElementById('add');
+    measureAddMenu(menu);
+    const open = menu.querySelector(`.group[data-group="${group}"]`).classList.contains('sel');
+    showAddGroup(menu, open ? null : group);
 }
 
 // Add a node of a control message type in the middle of the view, and select it.

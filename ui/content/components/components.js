@@ -17,3 +17,5 @@
 /* {{core-js}} */
 
 /* {{adc-js}} */
+
+/* {{keyboard-js}} */
