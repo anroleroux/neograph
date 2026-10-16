@@ -3,8 +3,9 @@
 const LOGIC_DEVICE_FRESH_MS = 2500;
 
 // Logic: nodes the device runs, every scan, without the browser (see PROTOCOL.md,
-// "Logic"). Each reads one or more sources and is a boolean source itself, so it
-// is both: wires come into it, and leave it for outputs or other logic.
+// "Logic"). Each reads one or more sources and is a source itself, boolean or (a
+// scale, min or max) floating, so it is both: wires come into it, and leave it
+// for outputs or other logic.
 //
 // The device first, the browser as a fallback. While the device reports a
 // node's state (its `sig` telemetry), the node shows that. Otherwise (no device,
@@ -20,13 +21,15 @@ class uiLogic extends uiComponents {
 
         this.tc = tc;
 
-        // One input, taking `input.max` wires of `input.type`, and one boolean output.
+        // One input, taking `input.max` wires of `input.type`, and one output:
+        // boolean, or floating if `input.out` says so.
+        this.floating = input.out === "float";
         this.inputs.push({ type: input.type, conns: [], max: input.max });
-        this.outputs.push({ type: "bool", conns: [] });
+        this.outputs.push({ type: this.floating ? "float" : "bool", conns: [] });
         this.actDir = "both";
         this.actNum = 0;
 
-        this.value = null;          // the state shown: true or false; null before there is one
+        this.value = null;          // the state shown: true or false, or a number; null before there is one
         this.browserValue = null;   // the state the browser works out
         this.deviceValue = null;    // the state the device last reported
         this.deviceAt = 0;          // when, by performance.now(); 0 never
@@ -68,6 +71,12 @@ class uiLogic extends uiComponents {
         return this.value == null ? null : Number(this.value);
     }
 
+    // A boolean node's state as text, or a floating one's value.
+    static text(v, floating) {
+        if (v == null) return '–';
+        return floating ? String(Number(v.toPrecision(4))) : v ? 'On' : 'Off';
+    }
+
     // Whether the device has reported this node's state lately.
     fromDevice() {
         return this.deviceAt > 0 && performance.now() - this.deviceAt < LOGIC_DEVICE_FRESH_MS;
@@ -76,7 +85,7 @@ class uiLogic extends uiComponents {
     // Its signal from the device (PROTOCOL.md, "Telemetry text frames"): 1 on, 0
     // off. It is shown while fresh; once stale, the browser's state is.
     signal(output, value) {
-        this.deviceValue = value >= 0.5;
+        this.deviceValue = this.floating ? value : value >= 0.5;
         this.deviceAt = performance.now();
         clearTimeout(this.staleTimer);
         this.staleTimer = setTimeout(() => this.show(), LOGIC_DEVICE_FRESH_MS + 50);
@@ -108,25 +117,35 @@ class uiLogic extends uiComponents {
     show() {
         const device = this.fromDevice();
         const on = device ? this.deviceValue : this.browserValue;
-        this.gElmState.setAttribute('fill', on ? '#4CAF50' : 'none');
+        this.gElmState.setAttribute('fill', on === true ? '#4CAF50' : 'none');
         this.gElmState.setAttribute('stroke-dasharray', device ? 'none' : '2 2');
         this.gElm.querySelector('title').textContent = device ? 'Run on the device' : 'Run in the browser';
-        if (this.tileState?.isConnected) this.tileState.textContent = on == null ? '–' : on ? 'On' : 'Off';
+        if (this.tileState?.isConnected) this.tileState.textContent = uiLogic.text(on, this.floating);
         if (on === this.value) return;
         this.value = on;
         this.emit(this.outputValue(0));
     }
 
-    // A source wired into it has a new value; a wire came in or went.
+    // A source wired into it has a new value; a wire came in or went. A wire
+    // coming or going is not an input going on (see rewired).
     receive(value) { this.evaluate(); }
     addEdge(e) {
         super.addEdge(e);
-        if (e.end.node === this) this.evaluate();
+        if (e.end.node !== this) return;
+        this.rewired();
+        this.evaluate();
     }
-    edgeRemoved(e) { this.evaluate(); }
+    edgeRemoved(e) {
+        this.rewired();
+        this.evaluate();
+    }
+
+    // Its wires in changed: a node that acts on its input going on takes the
+    // input as it is now.
+    rewired() {}
 
     reading() {
-        return this.value == null ? '–' : this.value ? 'On' : 'Off';
+        return uiLogic.text(this.value, this.floating);
     }
 
     remove() {
@@ -181,6 +200,14 @@ const uint32At = (bytes, i) => ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes
 
 // A number as the device holds it, a 32-bit float, shown with up to 6 digits.
 const showFloat = (v) => String(Number(v.toPrecision(6)));
+
+// Seconds, to the millisecond, as milliseconds from minMs to a day; null if not.
+function parseSeconds(v, minMs) {
+    v = String(v).trim();
+    if (!/^\d+(\.\d{0,3})?$|^\.\d{1,3}$/.test(v)) return null;
+    const ms = Math.round(Number(v) * 1000);
+    return ms >= minMs && ms <= DELAY_MAX_MS ? ms : null;
+}
 
 // A compare: on while a floating source (a slider, an ADC, the core temperature)
 // is above its threshold, or below it. Its hysteresis keeps it from flickering:
@@ -258,7 +285,8 @@ class uiCompare extends uiLogic {
     }
 
     // From a saved payload after its source reference, at r.
-    restore(pay, r) {
+    restore(pay, r, len) {
+        if (len !== r + 9) return;
         this.setCondition(pay[r] === COMPARE_BELOW ? 'below' : 'above');
         this.setThreshold(float32At(pay, r + 1));
         this.setHysteresis(float32At(pay, r + 5));
@@ -335,16 +363,8 @@ class uiDelay extends uiLogic {
         return now;
     }
 
-    // Seconds, 0 to a day, to the millisecond; null if not.
-    static parse(v) {
-        v = String(v).trim();
-        if (!/^\d+(\.\d{0,3})?$|^\.\d{1,3}$/.test(v)) return null;
-        const ms = Math.round(Number(v) * 1000);
-        return ms <= DELAY_MAX_MS ? ms : null;
-    }
-
-    setOnDelay(s) { const ms = uiDelay.parse(s); if (ms === null) return false; this.onMs = ms; }
-    setOffDelay(s) { const ms = uiDelay.parse(s); if (ms === null) return false; this.offMs = ms; }
+    setOnDelay(s) { const ms = parseSeconds(s, 0); if (ms === null) return false; this.onMs = ms; }
+    setOffDelay(s) { const ms = parseSeconds(s, 0); if (ms === null) return false; this.offMs = ms; }
 
     // Taken out of the graph: its timer with it.
     remove() {
@@ -365,9 +385,309 @@ class uiDelay extends uiLogic {
     }
 
     // From a saved payload after its source reference, at r.
-    restore(pay, r) {
+    restore(pay, r, len) {
+        if (len !== r + 8) return;
         const on = uint32At(pay, r), off = uint32At(pay, r + 4);
         if (on <= DELAY_MAX_MS) this.onMs = on;
         if (off <= DELAY_MAX_MS) this.offMs = off;
+    }
+}
+
+// A scale: its floating input mapped from one range onto another, such as 30 to
+// 60 °C onto 0 to 1 for a PWM. Clamped, the output stays within its range.
+class uiScale extends uiLogic {
+    constructor(x = 0, y = 0) {
+        super("scale", MSG_LOGIC_SCALE, "SCL", "Scale", { type: "float", max: 1, out: "float" }, x, y);
+        this.range = [0, 1, 0, 1];      // the input's from and to, the output's from and to
+        this.clamp = true;
+        this.evaluate();
+    }
+
+    compute() {
+        const [a, b, c, d] = this.range;
+        const y = c + (this.inputValue(0) - a) / (b - a) * (d - c);
+        return this.clamp ? Math.min(Math.max(y, Math.min(c, d)), Math.max(c, d)) : y;
+    }
+
+    // One end of a range, 0 to 3 as in `range`; the input's two must differ.
+    setEnd(i, v) {
+        v = uiCompare.parse(v);
+        if (v === null || (i < 2 && v === this.range[1 - i])) return false;
+        this.range[i] = v;
+        this.evaluate();
+    }
+
+    setClamp(clamp) {
+        this.clamp = !!clamp;
+        this.evaluate();
+    }
+
+    logicSettings(settings) {
+        const unit = this.inConns()[0]?.start.node.unit;
+        const labels = [`Input from${unit ? ` (${unit})` : ''}`, `Input to${unit ? ` (${unit})` : ''}`, 'Output from', 'Output to'];
+        labels.forEach((label, i) => settings.appendChild(editableSetting(label, () => showFloat(this.range[i]),
+            (v) => this.setEnd(i, v), {type: 'number', step: 'any'})));
+        settings.appendChild(choiceSetting('Clamp', {yes: 'Yes', no: 'No'},
+            () => this.clamp ? 'yes' : 'no', (v) => this.setClamp(v === 'yes')));
+    }
+
+    marshal() {
+        return this.message([...this.sourceRef(), this.clamp ? SCALE_CLAMP : 0, ...this.range.flatMap(float32Bytes)]);
+    }
+
+    restore(pay, r, len) {
+        if (len !== r + 17) return;
+        const range = [0, 1, 2, 3].map(i => float32At(pay, r + 1 + 4 * i));
+        if (!range.every(Number.isFinite) || range[0] === range[1]) return;
+        this.range = range;
+        this.setClamp(pay[r] & SCALE_CLAMP);
+    }
+}
+
+// A min or a max of up to LOGIC_INPUTS_MAX floating sources, in their unit. Only
+// the wired inputs count; with none, it is 0.
+class uiExtreme extends uiLogic {
+    constructor(max, x = 0, y = 0) {
+        super(max ? "max" : "min", max ? MSG_LOGIC_MAX : MSG_LOGIC_MIN, max ? "MAX" : "MIN",
+            max ? "Max" : "Min", { type: "float", max: LOGIC_INPUTS_MAX, out: "float" }, x, y);
+        this.evaluate();
+    }
+
+    // The unit of what it picks from: its first wired input's.
+    get unit() {
+        return this.inConns()[0]?.start.node.unit ?? '';
+    }
+
+    compute() {
+        const ins = this.inConns().map((c, k) => this.inputValue(k));
+        if (!ins.length) return 0;
+        return this.tc === MSG_LOGIC_MAX ? Math.max(...ins) : Math.min(...ins);
+    }
+
+    marshal() {
+        const refs = this.inConns().flatMap(c => refBytes(c.start.node, c.start.output));
+        return this.message(refs.length ? refs : refBytes(null));
+    }
+}
+class uiMin extends uiExtreme { constructor(x = 0, y = 0) { super(false, x, y); } }
+class uiMax extends uiExtreme { constructor(x = 0, y = 0) { super(true, x, y); } }
+
+// A pulse: on for its time from each time its boolean source goes on, however
+// long the source stays on. Going on again while on starts the time again.
+class uiPulse extends uiLogic {
+    constructor(x = 0, y = 0) {
+        super("pulse", MSG_LOGIC_PULSE, "PLS", "Pulse", { type: "bool", max: 1 }, x, y);
+        this.onMs = 1000;
+        this.inWas = false;
+        this.evaluate();
+    }
+
+    rewired() { this.inWas = uiLogic.isOn(this.inputValue(0)); }
+
+    compute() {
+        const input = uiLogic.isOn(this.inputValue(0)), rose = input && !this.inWas;
+        this.inWas = input;
+        if (!rose) return this.browserValue === true;
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+            this.browserValue = false;
+            this.show();
+        }, this.onMs);
+        return true;
+    }
+
+    setTime(s) { const ms = parseSeconds(s, 1); if (ms === null) return false; this.onMs = ms; }
+
+    logicSettings(settings) {
+        settings.appendChild(editableSetting('Time on (s)', () => String(this.onMs / 1000),
+            (v) => this.setTime(v), {type: 'number', min: 0.001, step: 'any'}));
+    }
+
+    marshal() {
+        return this.message([...this.sourceRef(), ...uint32Bytes(this.onMs)]);
+    }
+
+    restore(pay, r, len) {
+        if (len !== r + 4) return;
+        const ms = uint32At(pay, r);
+        if (ms >= 1 && ms <= DELAY_MAX_MS) this.onMs = ms;
+    }
+
+    remove() {
+        clearTimeout(this.timer);
+        super.remove();
+    }
+}
+
+// A blink: on and off in turn while its boolean source is on, starting on; with
+// nothing wired in, always.
+class uiBlink extends uiLogic {
+    constructor(x = 0, y = 0) {
+        super("blink", MSG_LOGIC_BLINK, "BLK", "Blink", { type: "bool", max: 1 }, x, y);
+        this.onMs = 500;
+        this.offMs = 500;
+        this.blinking = false;
+        this.evaluate();
+    }
+
+    compute() {
+        const enabled = this.inConns().length === 0 || uiLogic.isOn(this.inputValue(0));
+        if (!enabled) {
+            clearTimeout(this.timer);
+            this.blinking = false;
+            return false;
+        }
+        if (this.blinking) return this.browserValue === true;
+        this.blinking = true;
+        this.schedule(true);
+        return true;
+    }
+
+    // Turn over after the time on (from on) or off (from off).
+    schedule(on) {
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+            this.browserValue = !on;
+            this.show();
+            this.schedule(!on);
+        }, on ? this.onMs : this.offMs);
+    }
+
+    setOnTime(s) { const ms = parseSeconds(s, 1); if (ms === null) return false; this.onMs = ms; }
+    setOffTime(s) { const ms = parseSeconds(s, 1); if (ms === null) return false; this.offMs = ms; }
+
+    logicSettings(settings) {
+        settings.appendChild(editableSetting('Time on (s)', () => String(this.onMs / 1000),
+            (v) => this.setOnTime(v), {type: 'number', min: 0.001, step: 'any'}));
+        settings.appendChild(editableSetting('Time off (s)', () => String(this.offMs / 1000),
+            (v) => this.setOffTime(v), {type: 'number', min: 0.001, step: 'any'}));
+    }
+
+    marshal() {
+        return this.message([...this.sourceRef(), ...uint32Bytes(this.onMs), ...uint32Bytes(this.offMs)]);
+    }
+
+    restore(pay, r, len) {
+        if (len !== r + 8) return;
+        const on = uint32At(pay, r), off = uint32At(pay, r + 4);
+        if (on >= 1 && on <= DELAY_MAX_MS) this.onMs = on;
+        if (off >= 1 && off <= DELAY_MAX_MS) this.offMs = off;
+    }
+
+    remove() {
+        clearTimeout(this.timer);
+        super.remove();
+    }
+}
+
+// A toggle: turns over each time its boolean source goes on, so a momentary
+// button works as a switch.
+class uiToggle extends uiLogic {
+    constructor(x = 0, y = 0) {
+        super("toggle", MSG_LOGIC_TOGGLE, "TGL", "Toggle", { type: "bool", max: 1 }, x, y);
+        this.inWas = false;
+        this.evaluate();
+    }
+
+    rewired() { this.inWas = uiLogic.isOn(this.inputValue(0)); }
+
+    compute() {
+        const input = uiLogic.isOn(this.inputValue(0)), rose = input && !this.inWas;
+        this.inWas = input;
+        const now = this.browserValue === true;
+        return rose ? !now : now;
+    }
+}
+
+// A latch: on once its set source goes on, and off once its reset source does;
+// while both are on, off. Its two wires are told apart in its settings, as a
+// PWM's: a wire drawn in sets it if it has no set source yet, else resets it.
+class uiLatch extends uiLogic {
+    constructor(x = 0, y = 0) {
+        super("latch", MSG_LOGIC_LATCH, "LCH", "Latch", { type: "bool", max: 2 }, x, y);
+        this.setSource = null;      // the source node, and which of its outputs
+        this.setOutput = 0;
+        this.resetSource = null;
+        this.resetOutput = 0;
+        this.evaluate();
+    }
+
+    // The value of a role's source; 0 with none.
+    roleValue(role) {
+        const v = this[role + 'Source']?.outputValue(this[role + 'Output']);
+        return v == null ? 0 : Number(v);
+    }
+
+    compute() {
+        if (uiLogic.isOn(this.roleValue('reset'))) return false;
+        return this.browserValue === true || uiLogic.isOn(this.roleValue('set'));
+    }
+
+    // Set or reset from an output of a boolean source node, or from none, and
+    // redraw the wires. A source of another type, or one that would close a loop, is refused.
+    setRole(role, node, output = 0) {
+        if (node && (!this.takesType(node, output) || closesLoop(node, this))) return false;
+        this[role + 'Source'] = node;
+        this[role + 'Output'] = node ? output : 0;
+        this.syncWires();
+        this.evaluate();
+    }
+
+    drivenBy(role, node, output) {
+        return this[role + 'Source'] === node && this[role + 'Output'] === output;
+    }
+
+    // Make the wires into this latch match its two sources.
+    syncWires() {
+        const refs = ['set', 'reset'].filter(r => this[r + 'Source'])
+            .map(r => ({ node: this[r + 'Source'], output: this[r + 'Output'] }));
+        const wired = (c, r) => c.start.node === r.node && c.start.output === r.output;
+        this.inConns().filter(c => !refs.some(r => wired(c, r))).forEach(c => c.remove());
+        refs.filter((r, i) => !refs.slice(0, i).some(q => wired({ start: q }, r)))
+            .filter(r => !this.inConns().some(c => wired(c, r)))
+            .forEach(r => new gEdge(r.node, this, r.output));
+    }
+
+    addEdge(e) {
+        const src = e.start.node, output = e.start.output;
+        if (e.end.node === this && !this.drivenBy('set', src, output) && !this.drivenBy('reset', src, output)) {
+            const role = this.setSource ? 'reset' : 'set';
+            this[role + 'Source'] = src;
+            this[role + 'Output'] = output;
+            if (selected === this) this.createSettings();
+        }
+        super.addEdge(e);
+    }
+
+    edgeRemoved(e) {
+        for (const role of ['set', 'reset']) {
+            if (!this.drivenBy(role, e.start.node, e.start.output)) continue;
+            this[role + 'Source'] = null;
+            this[role + 'Output'] = 0;
+        }
+        if (selected === this) this.createSettings();
+        super.edgeRemoved(e);
+    }
+
+    logicSettings(settings) {
+        const choices = Object.values(elements).filter(n => n !== this).flatMap(n => n.outputs
+            .map((out, i) => [n, out, i]).filter(([, , i]) => this.takesType(n, i) && !closesLoop(n, this))
+            .map(([n, out, i]) => [`${n.name}:${i}`,
+                n.outputs.length > 1 ? `${n.label} ${out.name} (${n.name})` : `${n.label} (${n.name})`]));
+        for (const [role, label] of [['set', 'Set'], ['reset', 'Reset']]) {
+            const source = this[role + 'Source'];
+            settings.appendChild(selectSetting(label, [['', 'None'], ...choices],
+                () => source ? `${source.name}:${this[role + 'Output']}` : '',
+                (pick) => {
+                    const [name, output] = pick.split(':');
+                    this.setRole(role, elements[name] ?? null, Number(output));
+                    this.createSettings();
+                }));
+        }
+    }
+
+    // Its set source, then its reset source.
+    marshal() {
+        return this.message([...refBytes(this.setSource, this.setOutput), ...refBytes(this.resetSource, this.resetOutput)]);
     }
 }

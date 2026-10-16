@@ -36,10 +36,17 @@ const NODE_CLASSES = {
     [MSG_LOGIC_OR]: uiOr,
     [MSG_LOGIC_NOT]: uiNot,
     [MSG_LOGIC_DELAY]: uiDelay,
+    [MSG_LOGIC_SCALE]: uiScale,
+    [MSG_LOGIC_MIN]: uiMin,
+    [MSG_LOGIC_MAX]: uiMax,
+    [MSG_LOGIC_PULSE]: uiPulse,
+    [MSG_LOGIC_BLINK]: uiBlink,
+    [MSG_LOGIC_TOGGLE]: uiToggle,
+    [MSG_LOGIC_LATCH]: uiLatch,
 };
 
 // Whether a control message type is a logic element's.
-const isLogic = (type) => type >= MSG_LOGIC_COMPARE && type <= MSG_LOGIC_DELAY;
+const isLogic = (type) => type >= MSG_LOGIC_COMPARE && type <= MSG_LOGIC_LAST;
 
 // Rebuild the Command view from the graph's UI inputs and outputs.
 function buildCommandInterface() {
@@ -157,8 +164,8 @@ function restoreGraph(msgs) {
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
         if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
-        if (m.type === MSG_LOGIC_COMPARE && m.len === r + 9) elm.restore(m.pay, r);
-        if (m.type === MSG_LOGIC_DELAY && m.len === r + 8) elm.restore(m.pay, r);
+        // Logic with settings takes them from after its source reference (an invalid payload keeps the defaults).
+        if (isLogic(m.type) && elm.restore) elm.restore(m.pay, r, m.len);
         if (m.type === MSG_HW_GPI && m.len >= 2) {
             elm.setPin(m.pay[0]);
             elm.setPull(m.pay[1] & GPI_PULL_MASK);
@@ -205,10 +212,19 @@ function restoreGraph(msgs) {
                 }
             }
             elm.syncWires();
-        } else {
-            // An AND or OR has a reference for each wire in; the others one.
+        } else if (m.type === MSG_LOGIC_LATCH) {
+            // Its set source, then its reset source.
             const r = refLen(m);
-            const refs = m.type === MSG_LOGIC_AND || m.type === MSG_LOGIC_OR ? Math.floor(m.len / r) : 1;
+            if (m.len !== 2 * r) continue;
+            ['set', 'reset'].forEach((role, k) => {
+                const { node, output } = refAt(m, k * r);
+                if (node) elm.setRole(role, node, output);
+            });
+        } else {
+            // An AND, OR, min or max has a reference for each wire in; the others one.
+            const r = refLen(m);
+            const several = [MSG_LOGIC_AND, MSG_LOGIC_OR, MSG_LOGIC_MIN, MSG_LOGIC_MAX].includes(m.type);
+            const refs = several ? Math.floor(m.len / r) : 1;
             for (let k = 0; k < refs; k++) {
                 const { node, output } = refAt(m, k * r);
                 // None if the types don't match, or (in a config not saved by the UI) it would close a loop.

@@ -268,7 +268,7 @@ Every packet payload except `0D` is a sequence of messages:
 | Byte | Field | Notes |
 |---|---|---|
 | 0 | Message type | Which kind of element; see [Element types](#element-types) |
-| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`44`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Other bits are 0. |
+| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4B`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Other bits are 0. |
 | 2–3 | Element ID | Big endian |
 | 4 | Payload length | Bytes after this header, 0–255 |
 | 5… | Payload | Depends on the type |
@@ -322,6 +322,7 @@ Control types use bits 4 to 6 of the type byte:
 | 0 | 1 |       subtype         |   logic elements
 +---+---+-----------------------+
 L (MSG_LOGIC_BIT, 0x40): 1 = logic element: runs on the device, reads sources, and is a source
+                         (`MSG_LOGIC_LAST`, 0x4B, is the last defined)
 H (MSG_HW_BIT, 0x20):    0 = UI element, 1 = hardware element
 I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 ```
@@ -350,6 +351,13 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `42` | `MSG_LOGIC_OR` | Logic: on while any input is on | Implemented |
 | `43` | `MSG_LOGIC_NOT` | Logic: on while its input is off | Implemented |
 | `44` | `MSG_LOGIC_DELAY` | Logic: its input, after an on and an off delay | Implemented |
+| `45` | `MSG_LOGIC_SCALE` | Logic: a floating input mapped from one range onto another | Implemented |
+| `46` | `MSG_LOGIC_MIN` | Logic: the least of its floating inputs | Implemented |
+| `47` | `MSG_LOGIC_MAX` | Logic: the greatest of its floating inputs | Implemented |
+| `48` | `MSG_LOGIC_PULSE` | Logic: on for a time after its input goes on | Implemented |
+| `49` | `MSG_LOGIC_BLINK` | Logic: on and off in turn while its input is on | Implemented |
+| `4A` | `MSG_LOGIC_TOGGLE` | Logic: turns over each time its input goes on | Implemented |
+| `4B` | `MSG_LOGIC_LATCH` | Logic: on once set, off once reset | Implemented |
 | `A0` | `MSG_STRING` | String: a node's label | Implemented |
 | `A1` | `MSG_LAYOUT` | A node's position in the graph | Implemented |
 | `A2` | `MSG_WIRE` | The shape of the wire into an output | Implemented |
@@ -377,6 +385,12 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `41` AND, `42` OR | 3–12 | 1 to `LOGIC_INPUTS_MAX` (4) source references (0 = not connected). See [Logic](#logic). |
 | `43` NOT | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `44` Delay | 11 | Bytes 0–2: source reference (0 = not connected) · bytes 3–6: on delay · bytes 7–10: off delay. Each a 32-bit big-endian number of milliseconds, 0 to `DELAY_MAX_MS` (86400000, a day). See [Logic](#logic). |
+| `45` Scale | 20 | Bytes 0–2: source reference · byte 3: options, bit 0 `SCALE_CLAMP`: keep the output within its range · bytes 4–19: the input's from and to, then the output's from and to, each a 32-bit big-endian float, finite; the input's two differ. See [Logic](#logic). |
+| `46` Min, `47` Max | 3–12 | 1 to `LOGIC_INPUTS_MAX` (4) source references (0 = not connected) |
+| `48` Pulse | 7 | Bytes 0–2: source reference · bytes 3–6: its time on, milliseconds, 1 to `DELAY_MAX_MS` |
+| `49` Blink | 11 | Bytes 0–2: source reference (0: it always blinks) · bytes 3–6: time on · bytes 7–10: time off, each milliseconds, 1 to `DELAY_MAX_MS` |
+| `4A` Toggle | 3 | Bytes 0–2: source reference |
+| `4B` Latch | 6 | Bytes 0–2: its set source reference · bytes 3–5: its reset source reference (each 0 = not connected) |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
@@ -456,15 +470,16 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `40`–`44` logic | `20` LED, `21` GPO, `23` USB keyboard, `01` light, `41`–`44` logic | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature | `22` PWM, `02` plot, `40` compare | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C |
+| Boolean | `10` button, `31` GPIO input, `40`–`44` and `48`–`4B` logic | `20` LED, `21` GPO, `23` USB keyboard, `01` light, `41`–`44` and `48`–`4B` logic | 0 or 1 (`00` / `FF`) |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max | `22` PWM, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
 ADC or core temperature drives a PWM on the device and a plot in the browser, and a
 GPIO input an LED, GPO or USB keyboard on the device and a light in the browser. A PWM
 maps a floating value onto its range as a fraction of the source's full scale: 1 for
-a slider, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature.
+a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature, and
+for a min or max that of its first wired input.
 The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
 
@@ -523,17 +538,17 @@ When a config arrives, the UI rebuilds the graph from it:
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, `40` compare, `41` AND, `42` OR,
-  `43` NOT, `44` delay) becomes a node with the message's ID. If an ID
+  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, and the logic `40`–`4B`)
+  becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay its delays, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
   restored node of the output's [type](#wire-types): an LED's, GPO's, USB keyboard's or light's button, GPIO input or logic, a plot's or compare's slider, 2D slider, ADC or core temperature,
-  each of an AND's or OR's inputs, a NOT's or delay's input, and the floating sources of a PWM's parameters that follow an input. A reference without an output
+  each of an AND's, OR's, min's or max's inputs, a latch's set and reset sources, the other logic's input, and the floating sources of a PWM's parameters that follow an input. A reference without an output
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
@@ -753,10 +768,11 @@ duty cycle from its X and frequency from its Y:
 
 ### Logic
 
-Logic elements (`40`–`44`) make control decisions on the device: core 1 runs them in
+Logic elements (`40`–`4B`) make control decisions on the device: core 1 runs them in
 its scan, every 10 ms, with or without a browser. Each reads one or more sources and
-is a **boolean source** itself, with one output: an LED, GPO, USB keyboard, light or
-other logic can be wired to it.
+is a source itself, with one output: **boolean** (an LED, GPO, USB keyboard, light or
+other logic can be wired to it) or, for a scale, min or max, **floating** (a PWM,
+plot, compare or other floating logic can).
 
 | Element | Reads | On while |
 |---|---|---|
@@ -765,6 +781,15 @@ other logic can be wired to it.
 | `42` OR | 1 to 4 boolean sources | Any wired input is on |
 | `43` NOT | 1 boolean source | Its input is off |
 | `44` Delay | 1 boolean source | Its input, once the input has been on for the on delay; it goes off once the input has been off for the off delay |
+| `48` Pulse | 1 boolean source | For its time on from each time its input goes on, however long the input stays on; going on again starts the time again |
+| `49` Blink | 1 boolean source, or none | While its input is on (always, with none wired): on for its time on, then off for its time off, in turn, starting on |
+| `4A` Toggle | 1 boolean source | Turns over each time its input goes on: a momentary button works as a switch |
+| `4B` Latch | a set and a reset source | From when its set input goes on until its reset input does; while reset is on, off, whatever set is |
+
+| Element | Reads | Value |
+|---|---|---|
+| `45` Scale | 1 floating source | Its input mapped from the input's from–to onto the output's from–to: 30–60 onto 0–1 turns 45 into 0.5. Either range may run downwards. With `SCALE_CLAMP` the output stays within its range |
+| `46` Min, `47` Max | 1 to 4 floating sources | The least or greatest of its wired inputs, in their unit; with none wired, 0 |
 
 - **A compare's hysteresis.** Above 40 with a hysteresis of 1 goes on when its input
   rises past 40, and off only when it falls below 39; below 40 goes on under 40 and
@@ -772,16 +797,24 @@ other logic can be wired to it.
   flicker the output. The threshold and hysteresis are in the source's unit: °C for
   the core temperature, volts for an ADC, 0 to 1 for a slider.
 - **Boolean inputs are on from 0.5**, as an LED's. An input wired to nothing reads 0:
-  a NOT with no input is on. An AND or OR reads only its wired inputs, and with none
-  is off.
-- **A delay** counts in scans: a delay of 0 follows its input in the same scan, and
-  one of 1000 ms one second later. An input that goes back before its delay is up
-  starts the count again, so a bounce shorter than the on delay never turns it on. On
-  delay 0 and off delay 5000 keeps a fan running 5 s after its input goes off.
+  a NOT with no input is on. An AND, OR, min or max reads only its wired inputs, and
+  with none is off, or 0. A blink with no input always blinks.
+- **Times** count in scans: a delay of 0 follows its input in the same scan, and
+  one of 1000 ms one second later; a pulse or blink is on (or off) for at least a
+  scan. An input that goes back before a delay is up starts the count again, so a
+  bounce shorter than the on delay never turns it on. On delay 0 and off delay 5000
+  keeps a fan running 5 s after its input goes off.
 - **In order.** Core 1 runs each logic element after the logic it reads, so a change
   goes through a chain of them in one scan; see [The program](#the-program).
-- **When a program starts** (at boot and on each save) logic starts off, delays with
-  nothing counted, and takes its state at the first scan.
+- **Going on** is a boolean input moving from below 0.5 to 0.5 or more between two
+  scans. When a program starts, a pulse or toggle takes its input as it is, so an
+  input that is already on doesn't count as going on.
+- **When a program starts** (at boot and on each save) logic starts off, or at 0, with
+  nothing counted, and takes its state at the first scan: a latch has to be set
+  again, and a toggle starts off.
+- **A latch's two wires** are told apart in its settings ("Set" and "Reset"), as a
+  PWM's are: a wire drawn into it sets it if it has no set source yet, and otherwise
+  resets it.
 - **In the browser: the device first, the browser as a fallback.** Each logic
   element's state reaches the browser as a `sig`
   [telemetry text frame](#telemetry-text-frames), 1 on and 0 off: its node shows it,
@@ -826,6 +859,27 @@ runs it after (see the [program](#program-examples)):
 41 01 00 04 06  00 03 00  00 02 00              # AND n4 ← n3, n2
 21 01 00 06 04  00 05 00 05                     # GPO n6 ← n5, GPIO 5
 43 01 00 07 03  00 05 00                        # NOT n7 ← n5
+20 01 00 08 03  00 07 00                        # LED n8 ← n7
+```
+
+A fan on a PWM whose duty cycle follows the core temperature from 30 °C (0 %) to
+60 °C (100 %); above 70 °C a latch sets an alarm that blinks the onboard LED until a
+momentary button resets it:
+
+```hex example=logic-more-config
+0A 00 6E                                        # Config, 110 bytes
+30 00 00 01 00                                  # core temperature n1
+45 01 00 02 14  00 01 00 01                     # scale n2 ← n1, clamped
+                41 F0 00 00  42 70 00 00        #   from 30.0 to 60.0
+                00 00 00 00  3F 80 00 00        #   onto 0.0 to 1.0
+22 01 00 03 11  00 02 00 02 03 E8 01            # PWM n3: duty ← n2, pin 2, 1000 Hz, duty from input
+                32 00 64  00 00 00 00 64 27 10  #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
+40 01 00 04 0C  00 01 00 00                     # compare n4 ← n1, above
+                42 8C 00 00  00 00 00 00        #   threshold 70.0, hysteresis 0.0
+10 00 00 05 01  01                              # button n5, momentary
+4B 01 00 06 06  00 04 00  00 05 00              # latch n6: set ← n4, reset ← n5
+49 01 00 07 0B  00 06 00                        # blink n7 ← n6
+                00 00 00 FA  00 00 00 FA        #   250 ms on, 250 ms off
 20 01 00 08 03  00 07 00                        # LED n8 ← n7
 ```
 
@@ -1028,7 +1082,7 @@ Every source in the config has its signals, wired or not:
 | `12` slider | 1 | 0 to 1 | 0 |
 | `13` 2D slider | 2: X (output 0), Y (output 1) | 0 to 1 each | its [home](#2d-sliders) |
 | `30` core temperature | 1 | °C | the latest temperature |
-| `40`–`44` [logic](#logic) | 1 | 0 off, 1 on | 0, then its state at the first scan |
+| `40`–`4B` [logic](#logic) | 1 | 0 off, 1 on; a scale, min or max its value | 0, then its state at the first scan |
 | `31` GPIO input | 1 | 0 off, 1 on | the pin when it is set up |
 | `32` ADC | 1 | volts, 0 to 3.3 | 0, then its first reading |
 
@@ -1055,7 +1109,10 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `30` core temperature | the chip's sensor | its signal | See [Core temperature](#core-temperature) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
 | `41` AND, `42` OR | 1 to 4 signals | its signal | See [Logic](#logic) |
-| `43` NOT, `44` delay | 1 signal | its signal | See [Logic](#logic) |
+| `43` NOT, `44` delay, `48` pulse, `49` blink, `4A` toggle | 1 signal | its signal | See [Logic](#logic) |
+| `45` scale | 1 signal | its signal | See [Logic](#logic) |
+| `46` min, `47` max | 1 to 4 signals | its signal | See [Logic](#logic) |
+| `4B` latch | 2 signals: set, reset | its signal | See [Logic](#logic) |
 | `20` LED | 1 signal | the onboard LED, through core 0 | On from 0.5 |
 | `21` GPO | 1 signal | its pin | High from 0.5 |
 | `22` PWM | 2 signals: duty, frequency | its pin | See [PWM outputs](#pwm-outputs) |
@@ -1071,8 +1128,9 @@ of the config; then the **logic**, each after the logic it reads; then the
 - **Left out:** the elements core 1 doesn't run (plots, lights, labels, positions,
   wires, networking), messages of the wrong length (the [payloads](#control-payloads)
   give the lengths), an ADC channel over 2, a compare with a threshold or hysteresis
-  that isn't a finite number or a hysteresis below 0, a delay over a day, and
-  anything over the limits:
+  that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
+  of its range, a scale whose ranges aren't finite numbers or whose input range is
+  empty, and anything over the limits:
   `PROG_SIGNALS_MAX` (96) signals and `PROG_NODES_MAX` (64) nodes.
 - **A repeated element ID**, as in configs from older UIs, keeps one signal, whose
   last message wins.
@@ -1170,6 +1228,25 @@ AND n4 <- s3 s1 -> s4
 DELAY n5 on 0 off 5000 <- s4 -> s2
 NOT n7 <- s2 -> s5
 GPO n6 pin 5 <- s2
+LED n8 <- s5
+```
+
+For the [logic-more-config example](#logic): the scale, compare, latch and blink, then
+the PWM, which takes the scale's output as a fraction of 1, and the LED:
+
+```program example=logic-more-config
+s0 n1.0 core = 0
+s1 n2.0 scale = 0
+s2 n4.0 compare = 0
+s3 n5.0 button = 0
+s4 n6.0 latch = 0
+s5 n7.0 blink = 0
+CORE n1 -> s0
+SCALE n2 30-60 to 0-1 clamp <- s0 -> s1
+COMPARE n4 above 70 hysteresis 0 <- s0 -> s2
+LATCH n6 set s2 reset s3 -> s4
+BLINK n7 on 250 off 250 <- s4 -> s5
+PWM n3 pin 2 options 01 duty 50 0-100 <- s1 / 1 freq 1000 100-10000 <- - / 1
 LED n8 <- s5
 ```
 

@@ -295,7 +295,7 @@ typedef struct {
     float duty;                 // PWM: the duty cycle it runs at, percent
     uint16_t freq;              // PWM: the frequency its slice runs at
     uint32_t top;               // PWM: counter steps in one period
-    uint32_t held_ms;           // delay: how long its input has differed from its output
+    prog_logic_state logic;     // logic: what it keeps between scans
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -406,6 +406,7 @@ static void take_program(void) {
                                   n->type, n->id, n->type == MSG_HW_ADC ? ADC_PIN_FIRST + n->pin : n->pin);
         // A keyboard types when its input goes on, not because it was on when set up.
         if (n->type == MSG_HW_KEYBOARD) states[i].on = signal_value(p, n->in[0]) >= 0.5f;
+        if (program_logic(n->type)) program_logic_start(p, n, &states[i].logic);
     }
     printf("hw man running a program of %u signals and %u nodes\n", p->signal_count, p->node_count);
 }
@@ -422,6 +423,11 @@ static void scan(uint32_t count) {
         const prog_node *n = &p->nodes[i];
         node_state *st = &states[i];
         if (!st->ok) continue;
+
+        if (program_logic(n->type)) {
+            p->signals[n->out].value = program_logic_step(p, n, p->signals[n->out].value, &st->logic, SCAN_MS);
+            continue;
+        }
 
         switch (n->type) {
         case MSG_HW_ADC:
@@ -445,14 +451,6 @@ static void scan(uint32_t count) {
             if (core_temp.sampled) p->signals[n->out].value = core_temp.value;
             break;
 
-        case MSG_LOGIC_COMPARE:
-        case MSG_LOGIC_AND:
-        case MSG_LOGIC_OR:
-        case MSG_LOGIC_NOT:
-        case MSG_LOGIC_DELAY:
-            st->on = program_logic_step(p, n, st->on, &st->held_ms, SCAN_MS);
-            p->signals[n->out].value = st->on;
-            break;
 
         case MSG_HW_LED: {
             bool on = signal_value(p, n->in[0]) >= 0.5f;

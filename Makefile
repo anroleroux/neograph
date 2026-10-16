@@ -83,7 +83,7 @@ test_runner: src/config/config_iterator.c tests/test_config_iterator.c tests/uni
 test_protocol: src/config/config_iterator.c src/program.c tests/test_protocol.c tests/unity.c tests/protocol_examples.h src/protocol.h src/program.h
 	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
-check_packets: src/config/config_iterator.c tests/check_packets.c src/protocol.h
+check_packets: src/config/config_iterator.c src/program.c tests/check_packets.c src/protocol.h src/program.h
 	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
 test_ws_frame: src/networking/ws_frame.c tests/test_ws_frame.c tests/unity.c src/networking/ws_frame.h

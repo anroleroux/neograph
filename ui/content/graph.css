@@ -67,7 +67,9 @@
      TMP ADC GPI
      PLT LGT
      KEY
-     CMP AND OR NOT DLY
+     CMP AND OR NOT DLY   (logic: rows 4 to 6)
+     SCL MIN MAX PLS BLK
+     TGL LCH
 
    Each button's --col and --row give its grid cell. Folded, a button hides behind
    the one that opens it (the plus, or its group) and slides out to its place;
@@ -75,7 +77,7 @@
 #graph > .buttons.add {
     display: grid;
     grid-template-columns: repeat(5, max-content);
-    grid-template-rows: repeat(4, max-content);
+    grid-template-rows: repeat(6, max-content);
     gap: var(--step-0);
     align-items: start;
     left: 0;

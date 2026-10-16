@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_ and DELAY_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_ and SCALE_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -64,13 +64,21 @@
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
-   boolean source itself, with one output, 0. */
+   source itself, with one output, 0: boolean, or floating for a scale, min or max. */
 #define MSG_LOGIC_BIT           0x40
 #define MSG_LOGIC_COMPARE       0x40    /* a floating input above or below a threshold */
 #define MSG_LOGIC_AND           0x41    /* on while every input is on */
 #define MSG_LOGIC_OR            0x42    /* on while any input is on */
 #define MSG_LOGIC_NOT           0x43    /* on while its input is off */
 #define MSG_LOGIC_DELAY         0x44    /* its input, after an on delay and an off delay */
+#define MSG_LOGIC_SCALE         0x45    /* floating: its input mapped from one range onto another */
+#define MSG_LOGIC_MIN           0x46    /* floating: the least of its inputs */
+#define MSG_LOGIC_MAX           0x47    /* floating: the greatest of its inputs */
+#define MSG_LOGIC_PULSE         0x48    /* on for a time after its input goes on */
+#define MSG_LOGIC_BLINK         0x49    /* on and off in turn while its input is on */
+#define MSG_LOGIC_TOGGLE        0x4A    /* turns over each time its input goes on */
+#define MSG_LOGIC_LATCH         0x4B    /* on once set, off once reset; reset wins */
+#define MSG_LOGIC_LAST          0x4B    /* the last logic type: MSG_LOGIC_LATCH */
 
 /* Supporting and networking element types. */
 #define MSG_STRING              0xA0    /* a node's label, keyed by node ID */
@@ -153,11 +161,18 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
    float, big endian. An AND or OR: 1 to LOGIC_INPUTS_MAX source references. A NOT: one.
    A delay (MSG_LOGIC_DELAY): a source reference, then its on delay and its off delay,
-   each a 32-bit big-endian number of milliseconds, 0 to DELAY_MAX_MS. */
+   each a 32-bit big-endian number of milliseconds, 0 to DELAY_MAX_MS.
+   A scale (MSG_LOGIC_SCALE): a source reference, its options (SCALE_CLAMP), then four
+   32-bit big-endian floats: the input's from and to, the output's from and to.
+   A min or max: 1 to LOGIC_INPUTS_MAX source references. A pulse: a source reference,
+   then its time on, 1 to DELAY_MAX_MS. A blink: a source reference (0: it always
+   blinks), then its time on and time off, each 1 to DELAY_MAX_MS. A toggle: a source
+   reference. A latch: its set source reference, then its reset one. */
 #define COMPARE_ABOVE           0x00    /* on above the threshold; off below it less the hysteresis */
 #define COMPARE_BELOW           0x01    /* on below the threshold; off above it plus the hysteresis */
 #define LOGIC_INPUTS_MAX        4
 #define DELAY_MAX_MS            86400000    /* a day */
+#define SCALE_CLAMP             0x01    /* options bit 0: keep the output within its range */
 
 /* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
    options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
@@ -266,8 +281,10 @@ static inline float msg_float_at(const uint8_t *p) {
 }
 
 /* Whether a logic element's payload is one the device runs: its source references
-   (one, or for an AND or OR 1 to LOGIC_INPUTS_MAX), then a compare's condition, threshold
-   and hysteresis (finite, the hysteresis 0 or more), or a delay's two delays. */
+   (one; for an AND, OR, min or max 1 to LOGIC_INPUTS_MAX; a latch's two), then a
+   compare's condition, threshold and hysteresis (finite, the hysteresis 0 or more), a
+   delay's, pulse's or blink's times, or a scale's options and ranges (finite, its
+   input's from and to apart). */
 static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t len, uint8_t flags) {
     uint8_t r = msg_ref_len(flags);
     switch (type) {
@@ -279,11 +296,30 @@ static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t 
     }
     case MSG_LOGIC_AND:
     case MSG_LOGIC_OR:
+    case MSG_LOGIC_MIN:
+    case MSG_LOGIC_MAX:
         return len >= r && len <= r * LOGIC_INPUTS_MAX && len % r == 0;
     case MSG_LOGIC_NOT:
+    case MSG_LOGIC_TOGGLE:
         return len == r;
+    case MSG_LOGIC_LATCH:
+        return len == 2 * r;
     case MSG_LOGIC_DELAY:
         return len == r + 8 && msg_u32_at(pay + r) <= DELAY_MAX_MS && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
+    case MSG_LOGIC_PULSE:
+        return len == r + 4 && msg_u32_at(pay + r) >= 1 && msg_u32_at(pay + r) <= DELAY_MAX_MS;
+    case MSG_LOGIC_BLINK:
+        return len == r + 8 && msg_u32_at(pay + r) >= 1 && msg_u32_at(pay + r) <= DELAY_MAX_MS
+            && msg_u32_at(pay + r + 4) >= 1 && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
+    case MSG_LOGIC_SCALE: {
+        if (len != r + 17 || (pay[r] & ~SCALE_CLAMP)) return 0;
+        float k[4];
+        for (int i = 0; i < 4; i++) {
+            k[i] = msg_float_at(pay + r + 1 + 4 * i);
+            if (k[i] - k[i] != 0) return 0;     /* not finite */
+        }
+        return k[0] != k[1];                    /* an input range to map from */
+    }
     default:
         return 0;
     }

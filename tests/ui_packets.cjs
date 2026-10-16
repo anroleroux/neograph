@@ -168,7 +168,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1045,6 +1045,113 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#graph .write svg').dispatchEvent('click');
     const logicResaved = await sent(page);
     expect(logicResaved.length === 1 && hex(logicResaved[0]) === logicHex, 'saving the restored logic changed the config');
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.close();
+
+    // ── More logic: a scale for a fan's PWM, an over-temperature latch that blinks
+    // the LED until reset, a toggle and a pulse from one button, and a max ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    const more = await page.evaluate(() => {
+        [MSG_HW_CORE, MSG_LOGIC_SCALE, MSG_HW_PWM, MSG_LOGIC_COMPARE, MSG_LOGIC_LATCH, MSG_LOGIC_BLINK,
+         MSG_UI_BUTTON, MSG_LOGIC_TOGGLE, MSG_UI_BUTTON, MSG_LOGIC_MAX, MSG_HW_ADC, MSG_LOGIC_PULSE,
+         MSG_UI_INDICATOR].forEach(addNode);        // n4 to n16
+        const [scale, cmp, latch, blink, toggle, max, pulse] = ['n5', 'n7', 'n8', 'n9', 'n11', 'n13', 'n15'].map(n => elements[n]);
+        const rejected = scale.setEnd(0, '1') === false && scale.setEnd(1, 'x') === false
+            && pulse.setTime('0') === false && blink.setOffTime('0') === false;
+        scale.setEnd(0, '30'); scale.setEnd(1, '60');
+        cmp.setThreshold('50');
+        blink.setOnTime('0.1'); blink.setOffTime('0.1');
+        pulse.setTime('0.2');
+        const wired = [
+            createEdge('n4', 'n5'), createEdge('n5', 'n6'),       // temperature → scale → PWM duty
+            createEdge('n4', 'n7'), createEdge('n7', 'n8'),       // → compare → latch: set
+            createEdge('n10', 'n8'),                              // button → latch: reset
+            createEdge('n8', 'n9'), createEdge('n9', 'n2'),       // latch → blink → LED
+            createEdge('n12', 'n11'), createEdge('n11', 'n3'),    // button → toggle → GPO
+            createEdge('n4', 'n13'), createEdge('n14', 'n13'),    // temperature, ADC → max
+            createEdge('n12', 'n15'), createEdge('n15', 'n16'),   // button → pulse → light
+        ].every(e => e !== null);
+        return {
+            rejected, wired,
+            pwm: elements.n6.dutySource?.name,
+            roles: [latch.setSource?.name, latch.resetSource?.name].join(),
+            types: createEdge('n12', 'n5') === null && createEdge('n5', 'n8') === null    // a button into a scale; a scale into a latch
+                && elements.n6.takesType(max) && !elements.n2.takesType(scale),
+            unit: max.unit,
+            outputs: [scale, max].map(n => n.outputs[0].type).join() + ',' + latch.outputs[0].type,
+        };
+    });
+    expect(more.rejected, 'out-of-range settings were accepted');
+    expect(more.wired && more.pwm === 'n5' && more.roles === 'n7,n10', 'the logic was not wired: ' + JSON.stringify(more));
+    expect(more.types && more.unit === '°C' && more.outputs === 'float,float,bool', 'logic types are wrong: ' + JSON.stringify(more));
+
+    // In the browser: 45 °C is half way from 30 to 60; the max picks it over the ADC's 1.2 V.
+    const logicValues = () => page.evaluate(() => ['n5', 'n7', 'n8', 'n13'].map(n => elements[n].value).join());
+    await page.evaluate(() => { window.__ws.receive('sig 4 0 45'); window.__ws.receive('sig 14 0 1.2'); });
+    expect(await logicValues() === '0.5,false,false,45', 'at 45 °C: ' + await logicValues());
+    // Above 50 °C the latch sets and the blink starts; back below, the latch holds.
+    await page.evaluate(() => window.__ws.receive('sig 4 0 55'));
+    expect(await logicValues() === '0.8333333333333334,true,true,55', 'at 55 °C: ' + await logicValues());
+    await page.evaluate(() => window.__ws.receive('sig 4 0 20'));
+    expect(await logicValues() === '0,false,true,20', 'at 20 °C the latch did not hold, or the scale did not clamp: ' + await logicValues());
+    const blinks = await page.evaluate(async () => {
+        const seen = [];
+        for (let i = 0; i < 6; i++) { seen.push(elements.n9.value ? 1 : 0); await new Promise(r => setTimeout(r, 70)); }
+        return seen.join('');
+    });
+    expect(/^1+0+1+/.test(blinks), 'the blink did not turn over: ' + blinks);
+    // The reset button resets the latch, which stops the blink.
+    await page.evaluate(() => { const b = elements.n10; b.value = true; b.emit(1); b.value = false; b.emit(0); });
+    expect(await page.evaluate(() => [elements.n8.value, elements.n9.value].join()) === 'false,false', 'reset left the latch or blink on');
+    // One button: the toggle turns over on each press; the pulse is on for 0.2 s from each.
+    const press = () => page.evaluate(() => { const b = elements.n12; b.value = true; b.emit(1); b.value = false; b.emit(0);
+        return [elements.n11.value, elements.n15.value, elements.n16.on].join(); });
+    expect(await press() === 'true,true,true', 'the first press');
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => [elements.n15.value, elements.n16.on].join()) === 'false,false', 'the pulse did not end');
+    expect(await press() === 'false,true,true', 'the second press');
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const moreSaved = await sent(page);
+    const moreHex = hex(moreSaved[0]);
+    expect(moreSaved.length === 1
+        && moreHex.includes('4501000514' + '000400' + '01' + '41f00000' + '42700000' + '00000000' + '3f800000')
+        && moreHex.includes('4b01000806' + '000700' + '000a00')
+        && moreHex.includes('490100090b' + '000800' + '00000064' + '00000064')
+        && moreHex.includes('4a01000b03' + '000c00')
+        && moreHex.includes('4701000d06' + '000400' + '000e00')
+        && moreHex.includes('4801000f07' + '000c00' + '000000c8'),
+        'the logic was not saved as expected: ' + moreHex);
+    packets.push(...moreSaved);
+    await page.close();
+
+    // Reconnecting restores it all; saving it again changes nothing. A latch saved
+    // with only a reset source keeps it as its reset.
+    ({ page, errors } = await open(browser));
+    await connect(page, moreSaved[0]);
+    const moreRestored = await page.evaluate(() => ({
+        scale: [...elements.n5.range, elements.n5.clamp, elements.n5.sourceID()].join(),
+        latch: [elements.n8.setSource?.name, elements.n8.resetSource?.name].join(),
+        times: [elements.n9.onMs, elements.n9.offMs, elements.n15.onMs].join(),
+        max: elements.n13.inConns().map(c => c.start.node.name).join(),
+        pwm: elements.n6.dutySource?.name,
+    }));
+    expect(JSON.stringify(moreRestored) === JSON.stringify({ scale: '30,60,0,1,true,4', latch: 'n7,n10', times: '100,100,200', max: 'n4,n14', pwm: 'n5' }),
+        'the logic was not restored: ' + JSON.stringify(moreRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const moreResaved = await sent(page);
+    expect(moreResaved.length === 1 && hex(moreResaved[0]) === moreHex, 'saving the restored logic changed the config');
+    const resetOnly = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x10, 0, 0, 1, 0,                                   // button n1
+            0x4B, 1, 0, 2, 6, 0, 0, 0, 0, 1, 0,                 // latch n2: no set, reset ← n1
+        ])));
+        return [elements.n2.setSource?.name, elements.n2.resetSource?.name].join();
+    });
+    expect(resetOnly === ',n1', 'a latch with only a reset source restored as ' + resetOnly);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

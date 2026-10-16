@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "protocol.h"
+#include "program.h"
 #include "config/config_iterator.h"
 
 #define SECRETS_REGION 256      /* SECURE_FLASH_SIZE in config.h */
@@ -58,8 +59,10 @@ static bool has_refs(uint8_t type) {
    delay, and a slider, 2D slider, ADC or the core temperature for a PWM, plot or compare. `types` lists the types it
    may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
-                                   MSG_LOGIC_NOT, MSG_LOGIC_DELAY, 0 };
-static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, 0 };
+                                   MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
+                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, 0 };
+static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE,
+                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, 0 };
 
 static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_t *types, const char *what) {
     if (src.id == 0) {
@@ -129,15 +132,24 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_LOGIC_AND:
         case MSG_LOGIC_OR:
         case MSG_LOGIC_NOT:
-        case MSG_LOGIC_DELAY: {
+        case MSG_LOGIC_DELAY:
+        case MSG_LOGIC_SCALE:
+        case MSG_LOGIC_MIN:
+        case MSG_LOGIC_MAX:
+        case MSG_LOGIC_PULSE:
+        case MSG_LOGIC_BLINK:
+        case MSG_LOGIC_TOGGLE:
+        case MSG_LOGIC_LATCH: {
             /* program_compile runs only logic logic_payload_valid accepts */
             if (!logic_payload_valid(it.type, it.pay, it.len, it.flags)) { fail("logic payload is not one the device runs; it would skip it"); break; }
-            uint8_t refs = (it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR) ? it.len / r : 1;
+            bool floating_in = it.type == MSG_LOGIC_COMPARE || program_logic_floating(it.type);
+            uint8_t refs = it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR || it.type == MSG_LOGIC_MIN
+                || it.type == MSG_LOGIC_MAX ? it.len / r : it.type == MSG_LOGIC_LATCH ? 2 : 1;
             for (uint8_t k = 0; k < refs; k++) {
                 msg_ref src = msg_ref_at(it.pay + k * r, it.flags);
                 if (src.id == it.id) fail("logic is wired from itself");
-                if (it.type == MSG_LOGIC_COMPARE) check_source(p, len, src, FLOATING, "a compare is wired from something other than a slider, an ADC or the core temperature");
-                else check_source(p, len, src, BOOLEAN, "logic is wired from something other than a button, a GPIO input or logic");
+                if (floating_in) check_source(p, len, src, FLOATING, "a compare, scale, min or max is wired from something not floating");
+                else check_source(p, len, src, BOOLEAN, "logic is wired from something other than a button, a GPIO input or boolean logic");
             }
             break;
         }
@@ -284,7 +296,7 @@ int main(int argc, char **argv) {
         while (it.next(&it))
             if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN)) fail("a message's flags set an unknown bit");
             else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
-                     && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_DELAY))
+                     && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_LAST))
                 fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");
 
