@@ -21,6 +21,47 @@
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
 
+static void send_to_clients(tcpserver *state, const char *text) {
+    for (int i = 0; i < 10; i++) {
+        if ((state->clients[i] != NULL) && (state->clients[i]->upgraded)) {
+            send_websocket_message(state->clients[i], text);
+        }
+    }
+}
+
+// ── Signal telemetry ──
+// Every SIGNAL_REPORT_MS, each signal of the program core 1 runs whose value has
+// changed is sent to the browser as "sig <id> <output> <value>", and every one
+// at least each SIGNAL_REFRESH_MS, so a browser that connects learns them all
+// (PROTOCOL.md, "Telemetry text frames").
+#define SIGNAL_REPORT_MS    100
+#define SIGNAL_REFRESH_MS   1000
+
+static void report_signals(tcpserver *state) {
+    static absolute_time_t next_report, next_refresh;      // zero: at once
+    static uint32_t generation = UINT32_MAX;
+    static float reported[PROG_SIGNALS_MAX];
+
+    if (!time_reached(next_report)) return;
+    next_report = make_timeout_time_ms(SIGNAL_REPORT_MS);
+    bool refresh = time_reached(next_refresh);
+    if (refresh) next_refresh = make_timeout_time_ms(SIGNAL_REFRESH_MS);
+
+    uint32_t now_generation;
+    const hw_program *p = program_running(&now_generation);
+    bool fresh = now_generation != generation;     // a new program: send every signal
+    generation = now_generation;
+
+    for (uint8_t i = 0; i < p->signal_count; i++) {
+        float value = p->signals[i].value;
+        if (!refresh && !fresh && value == reported[i]) continue;
+        reported[i] = value;
+        char text[40];
+        snprintf(text, sizeof text, "sig %u %u %.4g", p->signals[i].id, p->signals[i].output, (double)value);
+        send_to_clients(state, text);
+    }
+}
+
 int main() {
     stdio_init_all();
     
@@ -84,7 +125,7 @@ int main() {
 
         cyw43_arch_poll();
         // Not longer than 10 ms: core 1 waits while its FIFO to core 0 is full,
-        // and the ADC inputs report several times a second. While a keystroke is
+        // and signals are reported several times a second. While a keystroke is
         // being typed, 1 ms: the PC takes a key down or up each millisecond.
         bool typing = keyboard_task();
         cyw43_arch_wait_for_work_until(make_timeout_time_ms(typing ? 1 : 10));
@@ -100,18 +141,6 @@ int main() {
             case FIFO_TAG_UPTIME:
                 snprintf(text, sizeof text, "uptime %u", (unsigned)value);
                 break;
-            case FIFO_TAG_TEMPERATURE: {
-                float temperature;
-                memcpy(&temperature, &value, sizeof(float));
-                snprintf(text, sizeof text, "core %.2f", temperature);
-                break;
-            }
-            case FIFO_TAG_ADC:
-                snprintf(text, sizeof text, "adc %u %u", (unsigned)fifo_adc_channel(value), (unsigned)fifo_adc_raw(value));
-                break;
-            case FIFO_TAG_GPI:
-                snprintf(text, sizeof text, "gpi %u %u", (unsigned)fifo_gpi_pin(value), (unsigned)fifo_gpi_on(value));
-                break;
             case FIFO_TAG_LED:
                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, value);
                 break;
@@ -119,14 +148,10 @@ int main() {
                 keyboard_press(value);
                 break;
             }
-            if (!text[0]) continue;
-
-            for (int i = 0; i < 10; i++) {
-                if ((state->clients[i] != NULL) && (state->clients[i]->upgraded)) {
-                    send_websocket_message(state->clients[i], text);
-                }
-            }
+            if (text[0]) send_to_clients(state, text);
         }
+
+        report_signals(state);
     }
 
     tcp_server_close(state);

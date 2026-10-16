@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "program.h"
+
 void core1_worker();
 
 // Pause core 1 so core 0 can write flash. Core 1 executes from flash, so it must
@@ -22,5 +24,14 @@ void core1_resume(void);
 // may be waiting for room to send, and would never take core 0's word.
 void push_to_core1(uint32_t word);
 bool take_from_core1(uint32_t *tag, uint32_t *value);
+
+// Core 0's side of the program core 1 runs (PROTOCOL.md, "Part 3"). program_next
+// returns the buffer to compile the next program into, once core 1 has taken the
+// last one; NULL if it hasn't within 1 s. program_commit hands it to core 1,
+// which takes it at its next scan. program_running is the program core 1 runs,
+// for its signals' values; generation counts the programs it has taken.
+hw_program *program_next(void);
+void program_commit(void);
+const hw_program *program_running(uint32_t *generation);
 
 #endif

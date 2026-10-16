@@ -5,6 +5,7 @@
 
 #include "unity.h"
 #include "protocol.h"
+#include "program.h"
 #include "config/config_iterator.h"
 #include "protocol_examples.h"
 
@@ -367,7 +368,6 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_KEYBOARD & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
-    TEST_ASSERT_EQUAL_HEX8(MSG_HW_GPI, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPI, 1, 3)));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -518,13 +518,6 @@ void test_gpi_config(void)
     assert_message(&it, MSG_HW_LED, 2, 3);
     assert_message(&it, MSG_UI_INDICATOR, 3, 3);
     TEST_ASSERT_FALSE(it.next(&it));
-
-    /* The state core 1 reports for it. */
-    uint32_t word = fifo_gpi_word(28, 1);
-    TEST_ASSERT_EQUAL_UINT8(28, fifo_gpi_pin(word));
-    TEST_ASSERT_EQUAL_INT(1, fifo_gpi_on(word));
-    TEST_ASSERT_EQUAL_INT(0, fifo_gpi_on(fifo_gpi_word(28, 0)));
-    TEST_ASSERT_EQUAL_HEX8(0x05, fifo_gpi_options(fifo_gpi_options_word(0x05)));
 }
 
 void test_light_config(void)
@@ -571,79 +564,80 @@ void test_legacy_config(void)
 
 /* ── FIFO words ───────────────────────────────────────────────────────── */
 
-/* The words core 0 sends for a config payload (unmarshal_controls in src/config.c): a clean
- * setup, the setup words, then the action words for each 2D slider's home. */
-static void assert_setup_words(const char *name)
+/* ── Programs ─────────────────────────────────────────────────────────── */
+
+/* Each `program` example is what program_compile (src/program.c) makes of the
+ * config example of the same name: core 0 compiles it, core 1 runs it. */
+void test_program_examples_match_their_configs(void)
 {
-    const struct fifo_example *words = fifo_example(name);
-    config_element_iterator it;
-    messages(&it, example(name));
+    TEST_ASSERT_TRUE(PROGRAM_EXAMPLE_COUNT > 0);
+    for (size_t i = 0; i < PROGRAM_EXAMPLE_COUNT; i++) {
+        const struct program_example *ex = &program_examples[i];
+        const struct protocol_example *cfg = example(ex->name);
+        TEST_ASSERT_EQUAL_HEX8_MESSAGE(PKT_CONFIG, cfg->bytes[0], ex->name);
 
-    TEST_ASSERT_TRUE(words->len >= 1);
-    TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0), words->words[0]);
-
-    size_t n = 1;
-    while (it.next(&it)) {
-        uint8_t pin;
-        pwm_payload pwm;
-        switch (it.type) {
-        case MSG_HW_LED: pin = 0; break;
-        case MSG_HW_KEYBOARD: pin = 0; break;   /* core 0 keeps the keystroke */
-        case MSG_HW_GPO: pin = it.pay[msg_ref_len(it.flags)]; break;
-        case MSG_HW_PWM:
-            TEST_ASSERT_TRUE(pwm_payload_read(it.pay, it.len, it.flags, &pwm));
-            pin = pwm.pin;
-            break;
-        case MSG_HW_ADC:
-            /* The channel, and no reference word: an ADC is a source. */
-            TEST_ASSERT_TRUE(n + 1 <= words->len);
-            TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, it.pay[0]), words->words[n++]);
-            continue;
-        case MSG_HW_CORE:
-            /* Nothing in the low byte and nothing after: the chip's sensor is a source too. */
-            TEST_ASSERT_TRUE(n + 1 <= words->len);
-            TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, 0), words->words[n++]);
-            continue;
-        case MSG_HW_GPI:
-            /* The pin, then its options: a GPIO input is a source too. */
-            TEST_ASSERT_TRUE(n + 2 <= words->len);
-            TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, it.pay[0]), words->words[n++]);
-            TEST_ASSERT_EQUAL_HEX32(fifo_gpi_options_word(it.pay[1]), words->words[n++]);
-            continue;
-        default: continue;
-        }
-        TEST_ASSERT_TRUE(n + 2 <= words->len);
-        TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, pin), words->words[n++]);
-        TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(msg_ref_at(it.pay, it.flags)), words->words[n++]);
-        if (it.type == MSG_HW_PWM) {
-            TEST_ASSERT_TRUE(n + 1 <= words->len);
-            TEST_ASSERT_EQUAL_HEX32(fifo_pwm_word(pwm.freq, pwm.options), words->words[n++]);
-            TEST_ASSERT_TRUE(n + 3 <= words->len);
-            TEST_ASSERT_EQUAL_HEX32(fifo_duty_word(pwm.duty, pwm.duty_min, pwm.duty_max), words->words[n++]);
-            TEST_ASSERT_EQUAL_HEX32(fifo_ref_word(pwm.freq_source), words->words[n++]);
-            TEST_ASSERT_EQUAL_HEX32(fifo_freq_word(pwm.freq_min, pwm.freq_max), words->words[n++]);
-        }
+        static hw_program p;
+        program_compile(cfg->bytes + PKT_HEADER_LEN, cfg->len - PKT_HEADER_LEN, &p);
+        char text[2048];
+        TEST_ASSERT_TRUE_MESSAGE(program_describe(&p, text, sizeof text) < sizeof text, ex->name);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(ex->text, text, ex->name);
     }
-    messages(&it, example(name));
-    while (it.next(&it)) {
-        if (it.type != MSG_UI_SLIDER_2D) continue;
-        uint8_t home[2];
-        slider_2d_home(it.pay, it.len, home);
-        TEST_ASSERT_TRUE(n + 2 <= words->len);
-        TEST_ASSERT_EQUAL_HEX32(fifo_action_word(it.id, 0, home[0]), words->words[n++]);
-        TEST_ASSERT_EQUAL_HEX32(fifo_action_word(it.id, 1, home[1]), words->words[n++]);
-    }
-    TEST_ASSERT_EQUAL_UINT(words->len, n);
 }
 
-void test_fifo_setup_words_match_save_config(void) { assert_setup_words("save-config"); }
-void test_fifo_setup_words_match_adc_config(void) { assert_setup_words("adc-config"); }
-void test_fifo_setup_words_match_keyboard_config(void) { assert_setup_words("keyboard-config"); }
-void test_fifo_setup_words_match_slider_2d_config(void) { assert_setup_words("slider-2d-config"); }
-void test_fifo_setup_words_match_legacy_config(void) { assert_setup_words("legacy-config"); }
-void test_fifo_setup_words_match_light_config(void) { assert_setup_words("light-config"); }
-void test_fifo_setup_words_match_gpi_config(void) { assert_setup_words("gpi-config"); }
-void test_fifo_setup_words_match_core_config(void) { assert_setup_words("core-config"); }
+/* Every config example with something core 1 runs has its program in PROTOCOL.md. */
+void test_every_config_example_with_hardware_has_a_program(void)
+{
+    for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
+        const struct protocol_example *cfg = &protocol_examples[i];
+        if (cfg->bytes[0] != PKT_CONFIG) continue;
+        static hw_program p;
+        program_compile(cfg->bytes + PKT_HEADER_LEN, cfg->len - PKT_HEADER_LEN, &p);
+        if (p.node_count == 0) continue;
+        size_t j = 0;
+        while (j < PROGRAM_EXAMPLE_COUNT && strcmp(program_examples[j].name, cfg->name) != 0) j++;
+        TEST_ASSERT_TRUE_MESSAGE(j < PROGRAM_EXAMPLE_COUNT, cfg->name);
+    }
+}
+
+/* A source's signal is found by its element and output; a missing one is PROG_NO_SIGNAL,
+ * and an output wired to it reads nothing. A repeated ID keeps one signal. */
+void test_program_signals(void)
+{
+    static const uint8_t cfg[] = {
+        MSG_UI_SLIDER_2D, 0, 0, 7, 4, 0x01, 100, 0x00, 0xFF,    /* 2D slider n7, home (0, 1) */
+        MSG_UI_BUTTON, 0, 0, 1, 0,                              /* button n1 */
+        MSG_UI_BUTTON, 0, 0, 1, 1, 0x01,                        /* button n1 again */
+        MSG_HW_GPO, MSG_FLAG_OUTPUT, 0, 2, 4, 0, 9, 0, 5,       /* GPO n2 on GPIO 5, from n9: not there */
+    };
+    static hw_program p;
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(3, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(0, program_signal(&p, 7, 0));
+    TEST_ASSERT_EQUAL_UINT8(1, program_signal(&p, 7, 1));
+    TEST_ASSERT_EQUAL_UINT8(2, program_signal(&p, 1, 0));
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_SIGNAL, program_signal(&p, 1, 1));
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, p.signals[0].value);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, p.signals[1].value);
+    TEST_ASSERT_TRUE(program_ui_source(p.signals[2].type));
+    TEST_ASSERT_EQUAL_UINT8(1, p.node_count);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_SIGNAL, p.nodes[0].in[0]);
+}
+
+/* Too many sources or nodes: the ones over the limit are left out. */
+void test_program_limits(void)
+{
+    static uint8_t cfg[PKT_CONFIG_MAX];
+    size_t n = 0;
+    for (uint16_t id = 1; id <= PROG_SIGNALS_MAX + 10; id++) {
+        uint8_t m[] = { MSG_HW_CORE, 0, (uint8_t)(id >> 8), (uint8_t)id, 0 };
+        memcpy(cfg + n, m, sizeof m);
+        n += sizeof m;
+    }
+    static hw_program p;
+    program_compile(cfg, n, &p);
+    TEST_ASSERT_EQUAL_UINT8(PROG_SIGNALS_MAX, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NODES_MAX, p.node_count);
+}
 
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c):
  * one per payload byte, for the element's output of the same index. */
@@ -668,45 +662,11 @@ void test_fifo_action_words_match_command_slider_2d(void) { assert_action_words(
 
 void test_fifo_words_decode(void)
 {
-    uint32_t setup = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPO, 0x1234, 28);
-    TEST_ASSERT_EQUAL_UINT8(FIFO_OP_SETUP, fifo_op(setup));
-    TEST_ASSERT_EQUAL_HEX8(MSG_HW_GPO, fifo_op_type(setup));
-    TEST_ASSERT_EQUAL_HEX16(0x1234, fifo_op_id(setup));
-    TEST_ASSERT_EQUAL_UINT8(28, fifo_op_value(setup));
-    const msg_ref ref = { 0xBEEF, 1 };
-    TEST_ASSERT_EQUAL_HEX16(0xBEEF, fifo_ref_source(fifo_ref_word(ref)));
-    TEST_ASSERT_EQUAL_UINT8(1, fifo_ref_output(fifo_ref_word(ref)));
-
     uint32_t action = fifo_action_word(0x1234, FIFO_OUTPUTS_MAX - 1, VALUE_HALF);
     TEST_ASSERT_EQUAL_UINT8(FIFO_OP_CONTROL_ACTION, fifo_op(action));
     TEST_ASSERT_EQUAL_UINT8(FIFO_OUTPUTS_MAX - 1, fifo_op_output(action));
     TEST_ASSERT_EQUAL_HEX16(0x1234, fifo_op_id(action));
     TEST_ASSERT_EQUAL_UINT8(VALUE_HALF, fifo_op_value(action));
-
-    uint32_t pwm = fifo_pwm_word(65535, PWM_DUTY_INPUT);
-    TEST_ASSERT_EQUAL_UINT16(65535, fifo_pwm_freq(pwm));
-    TEST_ASSERT_EQUAL_HEX8(PWM_DUTY_INPUT, fifo_pwm_options(pwm));
-
-    uint32_t duty = fifo_duty_word(50, 80, 20);
-    TEST_ASSERT_EQUAL_UINT8(50, fifo_duty_const(duty));
-    TEST_ASSERT_EQUAL_UINT8(80, fifo_duty_min(duty));
-    TEST_ASSERT_EQUAL_UINT8(20, fifo_duty_max(duty));
-
-    uint32_t freq = fifo_freq_word(PWM_FREQ_MIN, 65535);
-    TEST_ASSERT_EQUAL_UINT16(PWM_FREQ_MIN, fifo_freq_min(freq));
-    TEST_ASSERT_EQUAL_UINT16(65535, fifo_freq_max(freq));
-
-    uint32_t adc = fifo_adc_word(ADC_CHANNELS - 1, ADC_RAW_FULL);
-    TEST_ASSERT_EQUAL_UINT8(ADC_CHANNELS - 1, fifo_adc_channel(adc));
-    TEST_ASSERT_EQUAL_UINT16(ADC_RAW_FULL, fifo_adc_raw(adc));
-}
-
-/* PROTOCOL.md, Part 3: only 5 type bits travel in a setup word, and core 1 forces bit 5. */
-void test_fifo_setup_type_arrives_as_hw_type(void)
-{
-    TEST_ASSERT_EQUAL_HEX8(MSG_HW_ADC, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_ADC, 1, 0)));
-    TEST_ASSERT_EQUAL_HEX8(MSG_HW_KEYBOARD, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_KEYBOARD, 1, 0)));
-    TEST_ASSERT_EQUAL_HEX8(MSG_HW_CORE, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_CORE, 1, 0)));
 }
 
 int main(void)
@@ -733,19 +693,14 @@ int main(void)
     RUN_TEST(test_legacy_config);
     RUN_TEST(test_light_config);
     RUN_TEST(test_gpi_config);
-    RUN_TEST(test_fifo_setup_words_match_save_config);
-    RUN_TEST(test_fifo_setup_words_match_adc_config);
-    RUN_TEST(test_fifo_setup_words_match_keyboard_config);
-    RUN_TEST(test_fifo_setup_words_match_slider_2d_config);
-    RUN_TEST(test_fifo_setup_words_match_legacy_config);
-    RUN_TEST(test_fifo_setup_words_match_light_config);
-    RUN_TEST(test_fifo_setup_words_match_gpi_config);
-    RUN_TEST(test_fifo_setup_words_match_core_config);
+    RUN_TEST(test_program_examples_match_their_configs);
+    RUN_TEST(test_every_config_example_with_hardware_has_a_program);
+    RUN_TEST(test_program_signals);
+    RUN_TEST(test_program_limits);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_action_words_match_command_slider_2d);
     RUN_TEST(test_fifo_words_decode);
-    RUN_TEST(test_fifo_setup_type_arrives_as_hw_type);
 
     return UNITY_END();
 }

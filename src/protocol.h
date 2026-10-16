@@ -232,85 +232,34 @@ static inline int pwm_payload_read(const uint8_t *pay, uint8_t len, uint8_t flag
 
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
-/* Core 0 -> core 1: operation word, bits 31-30. */
+/* Core 0 -> core 1: operation word, bits 31-30. Core 0 sends only action words: the
+   config reaches core 1 as a program in shared RAM (src/program.h). */
 #define FIFO_OP_CONTROL_ACTION  1
-#define FIFO_OP_SETUP           2
-#define FIFO_OP_CLEAN_SETUP     3       /* sent first for every config, clears core 1's controls */
 
-/* Core 1 -> core 0: tag word, followed by one value word. */
+/* Core 1 -> core 0: tag word, followed by one value word. Tags 1, 3 and 5 are
+   retired: the temperature, ADC and GPIO input readings are signals, which core 0
+   reads from the program. */
 #define FIFO_TAG_UPTIME         0       /* value: uptime in 1.2 s ticks */
-#define FIFO_TAG_TEMPERATURE    1       /* value: float bits, degrees C */
 #define FIFO_TAG_LED            2       /* value: onboard LED state, 0 or 1 */
-#define FIFO_TAG_ADC            3       /* value: an ADC reading, see fifo_adc_word */
 #define FIFO_TAG_KEYBOARD       4       /* value: the ID of a USB keyboard whose input went on */
-#define FIFO_TAG_GPI            5       /* value: a GPIO input's state, see fifo_gpi_word */
 
-/* An action word carries an output index in the 5 bits a setup word carries a type in. */
+/* An action word names one of an element's first FIFO_OUTPUTS_MAX outputs. */
 #define FIFO_OUTPUTS_MAX        32
 
 /*
- * Operation word: [31:30] op · [29] unused · [28:24] type & 0x1F (setup), or output
- * index (action) · [23:8] element ID · [7:0] GPIO pin or ADC channel (setup), or
- * value (action)
+ * Action word: the new value of one output of a source, from a command.
+ * [31:30] op · [29] unused · [28:24] output index · [23:8] element ID · [7:0] value
  */
-static inline uint32_t fifo_op_word(uint8_t op, uint8_t type, uint16_t id, uint8_t value) {
-    return (uint32_t)(op & 0x03) << 30
-        | (uint32_t)(type & 0x1F) << 24
-        | (uint32_t)id << 8
-        | value;
-}
-
-static inline uint8_t fifo_op(uint32_t word) { return (word >> 30) & 0x03; }
-/* Only 5 type bits travel, and bit 5 is forced on: UI types arrive as HW types. */
-static inline uint8_t fifo_op_type(uint32_t word) { return ((word >> 24) & 0x1F) | 0x20; }
-static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
-static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
-
-/* Action word: the new value of one output of a source, from a command. */
 static inline uint32_t fifo_action_word(uint16_t id, uint8_t output, uint8_t value) {
     return (uint32_t)FIFO_OP_CONTROL_ACTION << 30
         | (uint32_t)(output & 0x1F) << 24
         | (uint32_t)id << 8
         | value;
 }
+
+static inline uint8_t fifo_op(uint32_t word) { return (word >> 30) & 0x03; }
 static inline uint8_t fifo_op_output(uint32_t word) { return (word >> 24) & 0x1F; }
-
-/* ADC word, the value after FIFO_TAG_ADC: [31:16] channel · [15:0] reading, 0 to ADC_RAW_FULL. */
-static inline uint32_t fifo_adc_word(uint8_t channel, uint16_t raw) { return (uint32_t)channel << 16 | raw; }
-static inline uint8_t fifo_adc_channel(uint32_t word) { return (word >> 16) & 0xFF; }
-static inline uint16_t fifo_adc_raw(uint32_t word) { return word & 0xFFFF; }
-
-/* GPI options word, sent after a GPIO input's setup word: [7:0] its options (GPI_). */
-static inline uint32_t fifo_gpi_options_word(uint8_t options) { return options; }
-static inline uint8_t fifo_gpi_options(uint32_t word) { return word & 0xFF; }
-
-/* GPI word, the value after FIFO_TAG_GPI: [31:16] the pin · [0] 1 = on (after GPI_INVERT). */
-static inline uint32_t fifo_gpi_word(uint8_t pin, int on) { return (uint32_t)pin << 16 | (on ? 1 : 0); }
-static inline uint8_t fifo_gpi_pin(uint32_t word) { return (word >> 16) & 0xFF; }
-static inline int fifo_gpi_on(uint32_t word) { return word & 1; }
-
-/* Reference word, sent after a setup word for LED/GPO/PWM/keyboard: [31:16] source
-   element ID · [7:0] the source's output index. */
-static inline uint32_t fifo_ref_word(msg_ref ref) { return (uint32_t)ref.id << 16 | ref.output; }
-static inline uint16_t fifo_ref_source(uint32_t word) { return (word >> 16) & 0xFFFF; }
-static inline uint8_t fifo_ref_output(uint32_t word) { return word & 0xFF; }
-
-/* PWM word, sent after the reference word for PWM: [31:16] frequency in Hz · [7:0] options (PWM_DUTY_INPUT). */
-static inline uint32_t fifo_pwm_word(uint16_t freq, uint8_t options) { return (uint32_t)freq << 16 | options; }
-static inline uint16_t fifo_pwm_freq(uint32_t word) { return (word >> 16) & 0xFFFF; }
-static inline uint8_t fifo_pwm_options(uint32_t word) { return word & 0xFF; }
-
-/* Duty word, sent after the PWM word: [31:24] constant duty · [23:16] min duty · [15:8] max duty, in percent. */
-static inline uint32_t fifo_duty_word(uint8_t duty, uint8_t min, uint8_t max) {
-    return (uint32_t)duty << 24 | (uint32_t)min << 16 | (uint32_t)max << 8;
-}
-static inline uint8_t fifo_duty_const(uint32_t word) { return (word >> 24) & 0xFF; }
-static inline uint8_t fifo_duty_min(uint32_t word) { return (word >> 16) & 0xFF; }
-static inline uint8_t fifo_duty_max(uint32_t word) { return (word >> 8) & 0xFF; }
-
-/* Frequency word, sent after the frequency's reference word: [31:16] min Hz · [15:0] max Hz. */
-static inline uint32_t fifo_freq_word(uint16_t min, uint16_t max) { return (uint32_t)min << 16 | max; }
-static inline uint16_t fifo_freq_min(uint32_t word) { return (word >> 16) & 0xFFFF; }
-static inline uint16_t fifo_freq_max(uint32_t word) { return word & 0xFFFF; }
+static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
+static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
 
 #endif

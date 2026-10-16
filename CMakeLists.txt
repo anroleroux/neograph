@@ -17,6 +17,7 @@ add_executable(twitcher
     src/config.c
     src/config/config_iterator.c
     src/hwman.c
+    src/program.c
     src/keyboard.c
     src/usb_descriptors.c
     src/networking/dhcpserver.c

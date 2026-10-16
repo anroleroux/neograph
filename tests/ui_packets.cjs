@@ -662,7 +662,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     }
 
     // The device's temperature telemetry reaches the core node, its tile and its plot.
-    await page.evaluate(() => window.__ws.receive('core 31.27'));
+    await page.evaluate(() => window.__ws.receive('sig 8 0 31.27'));
     const temperature = await page.evaluate(() => ({
         tile: document.querySelector('#command .control-reading .state').textContent,
         plot: elements.n9.samples.map(([, v]) => v).join(),
@@ -670,23 +670,24 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(temperature.tile === '31.3 °C', 'the core temperature tile shows ' + temperature.tile);
     expect(temperature.plot === ',31.27', 'the temperature plot holds ' + temperature.plot);
 
-    // ADC readings reach the ADC nodes on their channel only, in volts.
-    await page.evaluate(() => { window.__ws.receive('adc 0 4095'); window.__ws.receive('adc 1 2048'); });
+    // A signal reaches its own node only: the ADC n10's, in volts. A signal of a
+    // node the page doesn't have is ignored.
+    await page.evaluate(() => { window.__ws.receive('sig 99 0 3.3'); window.__ws.receive('sig 10 0 1.6504'); });
     const reading = await page.evaluate(() => ({
         tile: document.querySelectorAll('#command .control-reading .state')[1].textContent,
         plot: elements.n11.samples.map(([, v]) => v === null ? '' : v.toFixed(4)).join(),
     }));
     expect(reading.tile === '1.65 V', 'the ADC tile shows ' + reading.tile);
 
-    // GPIO input states reach the GPIO input on their pin only, its tile and its light.
+    // A GPIO input's signal reaches it, its tile and its light.
     const door = () => page.evaluate(() => [
         [...document.querySelectorAll('#command .control-reading')].find(t => t.title.startsWith('GPIO input')).querySelector('.state').textContent,
         document.querySelectorAll('#command .control-light')[1].querySelector('.state').textContent,
         document.querySelectorAll('#command .control-light')[1].dataset.on].join(' '));
     expect(await door() === '– – false', 'before any reading the GPIO input and its light show ' + await door());
-    await page.evaluate(() => { window.__ws.receive('gpi 8 1'); window.__ws.receive('gpi 9 0'); });
+    await page.evaluate(() => { window.__ws.receive('sig 19 0 1'); window.__ws.receive('sig 20 0 0'); });
     expect(await door() === 'On On true', 'pin 8 on shows ' + await door());
-    await page.evaluate(() => window.__ws.receive('gpi 8 0'));
+    await page.evaluate(() => window.__ws.receive('sig 19 0 0'));
     expect(await door() === 'Off Off false', 'pin 8 off shows ' + await door());
     expect(reading.plot === ',1.6504', 'the ADC plot holds ' + reading.plot);
     await toCommandView(page);

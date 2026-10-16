@@ -342,258 +342,31 @@ size_t wrap_config(uint8_t *out, const char name[5]) {
 
 
 
-// ControlList* unmarshal_controls(const uint8_t* data, size_t length) {
+// Compile the config's graph into the next program and hand it to core 1, which
+// runs it from its next scan (PROTOCOL.md, "Part 3"). Core 0 keeps the USB
+// keyboards' keystrokes itself.
 void unmarshal_controls(const uint8_t* data, size_t length) {
+    hw_program *program = program_next();
+    if (!program) {
+        printf("core 1 has not taken the last program: config not run\n");
+        return;
+    }
+    program_compile(data, length, program);
+
+    keyboard_clear();
     config_element_iterator itr;
     config_element_iterator_init(&itr, data, length);
-
-    // Core 1 adds each setup to what it already has, so clear its table first:
-    // the config replaces the controls rather than adding to them.
-    push_to_core1(fifo_op_word(FIFO_OP_CLEAN_SETUP, 0, 0, 0));
-    printf("send hw clean setup\n");
-    keyboard_clear();
-
-    // size_t offset = 0;
-    // size_t capacity = 4;
-
     while (itr.next(&itr)) {
-        uint32_t control_setup_msg;
-
-        switch (itr.type) {
-        case MSG_HW_LED:
-            if (itr.len != msg_ref_len(itr.flags)) break;
-
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_LED, itr.id, 0);
-
-            push_to_core1(control_setup_msg);
-            printf("send hw LED setup %X\n",control_setup_msg);
-            
-            control_setup_msg = fifo_ref_word(msg_ref_at(itr.pay, itr.flags));
-            push_to_core1(control_setup_msg);
-            printf("send hw LED setup %X\n",control_setup_msg);
-            break;
-        
-        case MSG_HW_GPO: {
-            uint8_t r = msg_ref_len(itr.flags);
-            if (itr.len != r + 1) break;
-
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPO, itr.id, itr.pay[r]);
-
-            push_to_core1(control_setup_msg);
-            printf("send hw GPO setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_ref_word(msg_ref_at(itr.pay, itr.flags));
-
-            push_to_core1(control_setup_msg);
-            printf("send hw GPO setup %X\n",control_setup_msg);
-            break;
-        }
-
-        case MSG_HW_PWM: {
-            pwm_payload pwm;
-            if (!pwm_payload_read(itr.pay, itr.len, itr.flags, &pwm)) break;
-
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_PWM, itr.id, pwm.pin);
-            push_to_core1(control_setup_msg);
-            printf("send hw PWM setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_ref_word(pwm.duty_source);
-            push_to_core1(control_setup_msg);
-            printf("send hw PWM setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_pwm_word(pwm.freq, pwm.options);
-            push_to_core1(control_setup_msg);
-            printf("send hw PWM setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_duty_word(pwm.duty, pwm.duty_min, pwm.duty_max);
-            push_to_core1(control_setup_msg);
-            printf("send hw PWM setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_ref_word(pwm.freq_source);
-            push_to_core1(control_setup_msg);
-            printf("send hw PWM setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_freq_word(pwm.freq_min, pwm.freq_max);
-            push_to_core1(control_setup_msg);
-            printf("send hw PWM setup %X\n",control_setup_msg);
-            break;
-        }
-
-        case MSG_HW_KEYBOARD: {
-            // Core 0 keeps the keystroke and types it; core 1 says when.
-            uint8_t r = msg_ref_len(itr.flags);
-            if (!keyboard_payload_valid(itr.pay, itr.len, itr.flags)) break;
-            if (!keyboard_add(itr.id, itr.pay + r, itr.len - r)) {
-                printf("skipping keyboard %d: too many keyboards\n", itr.id);
-                break;
-            }
-
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_KEYBOARD, itr.id, 0);
-            push_to_core1(control_setup_msg);
-            printf("send hw keyboard setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_ref_word(msg_ref_at(itr.pay, itr.flags));
-            push_to_core1(control_setup_msg);
-            printf("send hw keyboard setup %X\n",control_setup_msg);
-            break;
-        }
-
-        case MSG_HW_GPI:
-            // Core 1 reads the pin; the options word follows.
-            if (itr.len != 2) break;
-
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_GPI, itr.id, itr.pay[0]);
-            push_to_core1(control_setup_msg);
-            printf("send hw GPI setup %X\n",control_setup_msg);
-
-            control_setup_msg = fifo_gpi_options_word(itr.pay[1]);
-            push_to_core1(control_setup_msg);
-            printf("send hw GPI setup %X\n",control_setup_msg);
-            break;
-
-        case MSG_HW_CORE:
-            // A source on the chip's sensor: nothing in the low byte, nothing follows.
-            if (itr.len != 0) break;
-
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_CORE, itr.id, 0);
-            push_to_core1(control_setup_msg);
-            printf("send hw core temperature setup %X\n",control_setup_msg);
-            break;
-
-        case MSG_HW_ADC:
-            if (itr.len != 1 || itr.pay[0] >= ADC_CHANNELS) break;
-
-            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_ADC, itr.id, itr.pay[0]);
-            push_to_core1(control_setup_msg);
-            printf("send hw ADC setup %X\n",control_setup_msg);
-            break;
-
-        default:
-            printf("skipping control type %02X\n",itr.type);
-            break;
-        }
+        if (itr.type != MSG_HW_KEYBOARD || !keyboard_payload_valid(itr.pay, itr.len, itr.flags)) continue;
+        uint8_t r = msg_ref_len(itr.flags);
+        if (!keyboard_add(itr.id, itr.pay + r, itr.len - r)) printf("skipping keyboard %d: too many keyboards\n", itr.id);
     }
 
-    // A 2D slider starts at its home: drive its outputs there, now that they are set up.
-    itr.reset(&itr);
-    while (itr.next(&itr)) {
-        if (itr.type != MSG_UI_SLIDER_2D) continue;
-        uint8_t home[2];
-        slider_2d_home(itr.pay, itr.len, home);
-        for (uint8_t i = 0; i < 2; i++) {
-            push_to_core1(fifo_action_word(itr.id, i, home[i]));
-        }
-        printf("send 2D slider %d home %u, %u\n", itr.id, home[0], home[1]);
-    }
+    static char text[2048];
+    program_describe(program, text, sizeof text);
+    printf("program for core 1:\n%s", text);
 
-    // while (offset + 4 <= length) {
-    //     Control control = {0};
-    //     control.type = data[offset++];
-    //     offset++;
-    //     control.id = (data[offset] << 8) | data[offset + 1];
-    //     offset += 2;
-
-    //     if (control.type < 0x20 || control.type > 0x3F) {
-    //         printf("Unsupported control type: 0x%02X, skipping %i\n", control.type,data[offset]);
-    //         offset += data[offset++];
-    //         continue;
-    //     }
-            
-    // // printf("control type %02X, offset %i, length %i\n",control.type,offset,length);
-    //     uint32_t control_setup_msg;
-    //     switch (control.type) {
-    //         case CONTROL_TYPE_LED:
-    //             if (offset + 1 > length) break;  // bounds check
-    //             // control.payload_type = PAYLOAD_ID_REF;
-    //             // control.ref_id = (data[offset] << 8) | data[offset + 1];
-    //             offset += 1;
-
-    //             control_setup_msg = (CONFIG_OPERATION_TYPE_SETUP << 24)
-    //                 | (CONTROL_TYPE_LED << 16)
-    //                 | control.id;
-    //             // printf("send %X\n",control_setup_msg);
-    //             multicore_fifo_push_blocking(control_setup_msg);
-    //             break;
-        
-    //         case CONTROL_TYPE_GPIO:
-    //             if (offset + 1 > length) break;  // bounds check
-    //             offset += 1;
-
-    //             control_setup_msg = (CONFIG_OPERATION_TYPE_SETUP << 24)
-    //                 | (CONTROL_TYPE_GPIO << 16)
-    //                 | (data[offset++] << 27)
-    //                 | control.id;
-    //             // printf("send %X\n",control_setup_msg);
-    //             multicore_fifo_push_blocking(control_setup_msg);
-    //             break;
-        
-    //         case CONTROL_TYPE_PWM:
-    //             if (offset + 1 > length) break;  // bounds check
-    //             offset += 1;
-
-    //             control_setup_msg = (CONFIG_OPERATION_TYPE_SETUP << 24)
-    //                 | (CONTROL_TYPE_PWM << 16)
-    //                 | (data[offset++] << 27)
-    //                 | control.id;
-    //             // printf("send %X\n",control_setup_msg);
-    //             multicore_fifo_push_blocking(control_setup_msg);
-
-    //             control_setup_msg = (data[offset++] << 24)
-    //                 | (data[offset++] << 16)
-    //                 | (data[offset++] << 8)
-    //                 | data[offset++];
-    //             // printf("send %X\n",control_setup_msg);
-    //             multicore_fifo_push_blocking(control_setup_msg);
-
-    //             control_setup_msg = (data[offset++] << 24)
-    //                 | (data[offset++] << 16)
-    //                 | (data[offset++] << 8)
-    //                 | data[offset++];
-    //             // printf("send %X\n",control_setup_msg);
-    //             multicore_fifo_push_blocking(control_setup_msg);
-
-    //             control_setup_msg = (data[offset++] << 24)
-    //                 | (data[offset++] << 16)
-    //                 | (data[offset++] << 8)
-    //                 | data[offset++];
-    //             // printf("send %X\n",control_setup_msg);
-    //             multicore_fifo_push_blocking(control_setup_msg);
-
-    //             break;
-
-    //         // case 0xA0:
-    //         //     if (offset + 1 > length) break;  // bounds check
-    //         //     // control.payload_type = PAYLOAD_STRING;
-    //         //     control.string_payload.length = data[offset++];
-    //         //     if (offset + control.string_payload.length > length) break;
-        
-    //         //     control.string_payload.str = malloc(control.string_payload.length + 1);
-    //         //     memcpy(control.string_payload.str, data + offset, control.string_payload.length);
-    //         //     control.string_payload.str[control.string_payload.length] = '\0';  // null-terminate
-    //         //     offset += control.string_payload.length;
-    //         //     break;
-        
-    //         default:
-    //             printf("skipping control type %02X\n",control.payload_type);
-    //             // control.payload_type = PAYLOAD_NONE;
-    //             break;
-    //     }
-
-    //     // if (list->count >= capacity) {
-    //     //     capacity *= 2;
-    //     //     Control* new_controls = realloc(list->controls, capacity * sizeof(Control));
-    //     //     if (!new_controls) {
-    //     //         fprintf(stderr, "Memory reallocation failed\n");
-    //     //         free(list->controls);
-    //     //         exit(1);
-    //     //     }
-    //     //     list->controls = new_controls;
-    //     // }
-
-    //     // list->controls[list->count++] = control;
-    // }
-
-    // return list;
+    program_commit();
 }
 
 int unmarshal_network_config(

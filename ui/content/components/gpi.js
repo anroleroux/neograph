@@ -87,6 +87,9 @@ class uiGPI extends uiComponents {
         return this.value == null ? null : Number(this.value);
     }
 
+    // Its signal from the device (PROTOCOL.md, "Telemetry text frames"): 1 on, 0 off.
+    signal(output, value) { this.update(value >= 0.5); }
+
     // A new state from the device, or null for none: hand it on to the wired nodes.
     update(on) {
         this.value = on;
