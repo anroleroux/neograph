@@ -14,22 +14,19 @@
 #include "config.h"
 #include "uthash.h"
 
-// Constants for conversion
 #define ADC_TEMP_SENSOR 4        // Internal temperature sensor is connected to ADC 4
-#define ADC_VREF 3.3             // Reference voltage (3.3V)
-#define ADC_RESOLUTION 4095.0    // 12-bit ADC resolution (2^12 - 1)
-#define TEMP_OFFSET 27.0         // Calibration temperature (27°C)
-#define TEMP_SLOPE -1.721        // mV per degree change (from datasheet)
+#define TEMP_AVERAGE    16       // reads averaged into one sample
 
-float read_internal_temperature() {
+// The chip's temperature in °C: TEMP_AVERAGE reads of the sensor, averaged. The
+// sensor reads 0.706 V at 27 °C and falls 1.721 mV per °C (RP2350 datasheet).
+static float read_internal_temperature(void) {
     adc_select_input(ADC_TEMP_SENSOR);
     sleep_us(10);  // Allow ADC to stabilize
-    uint16_t raw = adc_read();
+    uint32_t sum = 0;
+    for (int i = 0; i < TEMP_AVERAGE; i++) sum += adc_read();
 
-    float voltage = (raw * 3.3f) / 4095.0f; // Convert ADC to voltage
-    float temperature = 27.0f - ((voltage - 0.706f) / 0.001721f);
-    
-    return temperature;
+    float voltage = (sum * 3.3f) / (TEMP_AVERAGE * 4095.0f);
+    return 27.0f - ((voltage - 0.706f) / 0.001721f);
 }
 
 typedef struct {
@@ -551,6 +548,69 @@ static bool gpi_setup(uint16_t id, uint8_t pin, uint8_t options) {
     return true;
 }
 
+// ── Core temperature ──
+// The chip's temperature is sampled every TEMP_SAMPLE_MS and smoothed, whatever
+// the graph: each sample moves it 1/TEMP_FILTER of the way, so it follows over
+// about a second and a sample's noise (a sensor count is ~0.5 °C) mostly cancels.
+// It is reported to core 0 for the browser every TEMP_REPORT_MS. Each core
+// temperature node is a source: the outputs wired to it are driven with the
+// temperature from 0 °C (0) to CORE_TEMP_FULL °C (VALUE_FULL), when that value
+// changes, with hysteresis as an ADC's.
+#define TEMP_SAMPLE_MS      100
+#define TEMP_FILTER         8
+#define TEMP_HYSTERESIS     0.75f   // of a value step from the middle of the current one
+#define TEMP_REPORT_MS      1000
+#define CORE_NODES_MAX      16
+
+static struct {
+    bool sampled;
+    float celsius;              // smoothed
+    uint8_t value;              // the value the outputs were last driven with
+    bool drive;                 // drive the outputs at the next sample, whatever the value
+} core_temp;
+
+static uint16_t core_nodes[CORE_NODES_MAX];
+static uint8_t core_node_count = 0;
+
+// The temperature as a value, 0 °C at 0 to CORE_TEMP_FULL °C at VALUE_FULL.
+static uint8_t core_temp_value(float celsius) {
+    float v = celsius * VALUE_FULL / CORE_TEMP_FULL + 0.5f;
+    return v <= 0 ? 0 : v >= VALUE_FULL ? VALUE_FULL : (uint8_t)v;
+}
+
+static void core_temp_poll(void) {
+    float sample = read_internal_temperature();
+    if (!core_temp.sampled) core_temp.celsius = sample;
+    else core_temp.celsius += (sample - core_temp.celsius) / TEMP_FILTER;
+    core_temp.sampled = true;
+
+    uint8_t value = core_temp_value(core_temp.celsius);
+    float step = (float)CORE_TEMP_FULL / VALUE_FULL;
+    float off = core_temp.celsius - core_temp.value * step;
+    if (!core_temp.drive && (value == core_temp.value || (off < TEMP_HYSTERESIS * step && -off < TEMP_HYSTERESIS * step))) return;
+
+    core_temp.drive = false;
+    core_temp.value = value;
+    for (uint8_t i = 0; i < core_node_count; i++) drive_outputs(core_nodes[i], 0, value, false);
+}
+
+static void core_temp_report(void) {
+    if (!core_temp.sampled) return;
+    push_to_core0(FIFO_TAG_TEMPERATURE);
+    uint32_t data;
+    memcpy(&data, &core_temp.celsius, sizeof(float));
+    push_to_core0(data);
+}
+
+// Set up a core temperature node. Returns false if there are CORE_NODES_MAX.
+static bool core_temp_setup(uint16_t id) {
+    if (core_node_count == CORE_NODES_MAX) return false;
+    core_nodes[core_node_count++] = id;
+    core_temp.drive = true;
+    printf("core temperature for ID %d\n", id);
+    return true;
+}
+
 void core1_worker() {
     printf("(core1) started\n");
     
@@ -559,7 +619,8 @@ void core1_worker() {
 
     absolute_time_t start = get_absolute_time();
     uint64_t next_uptime_timeout = 5;
-    uint64_t next_coretm_timeout = 6;
+    absolute_time_t next_temp_sample = start;
+    absolute_time_t next_temp_report = delayed_by_ms(start, TEMP_REPORT_MS);
     absolute_time_t next_adc_sample = start;
     absolute_time_t next_adc_report = start;
     absolute_time_t next_gpi_sample = start;
@@ -590,6 +651,14 @@ void core1_worker() {
         if (time_reached(next_gpi_sample)) {
             gpi_poll(now);
             next_gpi_sample = delayed_by_ms(now, GPI_SAMPLE_MS);
+        }
+        if (time_reached(next_temp_sample)) {
+            core_temp_poll();
+            next_temp_sample = delayed_by_ms(now, TEMP_SAMPLE_MS);
+        }
+        if (time_reached(next_temp_report)) {
+            core_temp_report();
+            next_temp_report = delayed_by_ms(now, TEMP_REPORT_MS);
         }
 
         uint32_t op;
@@ -678,11 +747,19 @@ void core1_worker() {
                     }
                     break;
 
+                case MSG_HW_CORE:
+                    // A source, as an ADC, on the chip's own sensor.
+                    if (!core_temp_setup(decop.id)) {
+                        printf("hw man skipping core temperature on ID %i: too many\n", decop.id);
+                    }
+                    break;
+
                 default:
                     break;
                 }
 
-                if (decop.control_type == MSG_HW_ADC || decop.control_type == MSG_HW_GPI) break;
+                if (decop.control_type == MSG_HW_ADC || decop.control_type == MSG_HW_GPI
+                    || decop.control_type == MSG_HW_CORE) break;
                 if (!usable) {
                     printf("hw man skipping control type %02X on ID %i: GPIO %d is not usable or in use\n",
                            decop.control_type, decop.id, decop.io);
@@ -691,10 +768,12 @@ void core1_worker() {
                 add_packet(decop);
                 printf("hw man adding control type %02X on ID %i\n",decop.control_type,decop.id);
 
-                // An output set up after its ADC or GPI source was read gets the
-                // source's value at the next read, not at its next change.
+                // An output set up after its ADC, GPI or core temperature source
+                // was read gets the source's value at the next read, not at its
+                // next change.
                 for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) adc_inputs[ch].drive = true;
                 for (uint8_t i = 0; i < gpi_node_count; i++) gpi_nodes[i].drive = true;
+                core_temp.drive = true;
                 break;
             }
 
@@ -704,6 +783,7 @@ void core1_worker() {
                 memset(adc_inputs, 0, sizeof adc_inputs);
                 adc_node_count = 0;
                 gpi_node_count = 0;
+                core_node_count = 0;
                 for (uint gpio = 0; gpio < PWM_PINS; gpio++) {
                     if (!(used_pins & (1u << gpio))) continue;
                     if (gpio_get_function(gpio) == GPIO_FUNC_PWM) {
@@ -725,16 +805,6 @@ void core1_worker() {
                 }
                 break;
             }
-        }
-
-        int64_t core_time_elapsed = absolute_time_diff_us(start, get_absolute_time())/1200000;
-        if (core_time_elapsed >= next_coretm_timeout) {
-            float temperature = read_internal_temperature();
-            push_to_core0(FIFO_TAG_TEMPERATURE);
-            uint32_t data;
-            memcpy(&data, &temperature, sizeof(float));
-            push_to_core0(data);
-            next_coretm_timeout = core_time_elapsed + 5;
         }
     }
 }

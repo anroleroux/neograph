@@ -54,11 +54,10 @@ static bool has_refs(uint8_t type) {
 }
 
 /* A source reference must name an output of a source the output takes (PROTOCOL.md,
-   "Wire types"): a button or GPIO input for an LED, GPO, keyboard or light, a slider, 2D slider or an ADC
-   for a PWM, and those or the core temperature for a plot. `types` lists the types it
+   "Wire types"): a button or GPIO input for an LED, GPO, keyboard or light, and a slider, 2D slider,
+   ADC or the core temperature for a PWM or a plot. `types` lists the types it
    may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, 0 };
-static const uint8_t FLOATING_HW[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, 0 };
 
 static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_t *types, const char *what) {
@@ -153,8 +152,8 @@ static void check_config(const uint8_t *p, size_t len) {
             else if (pwm.freq_source.id && !(pwm.options & PWM_FREQ_INPUT))
                 fail("a PWM has a frequency source but a constant frequency");
             else {
-                check_source(p, len, pwm.duty_source, FLOATING_HW, "a PWM's duty is wired from something other than a slider or an ADC");
-                check_source(p, len, pwm.freq_source, FLOATING_HW, "a PWM's frequency is wired from something other than a slider or an ADC");
+                check_source(p, len, pwm.duty_source, FLOATING, "a PWM's duty is wired from something other than a slider, an ADC or the core temperature");
+                check_source(p, len, pwm.freq_source, FLOATING, "a PWM's frequency is wired from something other than a slider, an ADC or the core temperature");
             }
             break;
         }

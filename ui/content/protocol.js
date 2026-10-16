@@ -44,7 +44,7 @@ const MSG_HW_LED             = 0x20;
 const MSG_HW_GPO             = 0x21;
 const MSG_HW_PWM             = 0x22;
 const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
-const MSG_HW_CORE            = 0x30;  // the core temperature, from telemetry
+const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
 
@@ -101,6 +101,9 @@ const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable
 const ADC_CHANNELS           = 3;
 const ADC_PIN_FIRST          = 26;
 const ADC_RAW_FULL           = 4095;  // a 12-bit reading at the reference voltage, 3.3 V
+
+// Core temperature: on the device it drives outputs from 0 °C (0) to CORE_TEMP_FULL °C (1).
+const CORE_TEMP_FULL         = 100;
 
 // GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pinUsable). Byte 1:
 // options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin

@@ -5,13 +5,13 @@ class uiCore extends uiComponents {
 
         this.tc = MSG_HW_CORE;
 
-        // The temperature comes from the device's telemetry, which only the
-        // browser receives, so it drives only UI outputs (see takesType).
+        // In the browser the temperature comes from the device's telemetry, in °C.
+        // On the device core 1 reads it and drives the outputs wired to it, from
+        // 0 °C (0) to CORE_TEMP_FULL °C (1).
         this.outputs.push(
             {
                 type:"float",
-                conns:[],
-                browserOnly:true
+                conns:[]
             }
         );
         this.actDir = "outputs";

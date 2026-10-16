@@ -63,6 +63,10 @@ int main() {
     
     printf("\n(core0) launching core1\n");
     multicore_launch_core1(core1_worker);
+
+    // The stored graph runs from boot: a browser that connects later is sent the
+    // config, but core 1 is not set up again (PROTOCOL.md, "Session").
+    apply_stored_config();
     
     if (!tcp_server_open(state)) {
         tcp_server_result(state, -1);

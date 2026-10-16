@@ -318,17 +318,18 @@ static uint8_t element_type(const struct protocol_example *ex, uint16_t id)
     return 0;
 }
 
-/* A floating output the device has: a slider's, a 2D slider's X or Y, or an ADC's. */
+/* A floating output the device has: a slider's, a 2D slider's X or Y, an ADC's or the core temperature's. */
 static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
 {
     if (src.id == 0) return;
     uint8_t type = element_type(ex, src.id);
-    TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC, ex->name);
+    TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
+                             || type == MSG_HW_CORE, ex->name);
     TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
- * driven by a button, a PWM by sliders, 2D sliders or ADCs. */
+ * driven by a button, a PWM by sliders, 2D sliders, ADCs or the core temperature. */
 void test_wires_join_matching_types(void)
 {
     for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
@@ -598,6 +599,11 @@ static void assert_setup_words(const char *name)
             TEST_ASSERT_TRUE(n + 1 <= words->len);
             TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, it.pay[0]), words->words[n++]);
             continue;
+        case MSG_HW_CORE:
+            /* Nothing in the low byte and nothing after: the chip's sensor is a source too. */
+            TEST_ASSERT_TRUE(n + 1 <= words->len);
+            TEST_ASSERT_EQUAL_HEX32(fifo_op_word(FIFO_OP_SETUP, it.type, it.id, 0), words->words[n++]);
+            continue;
         case MSG_HW_GPI:
             /* The pin, then its options: a GPIO input is a source too. */
             TEST_ASSERT_TRUE(n + 2 <= words->len);
@@ -637,6 +643,7 @@ void test_fifo_setup_words_match_slider_2d_config(void) { assert_setup_words("sl
 void test_fifo_setup_words_match_legacy_config(void) { assert_setup_words("legacy-config"); }
 void test_fifo_setup_words_match_light_config(void) { assert_setup_words("light-config"); }
 void test_fifo_setup_words_match_gpi_config(void) { assert_setup_words("gpi-config"); }
+void test_fifo_setup_words_match_core_config(void) { assert_setup_words("core-config"); }
 
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c):
  * one per payload byte, for the element's output of the same index. */
@@ -699,6 +706,7 @@ void test_fifo_setup_type_arrives_as_hw_type(void)
 {
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_ADC, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_ADC, 1, 0)));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_KEYBOARD, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_KEYBOARD, 1, 0)));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_CORE, fifo_op_type(fifo_op_word(FIFO_OP_SETUP, MSG_HW_CORE, 1, 0)));
 }
 
 int main(void)
@@ -732,6 +740,7 @@ int main(void)
     RUN_TEST(test_fifo_setup_words_match_legacy_config);
     RUN_TEST(test_fifo_setup_words_match_light_config);
     RUN_TEST(test_fifo_setup_words_match_gpi_config);
+    RUN_TEST(test_fifo_setup_words_match_core_config);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_action_words_match_command_slider_2d);

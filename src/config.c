@@ -451,6 +451,15 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
             printf("send hw GPI setup %X\n",control_setup_msg);
             break;
 
+        case MSG_HW_CORE:
+            // A source on the chip's sensor: nothing in the low byte, nothing follows.
+            if (itr.len != 0) break;
+
+            control_setup_msg = fifo_op_word(FIFO_OP_SETUP, MSG_HW_CORE, itr.id, 0);
+            push_to_core1(control_setup_msg);
+            printf("send hw core temperature setup %X\n",control_setup_msg);
+            break;
+
         case MSG_HW_ADC:
             if (itr.len != 1 || itr.pay[0] >= ADC_CHANNELS) break;
 
@@ -784,9 +793,17 @@ uint16_t retrieve_store(uint8_t* data_buffer) {
     read_config(data_buffer,data_length+3);
     restore_interrupts(ints);
     printf("retrieved %d bytes from rom\n", data_length);
-    unmarshal_controls(data_buffer+3,data_length);
 
     return data_length;
+}
+
+void apply_stored_config(void) {
+    // Static: a config is up to PKT_CONFIG_MAX bytes, too big for core 0's stack.
+    static uint8_t config[FLASH_SIZE];
+    uint16_t data_length = retrieve_store(config);
+    if (data_length == 0) return;
+    printf("applying the stored config\n");
+    unmarshal_controls(config+3,data_length);
 }
 
 void apply_config(const uint8_t* data, size_t length) {

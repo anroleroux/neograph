@@ -257,8 +257,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(plot.buttonToPlot, 'a button was wired to a plot');
     expect(plot.sliderToPlot, 'the slider was not wired to the plot');
 
-    // Add the core temperature and a second plot for it. Its values reach only
-    // the browser, so it drives a plot but no hardware output.
+    // Add the core temperature and a second plot for it. Its values are on the
+    // device too, so it drives a PWM as well as a plot; it is floating, so not a GPO.
     await page.locator('#add [title="Add the core temperature"]').dispatchEvent('click');
     // A hardware input's tile is hidden until its settings show it.
     const coreRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
@@ -276,13 +276,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         toggleConnectMode();
         return {
             marked,
-            toPwm: createEdge('n8', 'n4') === null && elements.n4.setSource('freq', elements.n8) === false,
+            forPwm: elements.n4.takesType(elements.n8),
             toLed: createEdge('n8', 'n3') === null,
             toPlot: createEdge('n8', 'n9') !== null && elements.n9.sourceID() === 8,
         };
     });
     expect(core.marked === 'n9', 'wire mode from the core temperature marks ' + core.marked);
-    expect(core.toPwm, 'the core temperature was wired to a PWM');
+    expect(core.forPwm, 'a PWM does not take the core temperature');
     expect(core.toLed, 'the core temperature was wired to a GPO');
     expect(core.toPlot, 'the core temperature was not wired to the plot');
 
@@ -441,7 +441,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const inputs = await page.$$eval('#settings .editable.select', rows => rows
         .filter(row => row.querySelector('.label').textContent === 'Input:')
         .map(row => [...row.querySelectorAll('option')].map(o => o.value + '=' + o.textContent).join(',')));
-    expect(inputs[0] === '=None,n5:0=Speed (n5),n6:0=Pitch (n6),n10:0=Level sensor (n10),n15:0=Stick X (n15),n15:1=Stick Y (n15)',
+    expect(inputs[0] === '=None,n5:0=Speed (n5),n6:0=Pitch (n6),n8:0=Core temperature (n8),n10:0=Level sensor (n10),n15:0=Stick X (n15),n15:1=Stick Y (n15)',
         'the PWM offers inputs ' + inputs[0]);
     await select('Input').first().selectOption('n15:0');
     await choice('Frequency', 'From input');
@@ -785,8 +785,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Less those other nodes use: the GPO's 7, the GPIO input's 8 and the ADC's 27.
     expect(types.pwmPins === '0|' + [...Array(23).keys(), 26, 28].filter(p => ![2, 3, 7, 8, 14, 15, 18, 19].includes(p)).join(),
         'a new PWM, with PWMs on GPIO 15 and 2, takes and offers ' + types.pwmPins);
-    expect(types.fromPwm === 'n5,n6,n10,n15', 'wire mode from a PWM marks ' + types.fromPwm);
-    expect(types.picks === ',n5:0,n6:0,n10:0,n15:0,n15:1', 'the PWM offers inputs ' + types.picks);
+    expect(types.fromPwm === 'n5,n6,n8,n10,n15', 'wire mode from a PWM marks ' + types.fromPwm);
+    expect(types.picks === ',n5:0,n6:0,n8:0,n10:0,n15:0,n15:1', 'the PWM offers inputs ' + types.picks);
     expect(types.sliderToLed, 'a slider was wired to the LED');
     expect(types.buttonToPwm, 'a button was wired to a PWM');
 

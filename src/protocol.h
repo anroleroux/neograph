@@ -56,7 +56,7 @@
 #define MSG_HW_GPO              0x21
 #define MSG_HW_PWM              0x22
 #define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
-#define MSG_HW_CORE             0x30    /* the core temperature, from telemetry */
+#define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 
@@ -132,6 +132,10 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ADC_CHANNELS            3
 #define ADC_PIN_FIRST           26
 #define ADC_RAW_FULL            4095    /* a 12-bit reading at the reference voltage, 3.3 V */
+
+/* Core temperature (MSG_HW_CORE): on the device it drives outputs with its value from
+   0 °C (0) to CORE_TEMP_FULL °C (VALUE_FULL), clamped. */
+#define CORE_TEMP_FULL          100
 
 /* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
    options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin

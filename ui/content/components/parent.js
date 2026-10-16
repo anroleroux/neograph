@@ -219,8 +219,8 @@ class uiComponents {
     // default). Their types must match: a boolean source (a button) drives a
     // boolean output (an LED or GPO), and a floating one (a slider, the core
     // temperature) a floating output (a PWM or a plot). A source whose values
-    // only reach the browser (the core temperature) drives only UI outputs: the
-    // device never has its values.
+    // only reach the browser (an output marked browserOnly) drives only UI
+    // outputs: the device never has its values.
     takesType(source, output = source.actNum) {
         if (source.actDir !== 'outputs') return false;
         const out = source.outputs[output];

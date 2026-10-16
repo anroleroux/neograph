@@ -7,7 +7,7 @@ and listed under [Known issues](#known-issues).
 ```mermaid
 flowchart LR
     UI["Browser UI<br/>(ui/)"] -- "Part 1: packets over WebSocket" --- C0["Core 0<br/>network, flash, WiFi LED,<br/>USB keyboard"]
-    C0 -- "Part 3: 32-bit FIFO words" --- C1["Core 1<br/>GPIO, ADC"]
+    C0 -- "Part 3: 32-bit FIFO words" --- C1["Core 1<br/>GPIO, ADC, temperature"]
     C0 --- F[("Flash<br/>Part 2: config")]
     C0 -- "USB keyboard" --- PC["PC"]
 ```
@@ -58,25 +58,30 @@ sequenceDiagram
     participant UI as Browser UI
     participant C0 as Core 0
     participant C1 as Core 1
+    Note over C0,C1: at boot
+    C0->>C1: setup words for each stored LED/GPO/PWM/ADC/GPI/core temperature/keyboard
     UI->>C0: HTTP GET /
     C0-->>UI: index.html (gzip)
     UI->>C0: WebSocket upgrade
     C0-->>UI: 101 Switching Protocols
     C0-->>UI: 0x0D Device ID
-    C0->>C1: setup words for each stored LED/GPO/PWM/ADC/keyboard
     C0-->>UI: 0x0A Config (if one is stored)
     Note over UI: user edits network fields
     UI->>C0: 0x0B / 0x0C field update (written to flash)
     Note over UI: user saves the graph
     UI->>C0: 0x0A Config (written to flash)
-    C0->>C1: setup words for each LED/GPO/PWM/ADC/GPI/keyboard
+    C0->>C1: setup words for each LED/GPO/PWM/ADC/GPI/core temperature/keyboard
     Note over UI: user presses a button
     UI->>C0: 0x01 Command
     C0->>C1: action word
     C1-->>C0: LED tag + value (LED sinks only)
     loop every 5 ticks (1.2 s each)
-        C1-->>C0: uptime / temperature
-        C0-->>UI: text frame "uptime N" / "core T"
+        C1-->>C0: uptime
+        C0-->>UI: text frame "uptime N"
+    end
+    loop every second
+        C1-->>C0: temperature
+        C0-->>UI: text frame "core T"
     end
     loop each ADC channel in the graph, up to every 100 ms
         C1-->>C0: ADC reading
@@ -121,10 +126,15 @@ BD FC EA C1 4E 1E 79 4D     # DID
 The full configuration: networking elements and the graph. The same packet,
 header included, is what the device stores in flash (see [Storage](#storage)).
 
+- **At boot.** If flash holds a config, core 0 sends core 1 its setup words (see
+  [Part 3](#part-3-inter-core-fifo-core-0--core-1)), so the graph runs without a
+  browser.
 - **HW → UI.** Sent on connect, after `0D`, if flash holds a config. The UI
   rebuilds its graph from it (see [Restoring the graph](#restoring-the-graph)).
+  Connecting doesn't set core 1 up again: its outputs keep their state.
 - **UI → HW.** Sent when the user saves the graph. The device writes the whole
-  packet to flash, then sends setup words for each LED, GPO, PWM, ADC and GPIO input element to core 1.
+  packet to flash, then sends setup words for each LED, GPO, PWM, ADC, GPIO input,
+  core temperature and USB keyboard element to core 1.
 
 [Part 2](#part-2-config-model) describes the payload; [The graph](#the-graph) has a
 full example.
@@ -222,7 +232,7 @@ connected client as WebSocket text frames:
 | Text | Meaning |
 |---|---|
 | `uptime N` | Uptime in 1.2 s ticks (integer) |
-| `core T` | Chip temperature in °C, two decimals |
+| `core T` | Chip temperature in °C, two decimals, smoothed (see [Core temperature](#core-temperature)); every second |
 | `adc C R` | A reading of ADC channel C (0–2): R from 0 to 4095 (`ADC_RAW_FULL`, 3.3 V) |
 | `gpi P S` | The state of the GPIO input on pin P: S is 1 on, 0 off (after its "On when") |
 
@@ -343,7 +353,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `13` 2D slider | 1–4 | Byte 0, bit 0 (`SLIDER_RETURN`): 0 = it stays where it is let go (UI default), 1 = it returns home. Bits 1–2 (`SLIDER_EASE_MASK`), how it returns: `SLIDER_EASE_IMMEDIATE` (`00`), `SLIDER_EASE_LINEAR` (`02`, UI default) or `SLIDER_EASE_SIGMOID` (`04`). Other bits are 0. Byte 1: the return speed, 1–255 % of its range per second (UI default 100); without it, the return is immediate. Bytes 2–3: its home, X then Y as values, `00`–`FF` (UI default `80 80`, the centre); without them, the centre. The device uses only the home: it drives the slider's outputs there (`slider_2d_home`). See [2D sliders](#2d-sliders). |
 | `01` Light | 3 | Bytes 0–2: source reference (0 = not connected). The device ignores light messages in a config: the light is drawn in the browser (see [Lights](#lights)). |
 | `02` Plot | 4–20 | Bytes 0–2: source reference (0 = not connected) · byte 3: time window, 1–255 s (UI default 10) · bytes 4…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
-| `30` Core temperature | 0 | None. The device ignores it in a config: the temperature is sent as telemetry whatever the graph (see [Core temperature](#core-temperature)). |
+| `30` Core temperature | 0 | None: the chip has one sensor. See [Core temperature](#core-temperature). |
 | `31` GPIO input | 2 | Byte 0: the GPIO pin, a [usable](#gpio-pins) one (UI default 3). Byte 1: options; bits 0–1 (`GPI_PULL_MASK`) the pin's pull, `GPI_PULL_NONE` (0), `GPI_PULL_UP` (1) or `GPI_PULL_DOWN` (2, UI default); bit 2 (`GPI_INVERT`): 0 = on while the pin is high (UI default), 1 = on while it is low. Other bits are 0. See [GPIO inputs](#gpio-inputs). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
@@ -429,11 +439,11 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button, `31` GPIO input | `20` LED, `21` GPO, `23` USB keyboard, `01` light | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts in the browser, 0 to 1 on the device; the core temperature in °C |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature | `22` PWM, `02` plot | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts in the browser, 0 to 1 on the device; the core temperature in °C in the browser, 0 °C to `CORE_TEMP_FULL` (100) °C as 0 to 1 on the device |
 
-The core temperature's values reach only the browser, so it drives a plot but not a
-PWM. An ADC's are on the device, so it drives both; so are a GPIO input's, which drives
-an LED, GPO or USB keyboard on the device and a light in the browser. The UI only draws wires between matching types, and drops mismatched source references
+The hardware inputs' values are on the device and in the browser: an ADC or core
+temperature drives a PWM on the device and a plot in the browser, and a GPIO input an
+LED, GPO or USB keyboard on the device and a light in the browser. The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
 
 When the user saves, the UI sends a `0A` config whose payload is:
@@ -566,17 +576,36 @@ existed, is hidden. The device ignores the flag.
 ### Core temperature
 
 A core temperature node (`30`) is a floating source whose value is the chip's
-temperature in °C, from the `core T` [telemetry text frames](#telemetry-text-frames).
-The Command view can show it on a tile (see [Hardware input tiles](#hardware-input-tiles)),
-and a plot wired to it draws it.
+temperature. The Command view can show it on a tile (see
+[Hardware input tiles](#hardware-input-tiles)), a plot wired to it draws it, and a
+PWM wired to it follows it on the device.
 
-- **Nothing new on the device.** Core 1 measures the temperature every 5 ticks (6 s)
-  whatever the graph, and core 0 sends it to the most recent client. The UI hands
-  each value to every core temperature node, which hands it to its plots.
+- **Read on the device.** Core 1 reads the sensor every 100 ms, whatever the graph:
+  16 reads averaged, then smoothed so each sample moves the temperature 1/8 of the
+  way to it (it follows over about a second). One count of the sensor is about
+  0.5 °C, and the sensor is only accurate to a few °C.
+- **On the device.** A core temperature drives the outputs wired to it as a fraction
+  from 0 °C (0) to `CORE_TEMP_FULL` (100) °C (1), clamped: 40 °C puts a PWM's duty 40 %
+  of the way from its min to its max. A step of the value is 100/255 ≈ 0.4 °C, and it
+  changes only when the temperature is 3/4 of a step from the middle of the current
+  one, so the outputs don't flicker. Several nodes may share the sensor; up to 16 are
+  kept.
+- **In the browser.** Core 1 reports the smoothed temperature every second, which
+  core 0 sends as a `core T` [telemetry text frame](#telemetry-text-frames). The UI hands
+  each value to every core temperature node, which hands it to its plots, in °C.
 - **Until the first frame** the node has no value: its tile shows `–`, and a plot
   wired to it draws nothing.
-- **Browser only.** The device never sees these values as a source, so a core
-  temperature can't drive a PWM; the UI refuses that wire.
+
+A core temperature `n1` driving a PWM's duty cycle, 0 % at 0 °C to 100 % at 100 °C,
+and drawn on a plot:
+
+```hex example=core-config
+0A 00 24                                        # Config, 36 bytes
+30 02 00 01 00                                  # core temperature n1, its tile shown
+22 01 00 02 11  00 01 00 02 03 E8 01            # PWM n2: duty ← n1, pin 2, 1000 Hz, duty from input
+                32 00 64  00 00 00 00 64 27 10  #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
+02 01 00 03 04  00 01 00 0A                     # plot n3 ← n1, 10 s
+```
 
 ### GPIO inputs
 
@@ -675,7 +704,7 @@ drives, either output can drive.
 - **Home** (bytes 2–3, "Home X" and "Home Y" in the settings, 0 to 1): where the puck
   starts, and where it returns to. The UI default is the centre, `80 80`
   (`VALUE_HALF`, about 0.5 each).
-- **Starting at home.** Each time core 0 applies a config (a save, and each connect),
+- **Starting at home.** Each time core 0 applies a config (a save, and at boot),
   after the setup words it sends the action words for each 2D slider's home, so the
   outputs wired to it start there rather than at 0, as the puck does in the browser.
 - **Let go** (`SLIDER_RETURN` clear), it stays where it is. With "Return home" set,
@@ -885,9 +914,9 @@ Every exchange starts with an **operation word**:
 
 | `op` | Constant | Sent by | Followed by |
 |---|---|---|---|
-| 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per payload byte: the value of one output of the element. Also `0A` config and each connect, after the setup words: a 2D slider's home | Nothing |
-| 2 | `FIFO_OP_SETUP` | `0A` config and on each connect, one per LED/GPO/PWM/ADC/GPI/keyboard message | For an LED, GPO, PWM or keyboard, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel. For a GPIO input, the low byte is its pin, and a GPI options word follows: bits 7–0 its options (`fifo_gpi_options_word`) |
-| 3 | `FIFO_OP_CLEAN_SETUP` | `0A` config and on each connect, once, before the setup words | Nothing |
+| 1 | `FIFO_OP_CONTROL_ACTION` | `01` command, one per payload byte: the value of one output of the element. Also `0A` config and at boot, after the setup words: a 2D slider's home | Nothing |
+| 2 | `FIFO_OP_SETUP` | `0A` config and at boot, one per LED/GPO/PWM/ADC/GPI/core temperature/keyboard message | For an LED, GPO, PWM or keyboard, one reference word; for a PWM, then a PWM word, a duty word, a second reference word and a frequency word. For an ADC, nothing: the low byte is its channel. For a core temperature, nothing, and the low byte is 0. For a GPIO input, the low byte is its pin, and a GPI options word follows: bits 7–0 its options (`fifo_gpi_options_word`) |
+| 3 | `FIFO_OP_CLEAN_SETUP` | `0A` config and at boot, once, before the setup words | Nothing |
 
 A setup word carries the low 5 bits of the element type. Core 1 sets bit 5 on decode,
 so it sees the hardware type: LED `20`, GPO `21`. An action word carries the output
@@ -952,6 +981,17 @@ channel and is followed by nothing; the plot is skipped:
 ```fifo example=adc-config
 C0000000                    # clean setup
 92000101                    # setup ADC n1, type 32 → 12, channel 1
+82000202 00010000           # setup PWM n2 on pin 2, duty source n1
+03E80001 32006400           #   1000 Hz, duty from input; duty 50 %, 0–100 %
+00000000 00642710           #   no frequency source; 100–10000 Hz
+```
+
+The words for the [core-config example](#core-temperature). A core temperature's setup
+word is followed by nothing; the plot is skipped:
+
+```fifo example=core-config
+C0000000                    # clean setup
+90000100                    # setup core temperature n1, type 30 → 10
 82000202 00010000           # setup PWM n2 on pin 2, duty source n1
 03E80001 32006400           #   1000 Hz, duty from input; duty 50 %, 0–100 %
 00000000 00642710           #   no frequency source; 100–10000 Hz
@@ -1052,6 +1092,13 @@ element ID and one of its outputs.
   nodes, as an action word would. After any output is set up, the next sample drives
   every ADC's outputs whatever its value, so an output set up after its ADC gets the
   ADC's value at once.
+- **Core temperature setup** (`op` 2, type `30`): adds the element to the core
+  temperature nodes; up to 16 are kept. It touches no pin.
+- **Core temperature sampling:** every 100 ms, whatever the graph, the sensor is read
+  and smoothed (see [Core temperature](#core-temperature)). A new value drives the
+  outputs wired to each core temperature node, as an action word would. After any
+  output is set up, the next sample drives them whatever the value, as for an ADC.
+  Every second the smoothed temperature is reported to core 0 (below).
 - **ADC reports:** every 100 ms, each sampled channel is reported to core 0 (below)
   if its reading has moved by 8 counts or more since the last report, or 1 s has
   passed since it.
@@ -1068,9 +1115,10 @@ element ID and one of its outputs.
   back to core 0 with an LED tag (below), 1 from `VALUE_HALF` up, else 0. A keyboard
   is passed back with a keyboard tag (below) when the value goes from below
   `VALUE_HALF` to `VALUE_HALF` or up; each keyboard remembers whether its input is on.
-- **Clean setup** (`op` 3): clears the table, the PWM states and the ADC nodes, and
-  turns off the pins it set up as GPO, PWM or ADC pins, making them inputs again. Other pins are left
-  alone: on the Pico 2 W, GPIO 23, 24, 25 and 29 drive the WiFi chip.
+- **Clean setup** (`op` 3): clears the table, the PWM states, and the ADC, GPIO input
+  and core temperature nodes (the sensor goes on being read), and turns off the pins it
+  set up as GPO, PWM, ADC or GPIO input pins, making them inputs again. Other pins are
+  left alone: on the Pico 2 W, GPIO 23, 24, 25 and 29 drive the WiFi chip.
 
 ### Pausing core 1 for flash writes
 
@@ -1115,7 +1163,8 @@ Each message is two words: a **tag**, then a **value**.
 | 4 | `FIFO_TAG_KEYBOARD` | The keyboard's element ID | Types its keystroke (see [USB keyboards](#usb-keyboards)) |
 | 5 | `FIFO_TAG_GPI` | Bits 23–16 the pin, bit 0 1 = on (`fifo_gpi_word`) | Sends text frame `gpi P S` |
 
-Uptime is first sent at tick 5 and temperature at tick 6, then each every 5 ticks.
+Uptime is first sent at tick 5, then every 5 ticks. Temperature is sent every second,
+from 1 s after core 1 starts.
 Core 0 takes every waiting message each pass of its main loop, which waits at most
 10 ms for network work.
 
@@ -1198,6 +1247,14 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 17. **The USB IDs are TinyUSB's test IDs** (vendor `CAFE`, product `4005`). They are
     fine on your own PC; a board for others needs IDs of its own.
 
+
+**Control**
+
+18. **A browser that connects doesn't see the device's control state.** The device
+    keeps its outputs as they are when a browser connects, but the UI starts its
+    controls from the config: a toggle button off, a slider at 0, a 2D slider at its
+    home. An output driven by a control shows the control's state again once the
+    control is operated.
 ---
 
 ## Keeping this document honest
