@@ -56,24 +56,25 @@
     margin-left: var(--step-0);
 }
 
-/* The add-node menu. The plus opens the four groups under it; a group opens its
+/* The add-node menu. The plus opens the groups under it; a group opens its
    nodes in a row under the groups, one group at a time:
 
      +                    row 1
      UII HWO USB          row 2: UI inputs, HW outputs, USB
-     HWI UIO              row 3: HW inputs, UI outputs
+     HWI UIO LGC          row 3: HW inputs, UI outputs, logic
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM                 e.g. UII's or HWO's
      TMP ADC GPI
      PLT LGT
      KEY
+     CMP AND OR NOT DLY
 
    Each button's --col and --row give its grid cell. Folded, a button hides behind
    the one that opens it (the plus, or its group) and slides out to its place;
    toggleAddMenu and toggleAddGroup measure --dx and --dy, its offset from there. */
 #graph > .buttons.add {
     display: grid;
-    grid-template-columns: repeat(4, max-content);
+    grid-template-columns: repeat(5, max-content);
     grid-template-rows: repeat(4, max-content);
     gap: var(--step-0);
     align-items: start;

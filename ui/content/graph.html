@@ -31,6 +31,11 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">USB</text>
             </svg>
         </div>
+        <div class="group" data-group="lgc" style="--col: 3; --row: 3" title="Logic" onclick="toggleAddGroup('lgc')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">LGC</text>
+            </svg>
+        </div>
         <!-- UI inputs, under the groups -->
         <div class="node" data-group="uii" style="--col: 1; --row: 4" title="Add a button" onclick="addNode(MSG_UI_BUTTON)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -83,6 +88,32 @@
         <div class="node" data-group="hwi" style="--col: 3; --row: 4" title="Add a GPIO input" onclick="addNode(MSG_HW_GPI)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">GPI</text>
+            </svg>
+        </div>
+        <!-- Logic, under the groups -->
+        <div class="node" data-group="lgc" style="--col: 1; --row: 4" title="Add a compare" onclick="addNode(MSG_LOGIC_COMPARE)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">CMP</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 2; --row: 4" title="Add an AND" onclick="addNode(MSG_LOGIC_AND)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">AND</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 3; --row: 4" title="Add an OR" onclick="addNode(MSG_LOGIC_OR)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">OR</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 4; --row: 4" title="Add a NOT" onclick="addNode(MSG_LOGIC_NOT)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">NOT</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 5; --row: 4" title="Add a delay" onclick="addNode(MSG_LOGIC_DELAY)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">DLY</text>
             </svg>
         </div>
         <!-- UI outputs, under the groups -->

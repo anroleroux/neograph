@@ -292,7 +292,7 @@ void test_graph_messages_belong_to_controls(void)
             bool found = false;
             messages(&controls, ex);
             while (controls.next(&controls)) {
-                if (controls.type > 0x3F || controls.id != labels.id) continue;
+                if (controls.type >= 0x80 || controls.id != labels.id) continue;
                 pwm_payload pwm;
                 if (labels.type != MSG_WIRE)
                     found = true;
@@ -315,7 +315,7 @@ static uint8_t element_type(const struct protocol_example *ex, uint16_t id)
     config_element_iterator it;
     messages(&it, ex);
     while (it.next(&it))
-        if (it.type <= 0x3F && it.id == id) return it.type;
+        if (it.type < 0x80 && it.id == id) return it.type;
     return 0;
 }
 
@@ -330,7 +330,8 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
- * driven by a button, a PWM by sliders, 2D sliders, ADCs or the core temperature. */
+ * driven by a button, a GPIO input or logic, a PWM or compare by sliders, 2D sliders, ADCs or
+ * the core temperature. */
 void test_wires_join_matching_types(void)
 {
     for (size_t i = 0; i < PROTOCOL_EXAMPLE_COUNT; i++) {
@@ -340,12 +341,22 @@ void test_wires_join_matching_types(void)
         config_element_iterator it;
         messages(&it, ex);
         while (it.next(&it)) {
-            if (it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD || it.type == MSG_UI_INDICATOR) {
-                msg_ref src = msg_ref_at(it.pay, it.flags);
-                /* A boolean source: a button or a GPIO input. */
-                if (src.id) TEST_ASSERT_TRUE_MESSAGE(element_type(ex, src.id) == MSG_UI_BUTTON
-                                                     || element_type(ex, src.id) == MSG_HW_GPI, ex->name);
-                TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, src.output, ex->name);
+            bool boolean_in = it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD
+                || it.type == MSG_UI_INDICATOR || it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR
+                || it.type == MSG_LOGIC_NOT || it.type == MSG_LOGIC_DELAY;
+            if (boolean_in) {
+                /* Boolean sources: a button, a GPIO input or logic. An AND or OR has several. */
+                uint8_t r = msg_ref_len(it.flags);
+                uint8_t refs = (it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR) ? it.len / r : 1;
+                for (uint8_t k = 0; k < refs; k++) {
+                    msg_ref src = msg_ref_at(it.pay + k * r, it.flags);
+                    uint8_t type = element_type(ex, src.id);
+                    if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI
+                                                         || (type & MSG_LOGIC_BIT), ex->name);
+                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, src.output, ex->name);
+                }
+            } else if (it.type == MSG_LOGIC_COMPARE) {
+                assert_floating_hw(ex, msg_ref_at(it.pay, it.flags));
             } else if (it.type == MSG_HW_PWM) {
                 pwm_payload pwm;
                 TEST_ASSERT_TRUE_MESSAGE(pwm_payload_read(it.pay, it.len, it.flags, &pwm), ex->name);
@@ -639,6 +650,142 @@ void test_program_limits(void)
     TEST_ASSERT_EQUAL_UINT8(PROG_NODES_MAX, p.node_count);
 }
 
+/* ── Logic ────────────────────────────────────────────────────────────── */
+
+/* PROTOCOL.md, "Logic": core temperature above 40 °C, with 1 °C of hysteresis, drives GPIO 5. */
+void test_logic_config(void)
+{
+    config_element_iterator it;
+    messages(&it, example("logic-config"));
+
+    assert_message(&it, MSG_HW_CORE, 1, 0);
+    assert_message(&it, MSG_LOGIC_COMPARE, 2, 12);
+    TEST_ASSERT_TRUE(logic_payload_valid(it.type, it.pay, it.len, it.flags));
+    TEST_ASSERT_EQUAL_UINT16(1, msg_ref_at(it.pay, it.flags).id);
+    TEST_ASSERT_EQUAL_HEX8(COMPARE_ABOVE, it.pay[3]);
+    TEST_ASSERT_EQUAL_FLOAT(40.0f, msg_float_at(it.pay + 4));
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, msg_float_at(it.pay + 8));
+    assert_message(&it, MSG_HW_GPO, 3, 4);
+    TEST_ASSERT_EQUAL_UINT16(2, msg_ref_at(it.pay, it.flags).id);
+    TEST_ASSERT_EQUAL_UINT8(5, it.pay[3]);
+    TEST_ASSERT_FALSE(it.next(&it));
+}
+
+void test_logic_payload_valid(void)
+{
+    const uint8_t F = MSG_FLAG_OUTPUT;
+    /* a compare: a source, its condition, threshold 40 and hysteresis 1 */
+    uint8_t compare[] = { 0, 1, 0, COMPARE_ABOVE, 0x42, 0x20, 0, 0, 0x3F, 0x80, 0, 0 };
+    TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_COMPARE, compare, sizeof compare, F));
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COMPARE, compare, sizeof compare - 1, F));
+    compare[3] = 2;                                                     /* no such condition */
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COMPARE, compare, sizeof compare, F));
+    compare[3] = COMPARE_BELOW;
+    compare[8] = 0xBF;                                                  /* hysteresis -1 */
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COMPARE, compare, sizeof compare, F));
+    compare[8] = 0x7F; compare[9] = 0x80;                               /* hysteresis infinite */
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COMPARE, compare, sizeof compare, F));
+    compare[8] = 0x3F; compare[4] = 0x7F; compare[5] = 0xC0;            /* threshold NaN */
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COMPARE, compare, sizeof compare, F));
+
+    /* an AND or OR: 1 to LOGIC_INPUTS_MAX sources */
+    const uint8_t refs[3 * (LOGIC_INPUTS_MAX + 1)] = { 0 };
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_AND, refs, 0, F));
+    for (uint8_t n = 1; n <= LOGIC_INPUTS_MAX; n++) TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_OR, refs, 3 * n, F));
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_AND, refs, 3 * (LOGIC_INPUTS_MAX + 1), F));
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_AND, refs, 4, F));
+    TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_NOT, refs, 3, F));
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_NOT, refs, 6, F));
+
+    /* a delay: a source, then its on and off delays, up to DELAY_MAX_MS */
+    uint8_t delay[] = { 0, 1, 0, 0x05, 0x26, 0x5C, 0x00, 0, 0, 0x13, 0x88 };   /* a day, 5 s */
+    TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_DELAY, delay, sizeof delay, F));
+    TEST_ASSERT_EQUAL_UINT32(DELAY_MAX_MS, msg_u32_at(delay + 3));
+    delay[6] = 0x01;                                                    /* a day and 1 ms */
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_DELAY, delay, sizeof delay, F));
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_HW_LED, delay, 3, F));
+}
+
+/* Logic runs after the logic it reads, whatever the config's order; a loop still runs. */
+void test_program_orders_logic(void)
+{
+    static const uint8_t cfg[] = {
+        MSG_LOGIC_NOT, MSG_FLAG_OUTPUT, 0, 3, 3, 0, 2, 0,       /* NOT n3 <- n2 */
+        MSG_LOGIC_NOT, MSG_FLAG_OUTPUT, 0, 2, 3, 0, 1, 0,       /* NOT n2 <- n1 */
+        MSG_UI_BUTTON, 0, 0, 1, 0,                              /* button n1 */
+        MSG_LOGIC_OR, MSG_FLAG_OUTPUT, 0, 4, 6, 0, 5, 0, 0, 3, 0,   /* OR n4 <- n5, n3 */
+        MSG_LOGIC_NOT, MSG_FLAG_OUTPUT, 0, 5, 3, 0, 4, 0,       /* NOT n5 <- n4: a loop */
+    };
+    static hw_program p;
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(4, p.node_count);
+    TEST_ASSERT_EQUAL_UINT16(2, p.nodes[0].id);     /* reads only the button */
+    TEST_ASSERT_EQUAL_UINT16(3, p.nodes[1].id);     /* after n2 */
+    TEST_ASSERT_EQUAL_UINT16(4, p.nodes[2].id);     /* the loop: in the config's order */
+    TEST_ASSERT_EQUAL_UINT16(5, p.nodes[3].id);
+    TEST_ASSERT_EQUAL_UINT8(2, p.nodes[2].in_count);
+}
+
+/* One logic node, its input signal s0 set to `in`, stepped by `ms`. */
+static hw_program step_p;
+static bool step(uint8_t node, float in, bool on, uint32_t *held, uint32_t ms)
+{
+    step_p.signals[0].value = in;
+    return program_logic_step(&step_p, &step_p.nodes[node], on, held, ms);
+}
+
+void test_program_logic_step(void)
+{
+    static const uint8_t cfg[] = {
+        MSG_UI_SLIDER, 0, 0, 1, 1, 0,                                       /* s0: slider n1 */
+        MSG_LOGIC_COMPARE, MSG_FLAG_OUTPUT, 0, 2, 12, 0, 1, 0, COMPARE_ABOVE,
+            0x3F, 0x00, 0, 0, 0x3D, 0xCC, 0xCC, 0xCD,                       /* above 0.5, hysteresis 0.1 */
+        MSG_LOGIC_COMPARE, MSG_FLAG_OUTPUT, 0, 3, 12, 0, 1, 0, COMPARE_BELOW,
+            0x3F, 0x00, 0, 0, 0x3D, 0xCC, 0xCC, 0xCD,                       /* below 0.5, hysteresis 0.1 */
+        MSG_LOGIC_AND, MSG_FLAG_OUTPUT, 0, 4, 6, 0, 1, 0, 0, 0, 0,          /* AND n4 <- n1, nothing */
+        MSG_LOGIC_OR, MSG_FLAG_OUTPUT, 0, 5, 3, 0, 0, 0,                    /* OR n5 <- nothing */
+        MSG_LOGIC_NOT, MSG_FLAG_OUTPUT, 0, 6, 3, 0, 1, 0,                   /* NOT n6 <- n1 */
+        MSG_LOGIC_DELAY, MSG_FLAG_OUTPUT, 0, 7, 11, 0, 1, 0,
+            0, 0, 0, 100, 0, 0, 0, 0,                                       /* on after 100 ms, off at once */
+    };
+    program_compile(cfg, sizeof cfg, &step_p);
+    TEST_ASSERT_EQUAL_UINT8(6, step_p.node_count);
+    uint32_t held = 0;
+
+    /* above 0.5: on past it, off only below 0.4 */
+    TEST_ASSERT_FALSE(step(0, 0.5f, false, &held, 10));
+    TEST_ASSERT_TRUE(step(0, 0.51f, false, &held, 10));
+    TEST_ASSERT_TRUE(step(0, 0.41f, true, &held, 10));
+    TEST_ASSERT_FALSE(step(0, 0.39f, true, &held, 10));
+    /* below 0.5: on under it, off only above 0.6 */
+    TEST_ASSERT_TRUE(step(1, 0.49f, false, &held, 10));
+    TEST_ASSERT_TRUE(step(1, 0.59f, true, &held, 10));
+    TEST_ASSERT_FALSE(step(1, 0.61f, true, &held, 10));
+    /* AND and OR read only their wired inputs; with none, off */
+    TEST_ASSERT_TRUE(step(2, 1, false, &held, 10));
+    TEST_ASSERT_FALSE(step(2, 0.49f, true, &held, 10));
+    TEST_ASSERT_FALSE(step(3, 1, false, &held, 10));
+    /* NOT */
+    TEST_ASSERT_TRUE(step(4, 0, false, &held, 10));
+    TEST_ASSERT_FALSE(step(4, 1, true, &held, 10));
+    /* delay: on once the input has been on 100 ms, off at once */
+    bool on = false;
+    for (int t = 10; t < 100; t += 10) {
+        on = step(5, 1, on, &held, 10);
+        TEST_ASSERT_FALSE(on);
+    }
+    on = step(5, 1, on, &held, 10);
+    TEST_ASSERT_TRUE(on);
+    TEST_ASSERT_EQUAL_UINT32(0, held);
+    on = step(5, 0, on, &held, 10);
+    TEST_ASSERT_FALSE(on);
+    /* a blip shorter than the on delay doesn't turn it on, and starts the count again */
+    for (int i = 0; i < 5; i++) on = step(5, 1, on, &held, 10);
+    on = step(5, 0, on, &held, 10);
+    TEST_ASSERT_FALSE(on);
+    TEST_ASSERT_EQUAL_UINT32(0, held);
+}
+
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c):
  * one per payload byte, for the element's output of the same index. */
 static void assert_action_words(const char *name)
@@ -697,6 +844,10 @@ int main(void)
     RUN_TEST(test_every_config_example_with_hardware_has_a_program);
     RUN_TEST(test_program_signals);
     RUN_TEST(test_program_limits);
+    RUN_TEST(test_logic_config);
+    RUN_TEST(test_logic_payload_valid);
+    RUN_TEST(test_program_orders_logic);
+    RUN_TEST(test_program_logic_step);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_action_words_match_command_slider_2d);

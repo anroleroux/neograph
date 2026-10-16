@@ -12,3 +12,4 @@
 {{adc-js}}:ui/content/components/adc.js
 {{gpi-js}}:ui/content/components/gpi.js
 {{keyboard-js}}:ui/content/components/keyboard.js
+{{logic-js}}:ui/content/components/logic.js

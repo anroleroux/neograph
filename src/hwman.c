@@ -295,6 +295,7 @@ typedef struct {
     float duty;                 // PWM: the duty cycle it runs at, percent
     uint16_t freq;              // PWM: the frequency its slice runs at
     uint32_t top;               // PWM: counter steps in one period
+    uint32_t held_ms;           // delay: how long its input has differed from its output
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -375,6 +376,7 @@ static float signal_value(const hw_program *p, uint8_t s) {
     return s == PROG_NO_SIGNAL ? 0 : p->signals[s].value;
 }
 
+
 // Take the program core 0 sent: the signals of UI sources (buttons, sliders)
 // keep their values from the last program, so a save doesn't move them, and
 // each node's hardware is set up.
@@ -441,6 +443,15 @@ static void scan(uint32_t count) {
 
         case MSG_HW_CORE:
             if (core_temp.sampled) p->signals[n->out].value = core_temp.value;
+            break;
+
+        case MSG_LOGIC_COMPARE:
+        case MSG_LOGIC_AND:
+        case MSG_LOGIC_OR:
+        case MSG_LOGIC_NOT:
+        case MSG_LOGIC_DELAY:
+            st->on = program_logic_step(p, n, st->on, &st->held_ms, SCAN_MS);
+            p->signals[n->out].value = st->on;
             break;
 
         case MSG_HW_LED: {

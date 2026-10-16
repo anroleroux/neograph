@@ -4,12 +4,14 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_ and KEYBOARD_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_ and DELAY_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
 
 #include <stdint.h>
+#include <string.h>
 
 /* ── Packets (UI <-> HW, one per WebSocket binary frame) ─────────────── */
 
@@ -34,11 +36,12 @@
    sources had several outputs. */
 #define MSG_FLAG_OUTPUT         0x01
 
-/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) shows
-   a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
+   a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
-/* Control element types (0x00-0x3F): bit 5 set = HW, bit 4 set = input. */
+/* Control element types (0x00-0x7F): bit 6 set = logic (below); otherwise bit 5 set =
+   HW, bit 4 set = input. */
 #define MSG_HW_BIT              0x20
 #define MSG_INPUT_BIT           0x10
 
@@ -59,6 +62,15 @@
 #define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
+
+/* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
+   boolean source itself, with one output, 0. */
+#define MSG_LOGIC_BIT           0x40
+#define MSG_LOGIC_COMPARE       0x40    /* a floating input above or below a threshold */
+#define MSG_LOGIC_AND           0x41    /* on while every input is on */
+#define MSG_LOGIC_OR            0x42    /* on while any input is on */
+#define MSG_LOGIC_NOT           0x43    /* on while its input is off */
+#define MSG_LOGIC_DELAY         0x44    /* its input, after an on delay and an off delay */
 
 /* Supporting and networking element types. */
 #define MSG_STRING              0xA0    /* a node's label, keyed by node ID */
@@ -136,6 +148,16 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 /* Core temperature (MSG_HW_CORE): on the device it drives outputs with its value from
    0 °C (0) to CORE_TEMP_FULL °C (VALUE_FULL), clamped. */
 #define CORE_TEMP_FULL          100
+
+/* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
+   (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
+   float, big endian. An AND or OR: 1 to LOGIC_INPUTS_MAX source references. A NOT: one.
+   A delay (MSG_LOGIC_DELAY): a source reference, then its on delay and its off delay,
+   each a 32-bit big-endian number of milliseconds, 0 to DELAY_MAX_MS. */
+#define COMPARE_ABOVE           0x00    /* on above the threshold; off below it less the hysteresis */
+#define COMPARE_BELOW           0x01    /* on below the threshold; off above it plus the hysteresis */
+#define LOGIC_INPUTS_MAX        4
+#define DELAY_MAX_MS            86400000    /* a day */
 
 /* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
    options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
@@ -228,6 +250,43 @@ static inline int pwm_payload_read(const uint8_t *pay, uint8_t len, uint8_t flag
     out->freq_min = f[0] << 8 | f[1];
     out->freq_max = f[2] << 8 | f[3];
     return 1;
+}
+
+/* A 32-bit big-endian number at p. */
+static inline uint32_t msg_u32_at(const uint8_t *p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+/* A 32-bit big-endian IEEE 754 float at p. */
+static inline float msg_float_at(const uint8_t *p) {
+    uint32_t u = msg_u32_at(p);
+    float f;
+    memcpy(&f, &u, sizeof f);
+    return f;
+}
+
+/* Whether a logic element's payload is one the device runs: its source references
+   (one, or for an AND or OR 1 to LOGIC_INPUTS_MAX), then a compare's condition, threshold
+   and hysteresis (finite, the hysteresis 0 or more), or a delay's two delays. */
+static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t len, uint8_t flags) {
+    uint8_t r = msg_ref_len(flags);
+    switch (type) {
+    case MSG_LOGIC_COMPARE: {
+        if (len != r + 9 || pay[r] > COMPARE_BELOW) return 0;
+        float threshold = msg_float_at(pay + r + 1), hysteresis = msg_float_at(pay + r + 5);
+        /* finite: x - x is 0 for a number, NaN for an infinity or NaN */
+        return threshold - threshold == 0 && hysteresis - hysteresis == 0 && hysteresis >= 0;
+    }
+    case MSG_LOGIC_AND:
+    case MSG_LOGIC_OR:
+        return len >= r && len <= r * LOGIC_INPUTS_MAX && len % r == 0;
+    case MSG_LOGIC_NOT:
+        return len == r;
+    case MSG_LOGIC_DELAY:
+        return len == r + 8 && msg_u32_at(pay + r) <= DELAY_MAX_MS && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
+    default:
+        return 0;
+    }
 }
 
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */

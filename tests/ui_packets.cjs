@@ -162,15 +162,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'lgc']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY', 'the groups show ' + groups.join(', '));
-    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB | ', 'clicking the open group again left ' + await menu());
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.
@@ -917,6 +917,110 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await switchState() === 'connected|', 'connecting again did not clear the message: ' + await switchState());
     await page.evaluate(() => window.__ws.close());       // the device goes away
     expect((await switchState()).startsWith('disconnected|Lost the connection to '), 'a dropped connection shows ' + await switchState());
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.close();
+
+    // ── Logic: the core temperature above 40 °C, and a switch, run a fan on the
+    // GPO through a compare, an AND and a delay; a NOT lights the LED while it is off ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // the demo graph: button n1, LED n2 ← n1, GPO n3
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a compare"]').dispatchEvent('click');       // n4
+    const compareRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
+    expect(compareRows === 'Label:|On while:|Threshold:|Hysteresis:|Command view:', 'a compare\'s settings are ' + compareRows);
+    const logic = await page.evaluate(() => {
+        const cmp = elements.n4;
+        const rejected = cmp.setThreshold('x') === false && cmp.setThreshold('1e39') === false
+            && cmp.setHysteresis('-1') === false && cmp.setCondition('over') === false;
+        addNode(MSG_HW_CORE);                       // n5
+        addNode(MSG_HW_GPI);                        // n6, GPIO 3
+        addNode(MSG_LOGIC_AND);                     // n7
+        addNode(MSG_LOGIC_DELAY);                   // n8
+        addNode(MSG_LOGIC_NOT);                     // n9
+        addNode(MSG_UI_INDICATOR);                  // n10
+        cmp.setThreshold('40');
+        cmp.setHysteresis('1');
+        cmp.shown = true;
+        const delay = elements.n8;
+        const delays = delay.setOffDelay('86401') === false && delay.setOnDelay('0.0005') === false
+            && delay.setOffDelay('5') !== false;
+        const wired = [
+            createEdge('n5', 'n4'),                 // temperature → compare
+            createEdge('n4', 'n7'),                 // logic to logic: from the first to the second
+            createEdge('n6', 'n7'),                 // the switch → AND
+            createEdge('n7', 'n8'),                 // AND → delay
+            createEdge('n8', 'n9'),                 // delay → NOT
+            createEdge('n8', 'n3'),                 // delay → GPO
+            createEdge('n9', 'n2'),                 // NOT → LED, in place of the button
+            createEdge('n4', 'n10'),                // compare → light
+        ].every(e => e !== null);
+        buildCommandInterface();
+        return {
+            rejected, delays, wired,
+            text: cmp.gElm.children[1].textContent,
+            and: elements.n7.inConns().map(c => c.start.node.name).join(),
+            led: elements.n2.inConns().map(c => c.start.node.name).join(),
+            // A wire back up the chain would close a loop: not offered, not drawn.
+            loop: !elements.n7.canTakeConn(elements.n9) && createEdge('n9', 'n7') === null
+                && createEdge('n8', 'n4') === null && createEdge('n4', 'n4') === null,
+            // A slider is floating: it drives a compare, not an AND; a compare
+            // takes no boolean source.
+            types: createEdge('n1', 'n4') === null && elements.n7.takesType(elements.n4)
+                && !elements.n4.takesType(elements.n6),
+            free: elements.n7.canTakeConn(elements.n9) === false && new uiOr(0, 300).canTakeConn(elements.n9),
+        };
+    });
+    expect(logic.rejected && logic.delays, 'logic settings out of range were accepted: ' + JSON.stringify(logic));
+    expect(logic.wired && logic.text === '> 40' && logic.and === 'n4,n6' && logic.led === 'n9',
+        'the logic was not wired: ' + JSON.stringify(logic));
+    expect(logic.loop, 'a wire that closes a loop was offered or drawn');
+    expect(logic.types, 'logic took a source of the wrong type');
+    expect(logic.free, 'a new OR does not take the NOT');
+    await page.evaluate(() => elements.n11.remove());
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const logicSaved = await sent(page);
+    const logicHex = hex(logicSaved[0]);
+    expect(logicSaved.length === 1
+        && logicHex.includes('400300040c' + '000500' + '00' + '42200000' + '3f800000')
+        && logicHex.includes('4101000706' + '000400' + '000600')
+        && logicHex.includes('440100080b' + '000700' + '00000000' + '00001388')
+        && logicHex.includes('4301000903' + '000800')
+        && logicHex.includes('2101000304' + '000800' + '01')
+        && logicHex.includes('2001000203' + '000900'),
+        'the logic was not saved as expected: ' + logicHex);
+    packets.push(...logicSaved);
+
+    // The device sends each logic element's state: its node, its tile and the light wired to it show it.
+    const compareState = () => page.evaluate(() => [elements.n4.value, elements.n10.on,
+        elements.n4.gElm.children[5].getAttribute('fill'),
+        [...document.querySelectorAll('#command .control-reading')].find(t => t.title === 'Compare')?.querySelector('.state').textContent].join());
+    await page.evaluate(() => window.__ws.receive('sig 4 0 1'));
+    expect(await compareState() === 'true,true,#4CAF50,On', 'the compare on shows ' + await compareState());
+    await page.evaluate(() => window.__ws.receive('sig 4 0 0'));
+    expect(await compareState() === 'false,false,none,Off', 'the compare off shows ' + await compareState());
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // Reconnecting restores the logic, its settings and wires; saving it again changes nothing.
+    ({ page, errors } = await open(browser));
+    await connect(page, logicSaved[0]);
+    const logicRestored = await page.evaluate(() => ({
+        compare: [elements.n4.below, elements.n4.threshold, elements.n4.hysteresis, elements.n4.shown, elements.n4.sourceID()].join(),
+        and: elements.n7.inConns().map(c => c.start.node.name).join(),
+        delay: [elements.n8.onMs, elements.n8.offMs, elements.n8.sourceID()].join(),
+        not: elements.n9.sourceID(),
+        outputs: [elements.n3.sourceID(), elements.n2.sourceID(), elements.n10.sourceID()].join(),
+        wires: gEdges.length,
+    }));
+    expect(JSON.stringify(logicRestored) === JSON.stringify({
+        compare: 'false,40,1,true,5', and: 'n4,n6', delay: '0,5000,7', not: 8, outputs: '8,9,4', wires: 8,
+    }), 'the logic was not restored: ' + JSON.stringify(logicRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const logicResaved = await sent(page);
+    expect(logicResaved.length === 1 && hex(logicResaved[0]) === logicHex, 'saving the restored logic changed the config');
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

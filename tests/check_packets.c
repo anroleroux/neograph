@@ -33,7 +33,7 @@ static const uint8_t stored_secrets[] = {
     MSG_NETWORK_FIELD, 0x00, 0x00, 0x00, 0x09, FIELD_NETWORK_PASSWORD, '1', '2', '3', '4', '5', '6', '7', '8',
 };
 
-static bool is_control(uint8_t type) { return type <= 0x3F; }
+static bool is_control(uint8_t type) { return type < 0x80; }
 
 /* The type of the control element with an ID in a config; 0 if there is none. */
 static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
@@ -50,14 +50,15 @@ static uint8_t outputs_of(uint8_t type) { return type == MSG_UI_SLIDER_2D ? 2 : 
 /* Whether a message holds source references, which the UI writes with their outputs. */
 static bool has_refs(uint8_t type) {
     return type == MSG_HW_LED || type == MSG_HW_GPO || type == MSG_HW_PWM || type == MSG_HW_KEYBOARD
-        || type == MSG_UI_GRAPH || type == MSG_UI_INDICATOR;
+        || type == MSG_UI_GRAPH || type == MSG_UI_INDICATOR || (type & MSG_LOGIC_BIT && type < 0x80);
 }
 
 /* A source reference must name an output of a source the output takes (PROTOCOL.md,
-   "Wire types"): a button or GPIO input for an LED, GPO, keyboard or light, and a slider, 2D slider,
-   ADC or the core temperature for a PWM or a plot. `types` lists the types it
+   "Wire types"): a button, GPIO input or logic for an LED, GPO, keyboard, light, AND, OR, NOT or
+   delay, and a slider, 2D slider, ADC or the core temperature for a PWM, plot or compare. `types` lists the types it
    may be, ending in 0. */
-static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, 0 };
+static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
+                                   MSG_LOGIC_NOT, MSG_LOGIC_DELAY, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, 0 };
 
 static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_t *types, const char *what) {
@@ -124,6 +125,22 @@ static void check_config(const uint8_t *p, size_t len) {
             if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
             else if (it.pay[0] >= ADC_CHANNELS) fail("ADC channel is not below ADC_CHANNELS");
             break;
+        case MSG_LOGIC_COMPARE:
+        case MSG_LOGIC_AND:
+        case MSG_LOGIC_OR:
+        case MSG_LOGIC_NOT:
+        case MSG_LOGIC_DELAY: {
+            /* program_compile runs only logic logic_payload_valid accepts */
+            if (!logic_payload_valid(it.type, it.pay, it.len, it.flags)) { fail("logic payload is not one the device runs; it would skip it"); break; }
+            uint8_t refs = (it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR) ? it.len / r : 1;
+            for (uint8_t k = 0; k < refs; k++) {
+                msg_ref src = msg_ref_at(it.pay + k * r, it.flags);
+                if (src.id == it.id) fail("logic is wired from itself");
+                if (it.type == MSG_LOGIC_COMPARE) check_source(p, len, src, FLOATING, "a compare is wired from something other than a slider, an ADC or the core temperature");
+                else check_source(p, len, src, BOOLEAN, "logic is wired from something other than a button, a GPIO input or logic");
+            }
+            break;
+        }
         /* unmarshal_controls only sets up outputs with exactly these lengths */
         case MSG_HW_LED:
             if (it.len != r) fail("LED message is not one source reference; the device would skip it");
@@ -266,8 +283,9 @@ int main(int argc, char **argv) {
         config_element_iterator_init(&it, p + 3, data_length);
         while (it.next(&it))
             if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN)) fail("a message's flags set an unknown bit");
-            else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI)
-                fail("MSG_FLAG_SHOWN on a message that is not a hardware input's");
+            else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
+                     && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_DELAY))
+                fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");
 
         switch (p[0]) {

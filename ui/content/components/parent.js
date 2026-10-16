@@ -177,6 +177,25 @@ function refAt(m, i) {
 // The length of a source reference in a message: see refAt.
 const refLen = (m) => m.flags & MSG_FLAG_OUTPUT ? 3 : 2;
 
+// Which way a wire between nodes a and b goes, as [source, output node]; null if
+// neither way can. A source (a button) only sends and an output (an LED) only
+// takes, so that decides it; logic does both, so between two logic nodes the wire
+// goes from a, the node picked first, to b.
+function wireEnds(a, b) {
+    const ab = a.outputs.length > 0 && b.inputs.length > 0;
+    const ba = b.outputs.length > 0 && a.inputs.length > 0;
+    return ab ? [a, b] : ba ? [b, a] : null;
+}
+
+// Whether a wire from `source` into `node` would close a loop: whether `node`
+// already drives `source`, through wires out of it.
+function closesLoop(source, node) {
+    const seen = new Set();
+    const reaches = (n) => n === source || (!seen.has(n) && (seen.add(n), n.outputs
+        .some(out => out.conns.some(c => reaches(c.end.node)))));
+    return reaches(node);
+}
+
 class uiComponents {
     constructor(type,x, y) {
         this.type = type;
@@ -200,29 +219,33 @@ class uiComponents {
         this.clearSettings();
     }
 
-    // Whether a wire can join this node and `other`: one must be a source (an
-    // input such as a button, which feeds any number of outputs) and the other
-    // an output with room for another wire (most take one, a PWM two), not
-    // already wired from that output of the source, that takes it (see
-    // takesType). A wire leaves a source from its active output (actNum): a 2D
-    // slider's X or Y, picked in its settings.
+    // Whether a wire can join `other`, the node picked first, and this one: one
+    // must be a source (an input such as a button, which feeds any number of
+    // outputs, or logic) and the other an output (or logic) with room for another
+    // wire (most take one, a PWM two, an AND or OR four), not already wired from
+    // that output of the source, that takes it (see takesType), and not closing
+    // a loop. A wire leaves a source from its active output (actNum): a 2D
+    // slider's X or Y, picked in its settings. See wireEnds for which way it goes.
     canTakeConn(other) {
-        if (other === this || other.actDir === this.actDir) return false;
-        const [output, source] = this.actDir === 'inputs' ? [this, other] : [other, this];
+        if (other === this) return false;
+        const ends = wireEnds(other, this);
+        if (!ends) return false;
+        const [source, output] = ends;
         const input = output.inputs[output.actNum];
         return output.takesType(source)
             && input.conns.length < input.max
-            && !input.conns.some(c => c.start.node === source && c.start.output === source.actNum);
+            && !input.conns.some(c => c.start.node === source && c.start.output === source.actNum)
+            && !closesLoop(source, output);
     }
 
     // Whether this output takes output `output` of `source` (its active one by
     // default). Their types must match: a boolean source (a button) drives a
     // boolean output (an LED or GPO), and a floating one (a slider, the core
-    // temperature) a floating output (a PWM or a plot). A source whose values
+    // temperature) a floating output (a PWM, a plot or a compare). A source whose values
     // only reach the browser (an output marked browserOnly) drives only UI
     // outputs: the device never has its values.
     takesType(source, output = source.actNum) {
-        if (source.actDir !== 'outputs') return false;
+        if (!source.outputs.length) return false;
         const out = source.outputs[output];
         return !!out && out.type === this.inputs[this.actNum].type && !(out.browserOnly && this.tc & MSG_HW_BIT);
     }

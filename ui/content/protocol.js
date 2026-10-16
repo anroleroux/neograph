@@ -22,11 +22,12 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 // sources had several outputs.
 const MSG_FLAG_OUTPUT        = 0x01;
 
-// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) shows
-// a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
+// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
+// a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
-// Control element types (0x00-0x3F): bit 5 set = HW, bit 4 set = input.
+// Control element types (0x00-0x7F): bit 6 set = logic (below); otherwise bit 5 set =
+// HW, bit 4 set = input.
 const MSG_HW_BIT             = 0x20;
 const MSG_INPUT_BIT          = 0x10;
 
@@ -47,6 +48,15 @@ const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
+
+// Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
+// boolean source itself, with one output, 0.
+const MSG_LOGIC_BIT          = 0x40;
+const MSG_LOGIC_COMPARE      = 0x40;  // a floating input above or below a threshold
+const MSG_LOGIC_AND          = 0x41;  // on while every input is on
+const MSG_LOGIC_OR           = 0x42;  // on while any input is on
+const MSG_LOGIC_NOT          = 0x43;  // on while its input is off
+const MSG_LOGIC_DELAY        = 0x44;  // its input, after an on delay and an off delay
 
 // Supporting and networking element types.
 const MSG_STRING             = 0xA0;  // a node's label, keyed by node ID
@@ -101,6 +111,12 @@ const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable
 const ADC_CHANNELS           = 3;
 const ADC_PIN_FIRST          = 26;
 const ADC_RAW_FULL           = 4095;  // a 12-bit reading at the reference voltage, 3.3 V
+
+// Logic elements: a compare's condition; the inputs of an AND or OR; a delay's longest, in ms.
+const COMPARE_ABOVE          = 0x00;  // on above the threshold; off below it less the hysteresis
+const COMPARE_BELOW          = 0x01;  // on below the threshold; off above it plus the hysteresis
+const LOGIC_INPUTS_MAX       = 4;
+const DELAY_MAX_MS           = 86400000;  // a day
 
 // Core temperature: on the device it drives outputs from 0 °C (0) to CORE_TEMP_FULL °C (1).
 const CORE_TEMP_FULL         = 100;

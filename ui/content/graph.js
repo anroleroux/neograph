@@ -31,7 +31,15 @@ const NODE_CLASSES = {
     [MSG_HW_ADC]: uiADC,
     [MSG_HW_GPI]: uiGPI,
     [MSG_HW_KEYBOARD]: uiKeyboard,
+    [MSG_LOGIC_COMPARE]: uiCompare,
+    [MSG_LOGIC_AND]: uiAnd,
+    [MSG_LOGIC_OR]: uiOr,
+    [MSG_LOGIC_NOT]: uiNot,
+    [MSG_LOGIC_DELAY]: uiDelay,
 };
+
+// Whether a control message type is a logic element's.
+const isLogic = (type) => type >= MSG_LOGIC_COMPARE && type <= MSG_LOGIC_DELAY;
 
 // Rebuild the Command view from the graph's UI inputs and outputs.
 function buildCommandInterface() {
@@ -103,8 +111,9 @@ function restoreGraph(msgs) {
     selected = null;
     selectedEdge = null;
 
-    // Nodes saved without a position are stacked: inputs left, outputs right.
-    const stacked = { inputs: 0, outputs: 0 };
+    // Nodes saved without a position are stacked: inputs left, logic in the
+    // middle, outputs right.
+    const stacked = { inputs: 0, logic: 0, outputs: 0 };
     const decoder = new TextDecoder();
     const int16 = (hi, lo) => ((hi << 8 | lo) << 16) >> 16;
 
@@ -117,8 +126,8 @@ function restoreGraph(msgs) {
             elm.x = int16(layout.pay[0], layout.pay[1]);
             elm.y = int16(layout.pay[2], layout.pay[3]);
         } else {
-            const side = elm.actDir === 'outputs' ? 'inputs' : 'outputs';
-            elm.x = side === 'inputs' ? -200 : 150;
+            const side = !elm.inputs.length ? 'inputs' : !elm.outputs.length ? 'outputs' : 'logic';
+            elm.x = { inputs: -200, logic: -25, outputs: 150 }[side];
             elm.y = -100 + 100 * stacked[side]++;
         }
         elm.gElm.setAttribute('transform', `translate(${elm.x} ${elm.y}) rotate(${elm.r || 0})`);
@@ -147,7 +156,9 @@ function restoreGraph(msgs) {
             elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
-        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
+        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
+        if (m.type === MSG_LOGIC_COMPARE && m.len === r + 9) elm.restore(m.pay, r);
+        if (m.type === MSG_LOGIC_DELAY && m.len === r + 8) elm.restore(m.pay, r);
         if (m.type === MSG_HW_GPI && m.len >= 2) {
             elm.setPin(m.pay[0]);
             elm.setPull(m.pay[1] & GPI_PULL_MASK);
@@ -172,12 +183,13 @@ function restoreGraph(msgs) {
     idCounter = Math.max(...controls.keys()) + 1;
 
     // Wires: each output's source references (a PWM's duty and frequency
-    // sources, another output's one source), shaped by their MSG_WIRE messages
-    // if there are any (otherwise drawn straight between the nodes).
+    // sources, an AND's or OR's several, another output's or logic's one source),
+    // shaped by their MSG_WIRE messages if there are any (otherwise drawn
+    // straight between the nodes).
     const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
     for (const [id, m] of controls) {
         const elm = elements['n' + id];
-        if (elm.actDir !== 'inputs') continue;
+        if (!elm.inputs.length) continue;
 
         if (m.type === MSG_HW_PWM) {
             const r = refLen(m);
@@ -194,8 +206,14 @@ function restoreGraph(msgs) {
             }
             elm.syncWires();
         } else {
-            const { node, output } = refAt(m, 0);
-            if (node) createEdge(node.name, elm.name, output);     // none if the types don't match
+            // An AND or OR has a reference for each wire in; the others one.
+            const r = refLen(m);
+            const refs = m.type === MSG_LOGIC_AND || m.type === MSG_LOGIC_OR ? Math.floor(m.len / r) : 1;
+            for (let k = 0; k < refs; k++) {
+                const { node, output } = refAt(m, k * r);
+                // None if the types don't match, or (in a config not saved by the UI) it would close a loop.
+                if (node) createEdge(node.name, elm.name, output);
+            }
         }
 
         for (const edge of elm.inConns()) {
@@ -317,17 +335,18 @@ function createNode(id,obj) {
     return g;
 }
 
-// Wire two nodes, a source and an output whose types match; null if they don't.
+// Wire two nodes, a source and an output whose types match; null if they don't,
+// or if the wire would close a loop. Between two logic nodes it goes from the
+// first to the second (see wireEnds).
 // The wire leaves the source from `sourceOutput`, by default its active output.
 function createEdge(id1, id2, sourceOutput) {
-    let el1 = elements[id1];
-    let el2 = elements[id2];
-    const output = el1.actDir === 'inputs' ? el1 : el2;
-    const source = output === el1 ? el2 : el1;
+    const ends = wireEnds(elements[id1], elements[id2]);
+    if (!ends) return null;
+    const [source, output] = ends;
     sourceOutput ??= source.actNum;
-    if (!output.takesType(source, sourceOutput)) return null;
+    if (!output.takesType(source, sourceOutput) || closesLoop(source, output)) return null;
 
-    return new gEdge(el1, el2, sourceOutput);
+    return new gEdge(source, output, sourceOutput);
 }
 
 // render nodes from elements

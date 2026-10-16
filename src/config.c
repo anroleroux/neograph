@@ -362,7 +362,7 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
         if (!keyboard_add(itr.id, itr.pay + r, itr.len - r)) printf("skipping keyboard %d: too many keyboards\n", itr.id);
     }
 
-    static char text[2048];
+    static char text[8192];     // PROG_SIGNALS_MAX and PROG_NODES_MAX lines
     program_describe(program, text, sizeof text);
     printf("program for core 1:\n%s", text);
 

@@ -7,7 +7,8 @@ class gEdge {
         this.start = {};
         this.end = {};
 
-        if (n1.actDir === "inputs") {
+        // n1 is the source, unless it only takes wires (an LED, a plot).
+        if (!n1.outputs.length) {
             [n1,n2] = [n2,n1];
         }
 

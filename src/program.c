@@ -6,6 +6,10 @@
 #include "protocol.h"
 #include "config/config_iterator.h"
 
+bool program_logic(uint8_t type) {
+    return type >= MSG_LOGIC_COMPARE && type <= MSG_LOGIC_DELAY;
+}
+
 bool program_ui_source(uint8_t type) {
     return type == MSG_UI_BUTTON || type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D;
 }
@@ -15,6 +19,62 @@ uint8_t program_signal(const hw_program *p, uint16_t id, uint8_t output) {
         if (p->signals[i].id == id && p->signals[i].output == output) return i;
     }
     return PROG_NO_SIGNAL;
+}
+
+static float signal_value(const hw_program *p, uint8_t s) {
+    return s == PROG_NO_SIGNAL ? 0 : p->signals[s].value;
+}
+
+// Whether a boolean signal is on: from 0.5 up, as an LED or GPO. One wired to
+// nothing is off.
+static bool signal_on(const hw_program *p, uint8_t s) {
+    return signal_value(p, s) >= 0.5f;
+}
+
+// A compare switches at its threshold, and back only past it by its hysteresis,
+// so a noisy input near the threshold doesn't flicker it. An AND or OR reads
+// only its wired inputs: with none, it is off. A delay follows its input once
+// the input has held its new state for the on or off delay.
+bool program_logic_step(const hw_program *p, const prog_node *n, bool on, uint32_t *held_ms, uint32_t dt_ms) {
+    switch (n->type) {
+    case MSG_LOGIC_COMPARE: {
+        float in = signal_value(p, n->in[0]);
+        if (n->options == COMPARE_BELOW) return on ? in <= n->threshold + n->hysteresis : in < n->threshold;
+        return on ? in >= n->threshold - n->hysteresis : in > n->threshold;
+    }
+
+    case MSG_LOGIC_AND:
+    case MSG_LOGIC_OR: {
+        bool any = false, all = true;
+        uint8_t wired = 0;
+        for (uint8_t i = 0; i < n->in_count; i++) {
+            if (n->in[i] == PROG_NO_SIGNAL) continue;
+            wired++;
+            bool in = signal_on(p, n->in[i]);
+            any |= in;
+            all &= in;
+        }
+        return wired && (n->type == MSG_LOGIC_AND ? all : any);
+    }
+
+    case MSG_LOGIC_NOT:
+        return !signal_on(p, n->in[0]);
+
+    case MSG_LOGIC_DELAY: {
+        bool in = signal_on(p, n->in[0]);
+        if (in == on) {
+            *held_ms = 0;
+            return on;
+        }
+        *held_ms += dt_ms;
+        if (*held_ms < (in ? n->on_ms : n->off_ms)) return on;
+        *held_ms = 0;
+        return in;
+    }
+
+    default:
+        return false;
+    }
 }
 
 // The signal of an output of a source, added if it is new, with its starting
@@ -33,8 +93,8 @@ static uint8_t add_signal(hw_program *p, uint16_t id, uint8_t output, uint8_t ty
 static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
     if (p->node_count == PROG_NODES_MAX) return NULL;
     prog_node *n = &p->nodes[p->node_count++];
-    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL,
-                      .in = { PROG_NO_SIGNAL, PROG_NO_SIGNAL }, .in_full = { 1, 1 } };
+    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL, .in_full = { 1, 1 } };
+    memset(n->in, PROG_NO_SIGNAL, sizeof n->in);
     return n;
 }
 
@@ -52,6 +112,33 @@ static float signal_full(const hw_program *p, uint8_t s) {
 
 static uint8_t ref_signal(const hw_program *p, msg_ref ref) {
     return ref.id ? program_signal(p, ref.id, ref.output) : PROG_NO_SIGNAL;
+}
+
+// Whether node n reads a signal that a logic node in nodes[from, to) writes.
+static bool reads_logic(const hw_program *p, const prog_node *n, uint8_t from, uint8_t to) {
+    for (uint8_t i = 0; i < n->in_count; i++) {
+        for (uint8_t j = from; j < to; j++) {
+            if (n->in[i] != PROG_NO_SIGNAL && n->in[i] == p->nodes[j].out) return true;
+        }
+    }
+    return false;
+}
+
+// Put the logic nodes, nodes[first, node_count), in the order core 1 runs them:
+// each after the logic it reads, so a scan carries a change through a chain of
+// them. Otherwise they keep the config's order. In a loop, which the UI doesn't
+// draw, the first of its nodes left comes first, and reads the others' signals
+// as the last scan left them.
+static void order_logic(hw_program *p, uint8_t first) {
+    for (uint8_t placed = first; placed < p->node_count; placed++) {
+        uint8_t pick = placed;
+        for (uint8_t i = placed; i < p->node_count; i++) {
+            if (!reads_logic(p, &p->nodes[i], placed, p->node_count)) { pick = i; break; }
+        }
+        prog_node n = p->nodes[pick];
+        memmove(&p->nodes[placed + 1], &p->nodes[placed], (pick - placed) * sizeof n);
+        p->nodes[placed] = n;
+    }
 }
 
 void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
@@ -106,9 +193,39 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
 
         default:
+            // A logic element's signal, for the elements that read it; its node
+            // comes after the inputs.
+            if (program_logic(itr.type) && logic_payload_valid(itr.type, itr.pay, itr.len, itr.flags))
+                add_signal(p, itr.id, 0, itr.type, 0);
             break;
         }
     }
+
+    // The logic, after the inputs: a node for each logic element whose signal
+    // the program has, then in the order it runs.
+    uint8_t first_logic = p->node_count;
+    itr.reset(&itr);
+    while (itr.next(&itr)) {
+        if (!program_logic(itr.type) || !logic_payload_valid(itr.type, itr.pay, itr.len, itr.flags)) continue;
+        uint8_t s = program_signal(p, itr.id, 0);
+        if (s == PROG_NO_SIGNAL || p->signals[s].type != itr.type) continue;
+        prog_node *n = add_node(p, itr.type, itr.id);
+        if (!n) break;
+        n->out = s;
+
+        uint8_t r = msg_ref_len(itr.flags);
+        n->in_count = (itr.type == MSG_LOGIC_AND || itr.type == MSG_LOGIC_OR) ? itr.len / r : 1;
+        for (uint8_t i = 0; i < n->in_count; i++) n->in[i] = ref_signal(p, msg_ref_at(itr.pay + i * r, itr.flags));
+        if (itr.type == MSG_LOGIC_COMPARE) {
+            n->options = itr.pay[r];
+            n->threshold = msg_float_at(itr.pay + r + 1);
+            n->hysteresis = msg_float_at(itr.pay + r + 5);
+        } else if (itr.type == MSG_LOGIC_DELAY) {
+            n->on_ms = msg_u32_at(itr.pay + r);
+            n->off_ms = msg_u32_at(itr.pay + r + 4);
+        }
+    }
+    order_logic(p, first_logic);
 
     // The outputs, after every signal they may read.
     itr.reset(&itr);
@@ -118,12 +235,16 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
         switch (itr.type) {
         case MSG_HW_LED:
             if (itr.len != r) break;
-            if ((n = add_node(p, itr.type, itr.id))) n->in[0] = ref_signal(p, msg_ref_at(itr.pay, itr.flags));
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->in_count = 1;
+                n->in[0] = ref_signal(p, msg_ref_at(itr.pay, itr.flags));
+            }
             break;
 
         case MSG_HW_GPO:
             if (itr.len != r + 1) break;
             if ((n = add_node(p, itr.type, itr.id))) {
+                n->in_count = 1;
                 n->in[0] = ref_signal(p, msg_ref_at(itr.pay, itr.flags));
                 n->pin = itr.pay[r];
             }
@@ -132,7 +253,10 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
         case MSG_HW_KEYBOARD:
             // Core 0 keeps the keystroke; core 1 says when its input goes on.
             if (!keyboard_payload_valid(itr.pay, itr.len, itr.flags)) break;
-            if ((n = add_node(p, itr.type, itr.id))) n->in[0] = ref_signal(p, msg_ref_at(itr.pay, itr.flags));
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->in_count = 1;
+                n->in[0] = ref_signal(p, msg_ref_at(itr.pay, itr.flags));
+            }
             break;
 
         case MSG_HW_PWM: {
@@ -147,6 +271,7 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             n->freq = pwm.freq;
             n->freq_min = pwm.freq_min;
             n->freq_max = pwm.freq_max;
+            n->in_count = 2;
             n->in[0] = ref_signal(p, pwm.duty_source);
             n->in[1] = ref_signal(p, pwm.freq_source);
             for (int i = 0; i < 2; i++) n->in_full[i] = signal_full(p, n->in[i]);
@@ -169,6 +294,11 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_CORE: return "core";
     case MSG_HW_GPI: return "gpi";
     case MSG_HW_ADC: return "adc";
+    case MSG_LOGIC_COMPARE: return "compare";
+    case MSG_LOGIC_AND: return "and";
+    case MSG_LOGIC_OR: return "or";
+    case MSG_LOGIC_NOT: return "not";
+    case MSG_LOGIC_DELAY: return "delay";
     default: return "?";
     }
 }
@@ -208,6 +338,27 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         case MSG_HW_CORE: put(&t, "CORE n%u -> ", n->id); put_signal(&t, n->out); break;
         case MSG_HW_ADC: put(&t, "ADC n%u channel %u -> ", n->id, n->pin); put_signal(&t, n->out); break;
         case MSG_HW_GPI: put(&t, "GPI n%u pin %u options %02X -> ", n->id, n->pin, n->options); put_signal(&t, n->out); break;
+        case MSG_LOGIC_COMPARE:
+            put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
+                (double)n->threshold, (double)n->hysteresis);
+            put_signal(&t, n->in[0]);
+            put(&t, " -> ");
+            put_signal(&t, n->out);
+            break;
+        case MSG_LOGIC_AND:
+        case MSG_LOGIC_OR:
+        case MSG_LOGIC_NOT:
+            put(&t, "%s n%u <-", n->type == MSG_LOGIC_AND ? "AND" : n->type == MSG_LOGIC_OR ? "OR" : "NOT", n->id);
+            for (uint8_t k = 0; k < n->in_count; k++) { put(&t, " "); put_signal(&t, n->in[k]); }
+            put(&t, " -> ");
+            put_signal(&t, n->out);
+            break;
+        case MSG_LOGIC_DELAY:
+            put(&t, "DELAY n%u on %lu off %lu <- ", n->id, (unsigned long)n->on_ms, (unsigned long)n->off_ms);
+            put_signal(&t, n->in[0]);
+            put(&t, " -> ");
+            put_signal(&t, n->out);
+            break;
         case MSG_HW_LED: put(&t, "LED n%u <- ", n->id); put_signal(&t, n->in[0]); break;
         case MSG_HW_GPO: put(&t, "GPO n%u pin %u <- ", n->id, n->pin); put_signal(&t, n->in[0]); break;
         case MSG_HW_KEYBOARD: put(&t, "KEYBOARD n%u <- ", n->id); put_signal(&t, n->in[0]); break;
