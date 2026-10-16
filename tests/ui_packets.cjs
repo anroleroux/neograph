@@ -980,6 +980,23 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(logic.free, 'a new OR does not take the NOT');
     await page.evaluate(() => elements.n11.remove());
 
+    // Not saved yet, so the device doesn't run it: the browser does, from the
+    // values its sources have in the browser. A dashed dot marks it.
+    const chain = () => page.evaluate(() => [elements.n4, elements.n7, elements.n8, elements.n9]
+        .map(e => e.value ? 1 : 0).join('') + ',' + elements.n10.on + ',' + elements.n4.gElm.children[5].getAttribute('stroke-dasharray'));
+    expect(await chain() === '0001,false,2 2', 'with no readings the logic shows ' + await chain());
+    await page.evaluate(() => window.__ws.receive('sig 5 0 45'));         // the core temperature, 45 °C
+    expect(await chain() === '1001,true,2 2', 'at 45 °C the logic shows ' + await chain());
+    await page.evaluate(() => window.__ws.receive('sig 6 0 1'));          // the switch on
+    expect(await chain() === '1110,true,2 2', 'with the switch on the logic shows ' + await chain());
+    await page.evaluate(() => window.__ws.receive('sig 5 0 39.5'));       // within the hysteresis
+    expect(await chain() === '1110,true,2 2', 'at 39.5 °C the logic shows ' + await chain());
+    await page.evaluate(() => { elements.n8.setOffDelay('0.2'); window.__ws.receive('sig 5 0 38.9'); });
+    expect(await chain() === '0010,false,2 2', 'below 39 °C the delay did not hold on: ' + await chain());
+    await page.waitForTimeout(300);
+    expect(await chain() === '0001,false,2 2', 'the off delay did not end: ' + await chain());
+    await page.evaluate(() => elements.n8.setOffDelay('5'));
+
     await page.locator('#graph .write svg').dispatchEvent('click');
     const logicSaved = await sent(page);
     const logicHex = hex(logicSaved[0]);
@@ -1001,6 +1018,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await compareState() === 'true,true,#4CAF50,On', 'the compare on shows ' + await compareState());
     await page.evaluate(() => window.__ws.receive('sig 4 0 0'));
     expect(await compareState() === 'false,false,none,Off', 'the compare off shows ' + await compareState());
+    // While the device reports it, its state wins; once it goes quiet, the browser's.
+    await page.evaluate(() => window.__ws.receive('sig 5 0 45'));
+    expect(await compareState() === 'false,false,none,Off', 'the browser overrode the device: ' + await compareState());
+    await page.waitForTimeout(2700);
+    expect(await compareState() === 'true,true,#4CAF50,On', 'after the device went quiet the compare shows ' + await compareState());
+    expect(await page.evaluate(() => elements.n4.gElm.children[5].getAttribute('stroke-dasharray')) === '2 2',
+        'the browser\'s state is not marked');
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
 

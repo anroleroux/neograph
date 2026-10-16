@@ -1,8 +1,17 @@
+// How long the device's state of a logic node holds after its last report: the
+// device reports each one at least every second (PROTOCOL.md, "Telemetry text frames").
+const LOGIC_DEVICE_FRESH_MS = 2500;
+
 // Logic: nodes the device runs, every scan, without the browser (see PROTOCOL.md,
 // "Logic"). Each reads one or more sources and is a boolean source itself, so it
-// is both: wires come into it, and leave it for outputs or other logic. Its
-// state reaches the browser as telemetry, for its node, its tile and the lights
-// wired to it; the browser doesn't run it.
+// is both: wires come into it, and leave it for outputs or other logic.
+//
+// The device first, the browser as a fallback. While the device reports a
+// node's state (its `sig` telemetry), the node shows that. Otherwise (no device,
+// a node not saved yet, a device that went quiet) the browser runs the same
+// logic on the values its sources have in the browser, so a graph can be tried
+// out without hardware. Either way the node hands its state on to the nodes
+// wired to it: lights, and other logic.
 class uiLogic extends uiComponents {
     constructor(type, tc, text, label, input, x = 0, y = 0) {
         super(type, x, y);
@@ -17,8 +26,11 @@ class uiLogic extends uiComponents {
         this.actDir = "both";
         this.actNum = 0;
 
-        this.value = null;      // true or false; null before the device sends it
-        this.shown = false;     // a tile in the Command view
+        this.value = null;          // the state shown: true or false; null before there is one
+        this.browserValue = null;   // the state the browser works out
+        this.deviceValue = null;    // the state the device last reported
+        this.deviceAt = 0;          // when, by performance.now(); 0 never
+        this.shown = false;         // a tile in the Command view
 
         this.buildGraphElement();
     }
@@ -33,7 +45,8 @@ class uiLogic extends uiComponents {
             <text x="0" y="36" font-size="10" text-anchor="middle" fill="#BFCDE7"></text>
             <rect x="-60" y="-40" width="120" height="80" rx="10" fill="none" stroke="#BFCDE7" stroke-width="0.8" style="display:none"/>
             <text x="0" y="47" font-size="8" text-anchor="middle" fill="#BFCDE7" opacity="0.6">${this.name}</text>
-            <circle cx="24" cy="0" r="4" fill="none" stroke="#BFCDE7" stroke-width="1.5" opacity="0.6" />
+            <circle cx="24" cy="0" r="4" fill="none" stroke="#BFCDE7" stroke-width="1.5" opacity="0.6" stroke-dasharray="2 2" />
+            <title>Run in the browser</title>
         `
         g.children[1].textContent = this.text;
         g.children[2].textContent = this.label;
@@ -55,19 +68,70 @@ class uiLogic extends uiComponents {
         return this.value == null ? null : Number(this.value);
     }
 
-    // Its signal from the device (PROTOCOL.md, "Telemetry text frames"): 1 on, 0 off.
-    signal(output, value) { this.update(value >= 0.5); }
-
-    // A new state, or null for none: show it, and hand it on to the wired nodes.
-    update(on) {
-        this.value = on;
-        this.gElmState.setAttribute('fill', on ? '#4CAF50' : 'none');
-        this.emit(this.outputValue(0));
-        if (this.tileState?.isConnected) this.tileState.textContent = this.reading();
+    // Whether the device has reported this node's state lately.
+    fromDevice() {
+        return this.deviceAt > 0 && performance.now() - this.deviceAt < LOGIC_DEVICE_FRESH_MS;
     }
+
+    // Its signal from the device (PROTOCOL.md, "Telemetry text frames"): 1 on, 0
+    // off. It is shown while fresh; once stale, the browser's state is.
+    signal(output, value) {
+        this.deviceValue = value >= 0.5;
+        this.deviceAt = performance.now();
+        clearTimeout(this.staleTimer);
+        this.staleTimer = setTimeout(() => this.show(), LOGIC_DEVICE_FRESH_MS + 50);
+        this.show();
+    }
+
+    // The value of the source wired into this node's k-th wire, as a number; a
+    // source with no value yet, or no wire, reads 0, as on the device.
+    inputValue(k = 0) {
+        const conn = this.inConns()[k];
+        const v = conn ? conn.start.node.outputValue(conn.start.output) : null;
+        return v == null || !Number.isFinite(Number(v)) ? 0 : Number(v);
+    }
+
+    // A boolean input is on from 0.5, as on the device.
+    static isOn(v) { return v >= 0.5; }
+
+    // The browser's state of this node from its inputs now (see each kind).
+    compute() { return false; }
+
+    // Work out the browser's state again, and show it if it is the one shown.
+    evaluate() {
+        this.browserValue = this.compute();
+        this.show();
+    }
+
+    // Show the device's state while it is fresh, else the browser's, and hand a
+    // change on to the wired nodes. A dashed dot marks the browser's.
+    show() {
+        const device = this.fromDevice();
+        const on = device ? this.deviceValue : this.browserValue;
+        this.gElmState.setAttribute('fill', on ? '#4CAF50' : 'none');
+        this.gElmState.setAttribute('stroke-dasharray', device ? 'none' : '2 2');
+        this.gElm.querySelector('title').textContent = device ? 'Run on the device' : 'Run in the browser';
+        if (this.tileState?.isConnected) this.tileState.textContent = on == null ? '–' : on ? 'On' : 'Off';
+        if (on === this.value) return;
+        this.value = on;
+        this.emit(this.outputValue(0));
+    }
+
+    // A source wired into it has a new value; a wire came in or went.
+    receive(value) { this.evaluate(); }
+    addEdge(e) {
+        super.addEdge(e);
+        if (e.end.node === this) this.evaluate();
+    }
+    edgeRemoved(e) { this.evaluate(); }
 
     reading() {
         return this.value == null ? '–' : this.value ? 'On' : 'Off';
+    }
+
+    remove() {
+        clearTimeout(this.staleTimer);
+        super.remove();
     }
 
     createSettings() {
@@ -128,6 +192,14 @@ class uiCompare extends uiLogic {
         this.threshold = 0.5;
         this.hysteresis = 0;
         this.showCondition();
+        this.evaluate();
+    }
+
+    // On past the threshold, and off only back past it by the hysteresis.
+    compute() {
+        const v = this.inputValue(0), on = this.browserValue === true;
+        if (this.below) return on ? v <= this.threshold + this.hysteresis : v < this.threshold;
+        return on ? v >= this.threshold - this.hysteresis : v > this.threshold;
     }
 
     showCondition() {
@@ -138,6 +210,7 @@ class uiCompare extends uiLogic {
         if (condition !== 'above' && condition !== 'below') return false;
         this.below = condition === 'below';
         this.showCondition();
+        this.evaluate();
     }
 
     // A finite number, as a 32-bit float; null if it isn't one.
@@ -153,12 +226,14 @@ class uiCompare extends uiLogic {
         if (v === null) return false;
         this.threshold = v;
         this.showCondition();
+        this.evaluate();
     }
 
     setHysteresis(v) {
         v = uiCompare.parse(v);
         if (v === null || v < 0) return false;
         this.hysteresis = v;
+        this.evaluate();
     }
 
     // The unit of the source wired in, such as °C, for the settings' labels.
@@ -196,6 +271,13 @@ class uiGate extends uiLogic {
     constructor(and, x = 0, y = 0) {
         super(and ? "and" : "or", and ? MSG_LOGIC_AND : MSG_LOGIC_OR, and ? "AND" : "OR",
             and ? "AND" : "OR", { type: "bool", max: LOGIC_INPUTS_MAX }, x, y);
+        this.evaluate();
+    }
+
+    // All (AND) or any (OR) of the wired inputs on; with none, off.
+    compute() {
+        const ins = this.inConns().map((c, k) => uiLogic.isOn(this.inputValue(k)));
+        return ins.length > 0 && (this.tc === MSG_LOGIC_AND ? ins.every(Boolean) : ins.some(Boolean));
     }
 
     // A source reference for each wire in; one to nothing if there are none.
@@ -211,7 +293,10 @@ class uiOr extends uiGate { constructor(x = 0, y = 0) { super(false, x, y); } }
 class uiNot extends uiLogic {
     constructor(x = 0, y = 0) {
         super("not", MSG_LOGIC_NOT, "NOT", "NOT", { type: "bool", max: 1 }, x, y);
+        this.evaluate();
     }
+
+    compute() { return !uiLogic.isOn(this.inputValue(0)); }
 }
 
 // A delay: its boolean source, once the source has been on for the on delay,
@@ -221,6 +306,33 @@ class uiDelay extends uiLogic {
         super("delay", MSG_LOGIC_DELAY, "DLY", "Delay", { type: "bool", max: 1 }, x, y);
         this.onMs = 0;
         this.offMs = 0;
+        this.pending = null;        // the state it is waiting to take, or null
+        this.evaluate();
+    }
+
+    // Its state now; when its input differs, a timer takes the input's state
+    // after the on or off delay, unless the input goes back first.
+    compute() {
+        const input = uiLogic.isOn(this.inputValue(0)), now = this.browserValue === true;
+        if (input === now) {
+            clearTimeout(this.timer);
+            this.pending = null;
+            return now;
+        }
+        if (this.pending === input) return now;        // already waiting for it
+        clearTimeout(this.timer);
+        const ms = input ? this.onMs : this.offMs;
+        if (ms === 0) {
+            this.pending = null;
+            return input;
+        }
+        this.pending = input;
+        this.timer = setTimeout(() => {
+            this.pending = null;
+            this.browserValue = input;
+            this.show();
+        }, ms);
+        return now;
     }
 
     // Seconds, 0 to a day, to the millisecond; null if not.
@@ -233,6 +345,12 @@ class uiDelay extends uiLogic {
 
     setOnDelay(s) { const ms = uiDelay.parse(s); if (ms === null) return false; this.onMs = ms; }
     setOffDelay(s) { const ms = uiDelay.parse(s); if (ms === null) return false; this.offMs = ms; }
+
+    // Taken out of the graph: its timer with it.
+    remove() {
+        clearTimeout(this.timer);
+        super.remove();
+    }
 
     logicSettings(settings) {
         settings.appendChild(editableSetting('On delay (s)', () => String(this.onMs / 1000),

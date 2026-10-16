@@ -782,10 +782,18 @@ other logic can be wired to it.
   goes through a chain of them in one scan; see [The program](#the-program).
 - **When a program starts** (at boot and on each save) logic starts off, delays with
   nothing counted, and takes its state at the first scan.
-- **In the browser.** Each logic element's state reaches the browser as a `sig`
+- **In the browser: the device first, the browser as a fallback.** Each logic
+  element's state reaches the browser as a `sig`
   [telemetry text frame](#telemetry-text-frames), 1 on and 0 off: its node shows it,
   a light wired to it shows it, and so can its tile (see
-  [Hardware input tiles](#hardware-input-tiles)). The browser doesn't run logic.
+  [Hardware input tiles](#hardware-input-tiles)). Without a report from the device
+  in the last 2.5 s (`LOGIC_DEVICE_FRESH_MS`), as with no device, a node not saved
+  yet, or a device gone quiet, the browser runs the same logic itself, on the values
+  its sources have in the browser: a button's, a slider's, a hardware input's last
+  reading, other logic's. A dashed dot on the node marks the browser's state, a solid
+  one the device's. So a graph can be tried out without hardware, and in the
+  [offline demo](README.md). The browser drives no hardware: only the device drives
+  the LED, GPOs, PWMs and keyboards.
 - **Wiring.** In the graph a logic node is both a source and an output: a wire into it
   comes from a source, and a wire from it goes to an output. Between two logic nodes,
   a wire goes from the selected node to the one clicked. The UI doesn't draw a wire
