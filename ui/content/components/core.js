@@ -81,7 +81,7 @@ class uiCore extends uiComponents {
 
 // Telemetry from the device, a text frame (see PROTOCOL.md, "Telemetry text
 // frames"): "sig I O V" is the value V of output O of element nI, a signal of the
-// program core 1 runs. A hardware input (core temperature, ADC, GPIO input)
+// program core 1 runs. A hardware input (core temperature, ADC, GPIO input, LM35)
 // passes its value on to the nodes wired to it; other nodes ignore theirs.
 function receiveTelemetry(text) {
     const [name, ...values] = text.split(' ');

@@ -86,6 +86,36 @@ static void adc_sample_channels(void) {
     }
 }
 
+// ── LM35 temperature sensors ──
+// Each channel with an LM35 node is read every TEMP_SAMPLE_SCANS scans and
+// smoothed as the core temperature is: LM35_AVERAGE reads, averaged, then each
+// sample moves it 1/TEMP_FILTER of the way. A count is ~0.08 °C, so its signals
+// change when it has moved TEMP_DEADBAND °C from their value.
+#define LM35_AVERAGE        64
+
+static struct {
+    bool on;
+    bool sampled;
+    float celsius;              // smoothed
+    float value;                // the signals' value
+} lm35_inputs[ADC_CHANNELS];
+
+static void lm35_sample_channels(void) {
+    for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) {
+        if (!lm35_inputs[ch].on) continue;
+        adc_select_input(ch);
+        uint32_t sum = 0;
+        for (int i = 0; i < LM35_AVERAGE; i++) sum += adc_read();
+        float sample = sum * PROG_ADC_VOLTS * 1000 / (LM35_AVERAGE * (float)ADC_RAW_FULL * LM35_MV_PER_C);
+
+        if (!lm35_inputs[ch].sampled) lm35_inputs[ch].celsius = lm35_inputs[ch].value = sample;
+        else lm35_inputs[ch].celsius += (sample - lm35_inputs[ch].celsius) / TEMP_FILTER;
+        lm35_inputs[ch].sampled = true;
+        if (fabsf(lm35_inputs[ch].celsius - lm35_inputs[ch].value) >= TEMP_DEADBAND)
+            lm35_inputs[ch].value = lm35_inputs[ch].celsius;
+    }
+}
+
 // ── GPIO inputs ──
 // Each GPIO input's pin is read every scan. A new state, held for GPI_DEBOUNCE
 // reads in a row so a bouncing switch changes it once, becomes its signal: 1 on,
@@ -325,6 +355,7 @@ static void release_pins(void) {
     }
     used_pins = 0;
     memset(adc_inputs, 0, sizeof adc_inputs);
+    memset(lm35_inputs, 0, sizeof lm35_inputs);
 }
 
 // Set up a node's hardware. Inputs come before outputs in a program, so an
@@ -340,6 +371,13 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
         }
         return true;
     }
+
+    case MSG_HW_LM35:
+        // One sensor to a channel: its readings are smoothed for it alone.
+        if (!claim_pin(ADC_PIN_FIRST + n->pin)) return false;
+        adc_gpio_init(ADC_PIN_FIRST + n->pin);
+        lm35_inputs[n->pin].on = true;
+        return true;
 
     case MSG_HW_GPI:
         if (!claim_pin(n->pin)) return false;
@@ -403,7 +441,7 @@ static void take_program(void) {
         const prog_node *n = &p->nodes[i];
         states[i].ok = setup_node(p, n, &states[i]);
         if (!states[i].ok) printf("hw man skipping type %02X on ID %u: GPIO %u is not usable or in use\n",
-                                  n->type, n->id, n->type == MSG_HW_ADC ? ADC_PIN_FIRST + n->pin : n->pin);
+                                  n->type, n->id, n->type == MSG_HW_ADC || n->type == MSG_HW_LM35 ? ADC_PIN_FIRST + n->pin : n->pin);
         // A keyboard types when its input goes on, not because it was on when set up.
         if (n->type == MSG_HW_KEYBOARD) states[i].on = signal_value(p, n->in[0]) >= 0.5f;
         if (program_logic(n->type)) program_logic_start(p, n, &states[i].logic);
@@ -417,7 +455,10 @@ static void scan(uint32_t count) {
     hw_program *p = &programs[running];
 
     adc_sample_channels();
-    if (count % TEMP_SAMPLE_SCANS == 0) core_temp_sample();
+    if (count % TEMP_SAMPLE_SCANS == 0) {
+        core_temp_sample();
+        lm35_sample_channels();
+    }
 
     for (uint8_t i = 0; i < p->node_count; i++) {
         const prog_node *n = &p->nodes[i];
@@ -449,6 +490,10 @@ static void scan(uint32_t count) {
 
         case MSG_HW_CORE:
             if (core_temp.sampled) p->signals[n->out].value = core_temp.value;
+            break;
+
+        case MSG_HW_LM35:
+            if (lm35_inputs[n->pin].sampled) p->signals[n->out].value = lm35_inputs[n->pin].value;
             break;
 
 

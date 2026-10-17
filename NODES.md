@@ -13,7 +13,7 @@ the TMP button in the HWI group.
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM |
-| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
+| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, LM35 |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
 | **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, DLY, SCL, MIN, MAX, PLS, BLK, TGL, LCH |
@@ -214,6 +214,30 @@ Drive the pin with 3.3 V at most. Not simulated in the offline demo.
 | Pull | None, Up, Down | Down | The pin's internal pull resistor. Down suits a switch to 3.3 V; Up suits a switch to ground. |
 | On when | High, Low | High | Whether it is on while the pin is high or while it is low. Use Low with Pull Up and a switch to ground. |
 | Command view | Show, Hide | Hide | A tile showing On or Off. |
+
+### LM35 temperature sensor: `HWI-LM35`
+
+| | |
+|---|---|
+| Category | Hardware input |
+| Output | Number, °C |
+| Default label | LM35 |
+
+An LM35 (such as an LM35DZ) temperature sensor on an analog input pin. It puts out
+10 mV per °C, which the device turns into °C. It is read every 100 ms and smoothed
+over about a second, and is accurate to about ±1 °C. A PWM it drives takes 0 to
+100 °C, the LM35DZ's range, as its input's 0 to full. The offline demo simulates a
+room temperature drifting around 22 °C.
+
+Wiring: the LM35's **+Vs** to **VBUS** (pin 40, 5 V from USB) or **VSYS** (pin 39) —
+it needs 4 V or more, so not the 3.3 V pin — **GND** to a ground pin, and **Vout** to
+the channel's GPIO. Its output is under 1.5 V, safe for the pin. Wired this way it
+reads from about 2 °C up.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Channel | ADC0 · GPIO 26, ADC1 · GPIO 27, ADC2 · GPIO 28 (those whose pin no other node uses) | ADC0, or the first free | The pin its Vout is wired to. One LM35 node to a channel. |
+| Command view | Show, Hide | Hide | A tile with the temperature. |
 
 ---
 
@@ -502,6 +526,6 @@ until the button is pressed.
 | From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH |
 |---|---|---|---|---|
 | BTN, GPI | ✓ | | | ✓ |
-| SLD, XY (X or Y), ADC, TMP | | ✓ | ✓ | |
+| SLD, XY (X or Y), ADC, TMP, LM35 | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH | ✓ | | | ✓ |
 | SCL, MIN, MAX | | ✓ | ✓ | |

@@ -13,9 +13,10 @@
  *
  *   - signals: the value of each output of each source (a button, a slider's
  *     value, a 2D slider's X and Y, an ADC, a GPIO input, the core temperature,
+ *     an LM35,
  *     a logic element), as a float in the source's own unit;
  *   - nodes: the elements core 1 runs, in the order it runs them: the hardware
- *     inputs (ADC, GPIO input, core temperature), which write a signal; then the
+ *     inputs (ADC, GPIO input, core temperature, LM35), which write a signal; then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
  *     latch), which reads signals and writes its own, each after the logic it
  *     reads; then the outputs (LED, GPO, PWM, USB keyboard), which read one or two.
@@ -40,7 +41,7 @@ typedef struct {
 typedef struct {
     uint8_t type;           // MSG_HW_ or MSG_LOGIC_
     uint16_t id;
-    uint8_t pin;            // GPO, PWM, GPIO input: its GPIO; ADC: its channel
+    uint8_t pin;            // GPO, PWM, GPIO input: its GPIO; ADC, LM35: its channel
     uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options
     uint8_t out;            // an input or logic: the signal it writes
     uint8_t in_count;       // the signals it reads

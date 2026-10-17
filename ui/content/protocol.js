@@ -22,7 +22,7 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 // sources had several outputs.
 const MSG_FLAG_OUTPUT        = 0x01;
 
-// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
+// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, LM35) or
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
@@ -48,6 +48,7 @@ const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
+const MSG_HW_LM35            = 0x33;  // an LM35 temperature sensor on an analog input pin
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -129,6 +130,12 @@ const SCALE_CLAMP            = 0x01;  // options bit 0: keep the output within i
 
 // Core temperature: on the device it drives outputs from 0 °C (0) to CORE_TEMP_FULL °C (1).
 const CORE_TEMP_FULL         = 100;
+
+// LM35 temperature sensor (MSG_HW_LM35) payload byte 0: its ADC channel, as an ADC input's.
+// It reads LM35_MV_PER_C mV per °C; on the device it drives outputs from 0 °C (0) to
+// LM35_TEMP_FULL °C (1), an LM35DZ's range.
+const LM35_MV_PER_C          = 10;
+const LM35_TEMP_FULL         = 100;
 
 // GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pinUsable). Byte 1:
 // options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin

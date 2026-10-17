@@ -168,7 +168,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI LM35, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1152,6 +1152,69 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [elements.n2.setSource?.name, elements.n2.resetSource?.name].join();
     });
     expect(resetOnly === ',n1', 'a latch with only a reset source restored as ' + resetOnly);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // ── An LM35 temperature sensor: on an ADC channel no other node uses, in °C,
+    // driving a PWM, a plot and a compare ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.evaluate(() => addNode(MSG_HW_ADC));  // n4, on ADC0
+    await page.locator('#add [title="Add an LM35 temperature sensor"]').dispatchEvent('click');    // n5
+    const lm35Channels = await page.evaluate(() => [...document.querySelectorAll('#settings .editable.select option')]
+        .map(o => o.textContent).join('|'));
+    expect(lm35Channels === 'ADC1 · GPIO 27|ADC2 · GPIO 28', 'with the ADC on ADC0 the LM35 offers ' + lm35Channels);
+    await select('Channel').selectOption('2');
+    await choice('Command view', 'Show');
+    const lm35 = await page.evaluate(() => {
+        [MSG_HW_PWM, MSG_UI_GRAPH, MSG_LOGIC_COMPARE].forEach(addNode);   // n6 to n8
+        const s = elements.n5;
+        return {
+            kind: s instanceof uiLM35 && s.tc === MSG_HW_LM35,
+            label: s.label, unit: s.unit, channel: s.channel, pins: s.usedPins().join(),
+            rejected: s.setChannel('3') === false,
+            toGpo: createEdge('n5', 'n3') === null,
+            wired: [createEdge('n5', 'n6'), createEdge('n5', 'n7'), createEdge('n5', 'n8')].every(e => e !== null),
+            pwm: elements.n6.dutySource?.name,
+            plotUnit: elements.n7.unit(),
+            threshold: elements.n8.unitText(),
+        };
+    });
+    expect(JSON.stringify(lm35) === JSON.stringify({ kind: true, label: 'LM35', unit: '°C', channel: 2, pins: '28', rejected: true,
+        toGpo: true, wired: true, pwm: 'n5', plotUnit: '°C', threshold: ' (°C)' }), 'the LM35 is wrong: ' + JSON.stringify(lm35));
+
+    // Its signal, in °C, reaches its tile, its plot and its compare.
+    await page.evaluate(() => { elements.n8.setThreshold('25'); buildCommandInterface(); window.__ws.receive('sig 5 0 26.04'); });
+    const lm35Reading = await page.evaluate(() => ({
+        tile: [...document.querySelectorAll('#command .control-reading')].find(t => t.title.startsWith('LM35'))?.querySelector('.state').textContent,
+        title: [...document.querySelectorAll('#command .control-reading')].find(t => t.title.startsWith('LM35'))?.title,
+        plot: elements.n7.samples.map(([, v]) => v).join(),
+        compare: elements.n8.value,
+    }));
+    expect(JSON.stringify(lm35Reading) === JSON.stringify({ tile: '26.0 °C', title: 'LM35, ADC2 on GPIO 28', plot: ',26.04', compare: true }),
+        'the LM35 reading is wrong: ' + JSON.stringify(lm35Reading));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const lm35Saved = await sent(page);
+    const lm35Hex = hex(lm35Saved[0]);
+    expect(lm35Saved.length === 1 && lm35Hex.includes('3200000401' + '00') && lm35Hex.includes('3302000501' + '02'),
+        'the LM35 was not saved as expected: ' + lm35Hex);
+    packets.push(...lm35Saved);
+    await page.close();
+
+    ({ page, errors } = await open(browser));
+    await connect(page, lm35Saved[0]);
+    const lm35Restored = await page.evaluate(() => {
+        const s = elements.n5;
+        return [s instanceof uiLM35, s.channel, s.shown, s.label, elements.n6.dutySource?.name, elements.n7.sourceID(),
+            elements.n8.inConns()[0]?.start.node.name].join();
+    });
+    expect(lm35Restored === 'true,2,true,LM35,n5,5,n5', 'the LM35 was not restored: ' + lm35Restored);
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const lm35Resaved = await sent(page);
+    expect(lm35Resaved.length === 1 && hex(lm35Resaved[0]) === lm35Hex, 'saving the restored LM35 changed the config');
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

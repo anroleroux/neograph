@@ -177,13 +177,14 @@ static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
 
 // The value of a source's signal that drives an output to its max, such as a
 // PWM's: 1 for a slider (its values are 0 to 1) or a scale, 3.3 V for an ADC,
-// CORE_TEMP_FULL °C for the core temperature, and for a min or max that of what it
+// CORE_TEMP_FULL °C for the core temperature, LM35_TEMP_FULL °C for an LM35, and for a min or max that of what it
 // picks from.
 static float signal_full(const hw_program *p, uint8_t s) {
     if (s == PROG_NO_SIGNAL) return 1;
     switch (p->signals[s].type) {
     case MSG_HW_ADC: return PROG_ADC_VOLTS;
     case MSG_HW_CORE: return CORE_TEMP_FULL;
+    case MSG_HW_LM35: return LM35_TEMP_FULL;
     case MSG_LOGIC_MIN:
     case MSG_LOGIC_MAX:
         // The full scale of what it picks from: of its first wired input.
@@ -273,6 +274,7 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
 
         case MSG_HW_ADC:
+        case MSG_HW_LM35:
             if (itr.len != 1 || itr.pay[0] >= ADC_CHANNELS) break;
             if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
             if ((n = add_node(p, itr.type, itr.id))) {
@@ -389,6 +391,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_CORE: return "core";
     case MSG_HW_GPI: return "gpi";
     case MSG_HW_ADC: return "adc";
+    case MSG_HW_LM35: return "lm35";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
     case MSG_LOGIC_OR: return "or";
@@ -439,6 +442,7 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         switch (n->type) {
         case MSG_HW_CORE: put(&t, "CORE n%u -> ", n->id); put_signal(&t, n->out); break;
         case MSG_HW_ADC: put(&t, "ADC n%u channel %u -> ", n->id, n->pin); put_signal(&t, n->out); break;
+        case MSG_HW_LM35: put(&t, "LM35 n%u channel %u -> ", n->id, n->pin); put_signal(&t, n->out); break;
         case MSG_HW_GPI: put(&t, "GPI n%u pin %u options %02X -> ", n->id, n->pin, n->options); put_signal(&t, n->out); break;
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
