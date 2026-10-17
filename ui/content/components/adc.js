@@ -5,7 +5,7 @@ const ADC_VREF = 3.3;
 // 28. A floating source whose value is the reading in volts, 0 to ADC_VREF. On the
 // device it drives the hardware outputs wired to it (a PWM) directly, with the
 // reading as a fraction of ADC_VREF; its readings also reach the browser as
-// telemetry, for its tile and the plots wired to it.
+// telemetry, in volts, for its tile and the plots wired to it.
 class uiADC extends uiComponents {
     constructor(x = 0, y = 0) {
         super("adc", x, y);
@@ -77,10 +77,13 @@ class uiADC extends uiComponents {
         settings.appendChild(shownSetting(this));
     }
 
-    // A new reading from the device, 0 to ADC_RAW_FULL, or NaN for none: hand
-    // it on to the wired nodes in volts.
-    update(raw) {
-        this.value = raw / ADC_RAW_FULL * ADC_VREF;
+    // Its signal from the device (PROTOCOL.md, "Telemetry text frames"), in volts.
+    signal(output, value) { this.update(value); }
+
+    // A new reading from the device, in volts, or NaN for none: hand it on to
+    // the wired nodes.
+    update(volts) {
+        this.value = volts;
         this.emit(this.value);
         if (this.tileState?.isConnected) this.tileState.textContent = this.reading();
     }

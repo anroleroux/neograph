@@ -91,6 +91,8 @@ ls ui/content/*.* ui/content/components/* ui/layout.* | entr make uidev
 
 ## 📡 Protocol
 
+[NODES.md](NODES.md) explains every node in the graph: where it is in the add menu, its settings and what it does.
+
 [PROTOCOL.md](PROTOCOL.md) describes the packets between the browser and the device, the config and graph format, and the messages between the two cores. Protocol numbers live in `src/protocol.h` and `ui/content/protocol.js`; use those constants rather than literal values.
 
 ---

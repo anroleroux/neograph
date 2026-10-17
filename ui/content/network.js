@@ -224,16 +224,20 @@ function toggleWebSocket(n,d) {
             networks[0].devices[0].did = data.slice(9,17);
             gfig = data.slice(3);
             unmarshalConfigs(gfig);
-            // and a chip temperature drifting around 30 °C, as telemetry.
-            // and ADC readings: a slow wave on each channel.
+            // and signals, as telemetry: a chip temperature drifting around 30 °C,
+            // and on each ADC channel a slow wave, in volts.
             let tick = 0;
             offlineTelemetry = setInterval(() => {
                 const t = performance.now() / 1000;
-                if (tick++ % 6 === 0) receiveTelemetry(`core ${(30 + 4 * Math.sin(t / 20) + Math.random() - 0.5).toFixed(2)}`);
-                for (let ch = 0; ch < ADC_CHANNELS; ch++) {
-                    const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * ch)) + 0.01 * (Math.random() - 0.5);
-                    receiveTelemetry(`adc ${ch} ${Math.round(level * ADC_RAW_FULL)}`);
+                for (const e of Object.values(elements)) {
+                    if (e instanceof uiCore && tick % 5 === 0) {
+                        receiveTelemetry(`sig ${e.id} 0 ${(30 + 4 * Math.sin(t / 20) + Math.random() - 0.5).toFixed(2)}`);
+                    } else if (e instanceof uiADC) {
+                        const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * e.channel)) + 0.01 * (Math.random() - 0.5);
+                        receiveTelemetry(`sig ${e.id} 0 ${(level * ADC_VREF).toFixed(3)}`);
+                    }
                 }
+                tick++;
             }, 200);
         }, 800);
         //offline-end

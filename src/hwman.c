@@ -1,125 +1,115 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include "uthash.h"
 
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
-#include "pico/cyw43_arch.h"
 #include "hardware/adc.h"
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
 
 #include "hwman.h"
-#include "config.h"
-#include "uthash.h"
+#include "program.h"
+#include "protocol.h"
 
-// Constants for conversion
-#define ADC_TEMP_SENSOR 4        // Internal temperature sensor is connected to ADC 4
-#define ADC_VREF 3.3             // Reference voltage (3.3V)
-#define ADC_RESOLUTION 4095.0    // 12-bit ADC resolution (2^12 - 1)
-#define TEMP_OFFSET 27.0         // Calibration temperature (27°C)
-#define TEMP_SLOPE -1.721        // mV per degree change (from datasheet)
+// Core 1 runs the program core 0 compiled from the config (src/program.h): every
+// SCAN_MS it reads the hardware inputs into their signals, then drives each
+// output from the signals it reads, in the program's order. Commands from the
+// browser set the signals of UI sources between scans. PROTOCOL.md, "Part 3",
+// describes it.
+#define SCAN_MS             10
 
-float read_internal_temperature() {
+// ── Core temperature ──
+// The chip's temperature is read every TEMP_SAMPLE_SCANS scans, whatever the
+// graph: TEMP_AVERAGE reads of the sensor, then smoothed so each sample moves it
+// 1/TEMP_FILTER of the way (it follows over about a second, and a sample's noise,
+// a sensor count is ~0.5 °C, mostly cancels). The core temperature signals change
+// when it has moved TEMP_DEADBAND °C from their value.
+#define ADC_TEMP_SENSOR     4       // the temperature sensor is ADC input 4
+#define TEMP_AVERAGE        16
+#define TEMP_SAMPLE_SCANS   10
+#define TEMP_FILTER         8
+#define TEMP_DEADBAND       0.1f
+
+static struct {
+    bool sampled;
+    float celsius;              // smoothed
+    float value;                // the signals' value
+} core_temp;
+
+// The chip's temperature in °C. The sensor reads 0.706 V at 27 °C and falls
+// 1.721 mV per °C (RP2350 datasheet).
+static float read_internal_temperature(void) {
     adc_select_input(ADC_TEMP_SENSOR);
     sleep_us(10);  // Allow ADC to stabilize
-    uint16_t raw = adc_read();
+    uint32_t sum = 0;
+    for (int i = 0; i < TEMP_AVERAGE; i++) sum += adc_read();
 
-    float voltage = (raw * 3.3f) / 4095.0f; // Convert ADC to voltage
-    float temperature = 27.0f - ((voltage - 0.706f) / 0.001721f);
-    
-    return temperature;
+    float voltage = (sum * 3.3f) / (TEMP_AVERAGE * 4095.0f);
+    return 27.0f - ((voltage - 0.706f) / 0.001721f);
 }
 
-typedef struct {
-    uint8_t operation;
-    uint8_t control_type;
-    uint16_t id;
-    union {
-        uint8_t io;
-        uint8_t value;
-    };
-    uint32_t source;    // the output driving it, as source_key
-    uint8_t drives;     // PWM: the parameter this source drives, PWM_DRIVES_DUTY or _FREQ
-    bool on;            // keyboard: whether its input is on, to type once each time it goes on
-} hwel;
-
-typedef struct {
-    uint32_t key;       // source_key: the source's element ID and output
-    uint8_t len;
-    uint8_t size;
-    hwel *hwels;
-
-    UT_hash_handle hh;
-} hwel_sources;
-
-hwel decode_hwel(uint32_t op) {
-    hwel result;
-
-    result.operation    = fifo_op(op);
-    result.control_type = fifo_op_type(op);
-    result.id           = fifo_op_id(op);
-    result.value        = fifo_op_value(op);
-    result.drives       = 0;
-    result.on           = false;
-
-    return result;
+static void core_temp_sample(void) {
+    float sample = read_internal_temperature();
+    if (!core_temp.sampled) core_temp.celsius = core_temp.value = sample;
+    else core_temp.celsius += (sample - core_temp.celsius) / TEMP_FILTER;
+    core_temp.sampled = true;
+    if (fabsf(core_temp.celsius - core_temp.value) >= TEMP_DEADBAND) core_temp.value = core_temp.celsius;
 }
 
-// Outputs are kept by the output of a source that drives them: its element ID,
-// and which of its outputs (a 2D slider has two).
-static uint32_t source_key(uint16_t id, uint8_t output) { return (uint32_t)id << 8 | output; }
+// ── ADC inputs ──
+// Each channel with an ADC node is read every scan: ADC_AVERAGE reads, averaged.
+// Its signals, in volts, change when the reading has moved ADC_HYSTERESIS counts,
+// so noise doesn't flicker the outputs they drive.
+#define ADC_AVERAGE         16
+#define ADC_HYSTERESIS      12
 
-void decode_hwrf(uint32_t rf,hwel *decop) {
-    decop->source = source_key(fifo_ref_source(rf), fifo_ref_output(rf));
+static struct {
+    bool on;
+    bool sampled;
+    uint16_t raw;               // the reading the signals hold, 0 to ADC_RAW_FULL
+} adc_inputs[ADC_CHANNELS];
+
+static void adc_sample_channels(void) {
+    for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) {
+        if (!adc_inputs[ch].on) continue;
+        adc_select_input(ch);
+        uint32_t sum = 0;
+        for (int i = 0; i < ADC_AVERAGE; i++) sum += adc_read();
+        uint16_t raw = (sum + ADC_AVERAGE / 2) / ADC_AVERAGE;
+
+        int32_t moved = (int32_t)raw - adc_inputs[ch].raw;
+        if (!adc_inputs[ch].sampled || moved >= ADC_HYSTERESIS || -moved >= ADC_HYSTERESIS) {
+            adc_inputs[ch].raw = raw;
+            adc_inputs[ch].sampled = true;
+        }
+    }
 }
 
-static hwel_sources *hwel_source_table = NULL;
+// ── GPIO inputs ──
+// Each GPIO input's pin is read every scan. A new state, held for GPI_DEBOUNCE
+// reads in a row so a bouncing switch changes it once, becomes its signal: 1 on,
+// 0 off.
+#define GPI_DEBOUNCE        3
+
+// Read a GPIO input's pin with its input buffer on only for the read. On the
+// RP2350's A2 stepping (erratum RP2350-E9), a pad with its input buffer on leaks
+// enough current to hold a released pin near mid-rail against the internal
+// pull-down, so it would read high long after it was let go. With the buffer
+// off between reads, the pull-down brings the pin low.
+static bool gpi_read(uint8_t pin) {
+    gpio_set_input_enabled(pin, true);
+    busy_wait_us_32(1);         // through the input synchronizer
+    bool high = gpio_get(pin);
+    gpio_set_input_enabled(pin, false);
+    return high;
+}
 
 // ── PWM outputs ──
-// A PWM's duty cycle and frequency are each constant or follow an input (its
-// PWM_DUTY_INPUT and PWM_FREQ_INPUT options), so a PWM is in the source table
-// up to twice: under its duty source and under its frequency source, each
-// entry with the parameter it drives. The state they share is kept by pin.
-#define PWM_DRIVES_DUTY 0
-#define PWM_DRIVES_FREQ 1
-#define PWM_PINS 30
-
-typedef struct {
-    uint8_t options;
-    uint8_t duty, duty_min, duty_max;       // percent
-    uint16_t freq, freq_min, freq_max;      // Hz
-    uint8_t duty_in, freq_in;               // the inputs' last values, 0 to VALUE_FULL
-    uint16_t freq_now;                      // the frequency the slice runs at
-    uint32_t top;                           // counter steps in one period
-} pwm_out;
-
-static pwm_out pwm_outs[PWM_PINS];
-
-// The pins core 1 has set up as a GPO or PWM, one bit per GPIO. A clean setup
-// resets only these: other pins belong to someone else, such as GPIO 23, 24,
-// 25 and 29, which drive the WiFi chip on the Pico 2 W.
-static uint32_t used_pins = 0;
-
-// From a at value 0 to b at VALUE_FULL, linearly. b may be below a.
-static uint32_t pwm_lerp(uint32_t a, uint32_t b, uint8_t value) {
-    return (uint32_t)((int32_t)a + ((int32_t)b - (int32_t)a) * value / VALUE_FULL);
-}
-
-// From a at value 0 to b at VALUE_FULL, logarithmically: each step multiplies by
-// the same factor, so a sweep spends as long on 100-1000 Hz as on 1-10 kHz. a and
-// b are at least PWM_FREQ_MIN, so neither is 0; b may be below a.
-static uint32_t pwm_lerp_log(uint32_t a, uint32_t b, uint8_t value) {
-    float f = a * powf((float)b / a, (float)value / VALUE_FULL) + 0.5f;
-    return f > 0xFFFF ? 0xFFFF : (uint32_t)f;
-}
-
-// Run a pin's PWM slice at freq Hz and return the counter steps in one period.
 // The clock divider is the smallest integer that lets one period fit the 16-bit
 // counter: an integer divider keeps the period free of jitter, and the smallest
 // one gives the finest duty steps. The slice is shared with one other pin,
-// which gets the same frequency.
+// which gets the same frequency. Returns the counter steps in one period.
 static uint32_t pwm_set_freq(uint pin, uint16_t freq) {
     if (freq < PWM_FREQ_MIN) freq = PWM_FREQ_MIN;
 
@@ -138,29 +128,32 @@ static uint32_t pwm_set_freq(uint pin, uint16_t freq) {
     return top;
 }
 
-// Drive a PWM pin from its state: the frequency and duty cycle, each constant
-// or from its input's last value. The slice is reprogrammed only when the
-// frequency changes.
-static void pwm_apply(uint pin) {
-    pwm_out *p = &pwm_outs[pin];
+// An input's value as a fraction of the value that gives its max, 0 to 1.
+static float pwm_fraction(float value, float full) {
+    float f = full > 0 ? value / full : 0;
+    return f < 0 ? 0 : f > 1 ? 1 : f;
+}
 
-    uint16_t freq = p->freq;
-    if (p->options & PWM_FREQ_INPUT) {
-        uint16_t lo = p->freq_min < PWM_FREQ_MIN ? PWM_FREQ_MIN : p->freq_min;
-        uint16_t hi = p->freq_max < PWM_FREQ_MIN ? PWM_FREQ_MIN : p->freq_max;
-        freq = (p->options & PWM_FREQ_LOG) ? pwm_lerp_log(lo, hi, p->freq_in) : pwm_lerp(lo, hi, p->freq_in);
-    }
-    if (freq != p->freq_now) {
-        p->top = pwm_set_freq(pin, freq);
-        p->freq_now = freq;
-    }
+// A PWM's duty cycle, in percent: constant, or from min to max as its input goes
+// from 0 to its full value. Min may be above max, which inverts the input.
+static float pwm_duty(const prog_node *n, float in) {
+    float duty = (n->options & PWM_DUTY_INPUT)
+        ? n->duty_min + ((float)n->duty_max - n->duty_min) * pwm_fraction(in, n->in_full[0])
+        : n->duty;
+    return duty < 0 ? 0 : duty > PWM_DUTY_MAX ? PWM_DUTY_MAX : duty;
+}
 
-    // The duty in percent × VALUE_FULL, to keep the input's resolution.
-    uint32_t duty = (p->options & PWM_DUTY_INPUT)
-        ? pwm_lerp(p->duty_min * VALUE_FULL, p->duty_max * VALUE_FULL, p->duty_in)
-        : p->duty * VALUE_FULL;
-    if (duty > PWM_DUTY_MAX * VALUE_FULL) duty = PWM_DUTY_MAX * VALUE_FULL;
-    pwm_set_gpio_level(pin, p->top * duty / (PWM_DUTY_MAX * VALUE_FULL));
+// A PWM's frequency, in Hz: constant, or from min to max as its input goes from 0
+// to its full value, linearly or (PWM_FREQ_LOG) logarithmically: each step of the
+// input multiplies it by the same factor.
+static uint16_t pwm_freq(const prog_node *n, float in) {
+    if (!(n->options & PWM_FREQ_INPUT)) return n->freq;
+    float lo = n->freq_min < PWM_FREQ_MIN ? PWM_FREQ_MIN : n->freq_min;
+    float hi = n->freq_max < PWM_FREQ_MIN ? PWM_FREQ_MIN : n->freq_max;
+    float f = pwm_fraction(in, n->in_full[1]);
+    float freq = (n->options & PWM_FREQ_LOG) ? lo * powf(hi / lo, f) : lo + (hi - lo) * f;
+    freq += 0.5f;
+    return freq > 0xFFFF ? 0xFFFF : (uint16_t)freq;
 }
 
 // ── Pausing core 1 for flash writes ──
@@ -219,31 +212,32 @@ static void push_to_core0(uint32_t word) {
 }
 
 // ── Core 0's side of the FIFO ──
-// Neither core may wait for room in the other's FIFO while the other waits for
-// room in its own: neither would ever drain the other's. Core 1 never does (see
-// push_to_core0, which also answers park requests); core 0, while it waits to
-// send, takes core 1's messages and keeps them, in order, for its main loop. A
-// message is a tag and a value, sent one after the other, so once the tag is
-// taken the value comes at once. Up to CORE1_HELD messages are kept; more, which
-// would take core 1 sending for a long while as core 0 waits, are dropped.
+// Neither core may wait on the other while the other waits on it. Core 1 never
+// does (see push_to_core0, which also answers park requests); core 0, while it
+// waits (to send, or for core 1 to take a program), takes core 1's messages and
+// keeps them, in order, for its main loop. A message is a tag and a value, sent
+// one after the other, so once the tag is taken the value comes at once. Up to
+// CORE1_HELD messages are kept; more are dropped.
 #define CORE1_HELD 64
 
 static uint32_t held[CORE1_HELD][2];
 static uint8_t held_first = 0, held_count = 0;
 
-void push_to_core1(uint32_t word) {
-    while (!multicore_fifo_wready()) {
-        if (!multicore_fifo_rvalid()) continue;
-        uint32_t tag = multicore_fifo_pop_blocking();
-        uint32_t value = multicore_fifo_pop_blocking();
-        if (held_count == CORE1_HELD) {
-            printf("core 1 message with tag %lu dropped: %d are waiting\n", (unsigned long)tag, CORE1_HELD);
-            continue;
-        }
-        uint8_t i = (held_first + held_count++) % CORE1_HELD;
-        held[i][0] = tag;
-        held[i][1] = value;
+static void hold_from_core1(void) {
+    if (!multicore_fifo_rvalid()) return;
+    uint32_t tag = multicore_fifo_pop_blocking();
+    uint32_t value = multicore_fifo_pop_blocking();
+    if (held_count == CORE1_HELD) {
+        printf("core 1 message with tag %lu dropped: %d are waiting\n", (unsigned long)tag, CORE1_HELD);
+        return;
     }
+    uint8_t i = (held_first + held_count++) % CORE1_HELD;
+    held[i][0] = tag;
+    held[i][1] = value;
+}
+
+void push_to_core1(uint32_t word) {
+    while (!multicore_fifo_wready()) hold_from_core1();
     multicore_fifo_push_blocking(word);
 }
 
@@ -261,308 +255,277 @@ bool take_from_core1(uint32_t *tag, uint32_t *value) {
     return true;
 }
 
-void add_packet(hwel el) {
-    // First check if one with the same ID already exists
-    hwel_sources *existing = NULL;
-    HASH_FIND(hh, hwel_source_table, &el.source, sizeof(uint32_t), existing);
-    if (existing) {
-        if (existing->len == existing->size) {
-            existing->size += 5;
-            hwel *temp = realloc(existing->hwels, existing->size * sizeof(hwel_sources));
-            if (temp == NULL) {
-                printf("hwel reallocation failed\n");
-                free(existing->hwels);
-                return;
-            }
-            existing->hwels = temp;
+// ── Programs ──
+// Two buffers in RAM both cores see. Core 1 runs programs[running]; core 0
+// compiles the next program into the other, then counts program_sent on. At its
+// next scan core 1 takes it, switches running, and counts program_taken on: from
+// then on the old buffer is core 0's to write.
+static hw_program programs[2];
+static volatile uint8_t running = 0;
+static volatile uint32_t program_sent = 0, program_taken = 0;
 
+hw_program *program_next(void) {
+    absolute_time_t until = make_timeout_time_ms(1000);
+    while (program_taken != program_sent) {
+        if (time_reached(until)) return NULL;
+        hold_from_core1();
+    }
+    __dmb();
+    return &programs[running ^ 1];
+}
+
+void program_commit(void) {
+    __dmb();
+    program_sent = program_sent + 1;
+    __dmb();
+}
+
+const hw_program *program_running(uint32_t *generation) {
+    if (generation) *generation = program_taken;
+    __dmb();
+    return &programs[running];
+}
+
+// Core 1's state for each node of the program it runs.
+typedef struct {
+    bool ok;                    // set up: its pin was usable and free
+    bool driven;                // driven since the program was taken
+    bool on;                    // LED, GPO, GPIO input: its state; keyboard: whether its input is on
+    uint8_t differ;             // GPIO input: reads in a row that differ from its state
+    float duty;                 // PWM: the duty cycle it runs at, percent
+    uint16_t freq;              // PWM: the frequency its slice runs at
+    uint32_t top;               // PWM: counter steps in one period
+    prog_logic_state logic;     // logic: what it keeps between scans
+} node_state;
+
+static node_state states[PROG_NODES_MAX];
+
+// The pins core 1 has set up, one bit per GPIO. Taking a program resets only
+// these: other pins belong to someone else, such as GPIO 23, 24, 25 and 29,
+// which drive the WiFi chip on the Pico 2 W.
+static uint32_t used_pins = 0;
+
+static bool claim_pin(uint8_t pin) {
+    if (!pin_usable(pin) || (used_pins & (1u << pin))) return false;
+    used_pins |= 1u << pin;
+    return true;
+}
+
+// Turn off every pin the last program set up, making them inputs again.
+static void release_pins(void) {
+    for (uint gpio = 0; gpio < 32; gpio++) {
+        if (!(used_pins & (1u << gpio))) continue;
+        if (gpio_get_function(gpio) == GPIO_FUNC_PWM) {
+            pwm_set_enabled(pwm_gpio_to_slice_num(gpio), false);
+            pwm_set_gpio_level(gpio, 0);
         }
-        printf("adding another hwel allocation to src:%lX, type:%02X, id:%d\n",(unsigned long)existing->key, el.control_type,el.id);
-        existing->len++;
-        existing->hwels[existing->len-1] = el;
-
-        return;
+        gpio_set_function(gpio, GPIO_FUNC_SIO);
+        gpio_set_dir(gpio, GPIO_IN);
+        gpio_disable_pulls(gpio);
     }
-
-    printf("new hwel_sources allocation, src:%lX\n",(unsigned long)el.source);
-    hwel_sources *new_srcsel = malloc(sizeof(hwel_sources));
-    if (new_srcsel == NULL) {
-        printf("hwel_sources allocation failed\n");
-        return;
-    }
-
-    new_srcsel->size = 5;
-    new_srcsel->len = 1;
-    printf("adding hwel allocation, type:%02X, id:%d\n",el.control_type,el.id);
-    new_srcsel->hwels = malloc(new_srcsel->size * sizeof(hwel));
-    if (new_srcsel->hwels == NULL) {
-        printf("hwel allocation failed\n");
-        return;
-    }
-    new_srcsel->hwels[0] = el;
-    new_srcsel->key = el.source;
-
-    HASH_ADD(hh, hwel_source_table, key, sizeof(uint32_t), new_srcsel);
+    used_pins = 0;
+    memset(adc_inputs, 0, sizeof adc_inputs);
 }
 
-hwel_sources *find_packet(uint32_t key) {
-    hwel_sources *srcsel = NULL;
-    HASH_FIND(hh, hwel_source_table, &key, sizeof(uint32_t), srcsel);
-    return srcsel;
-}
+// Set up a node's hardware. Inputs come before outputs in a program, so an
+// input wins a pin an output also names; otherwise the first node on a pin wins.
+static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
+    switch (n->type) {
+    case MSG_HW_ADC: {
+        uint8_t pin = ADC_PIN_FIRST + n->pin;
+        if (!adc_inputs[n->pin].on) {
+            if (!claim_pin(pin)) return false;
+            adc_gpio_init(pin);
+            adc_inputs[n->pin].on = true;
+        }
+        return true;
+    }
 
-void delete_all_packets() {
-    hwel_sources *current, *tmp;
-    HASH_ITER(hh, hwel_source_table, current, tmp) {
-        free(current->hwels);
-        HASH_DEL(hwel_source_table, current);
-        free(current);
+    case MSG_HW_GPI:
+        if (!claim_pin(n->pin)) return false;
+        gpio_init(n->pin);
+        gpio_set_dir(n->pin, GPIO_IN);
+        switch (n->options & GPI_PULL_MASK) {
+        case GPI_PULL_UP: gpio_pull_up(n->pin); break;
+        case GPI_PULL_DOWN: gpio_pull_down(n->pin); break;
+        default: gpio_disable_pulls(n->pin); break;
+        }
+        st->on = gpi_read(n->pin) != !!(n->options & GPI_INVERT);   // leaves the input buffer off
+        p->signals[n->out].value = st->on;
+        return true;
+
+    case MSG_HW_CORE:
+        if (core_temp.sampled) p->signals[n->out].value = core_temp.value;
+        return true;
+
+    case MSG_HW_GPO:
+        if (!claim_pin(n->pin)) return false;
+        gpio_init(n->pin);
+        gpio_set_dir(n->pin, GPIO_OUT);
+        return true;
+
+    case MSG_HW_PWM:
+        return claim_pin(n->pin);       // its slice starts at the first scan
+
+    default:
+        return true;
     }
 }
 
-// Drive the outputs wired to an output of a source with its new value, 0 to
-// VALUE_FULL. Returns false if nothing is wired to it. `log` prints each output
-// driven: a command from the browser logs, an ADC reading, which changes often, doesn't.
-static bool drive_outputs(uint16_t source_id, uint8_t output, uint8_t value, bool log) {
-    hwel_sources *hw_srcs = find_packet(source_key(source_id, output));
-    if (!hw_srcs) return false;
+static float signal_value(const hw_program *p, uint8_t s) {
+    return s == PROG_NO_SIGNAL ? 0 : p->signals[s].value;
+}
 
-    bool on = value >= VALUE_HALF;     // for the on/off outputs
-    for (size_t i = 0; i < hw_srcs->len; i++) {
-        hwel el = hw_srcs->hwels[i];
 
-        switch (el.control_type) {
-        case MSG_HW_LED:
-            if (log) printf("switch LED, value:%i\n", value);
+// Take the program core 0 sent: the signals of UI sources (buttons, sliders)
+// keep their values from the last program, so a save doesn't move them, and
+// each node's hardware is set up.
+static void take_program(void) {
+    __dmb();
+    const hw_program *old = &programs[running];
+    hw_program *p = &programs[running ^ 1];
+
+    for (uint8_t i = 0; i < p->signal_count; i++) {
+        prog_signal *s = &p->signals[i];
+        if (!program_ui_source(s->type)) continue;
+        uint8_t was = program_signal(old, s->id, s->output);
+        if (was != PROG_NO_SIGNAL) s->value = old->signals[was].value;
+    }
+
+    release_pins();
+    memset(states, 0, sizeof states);
+    running ^= 1;
+    __dmb();
+    program_taken = program_sent;
+    __dmb();
+
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        const prog_node *n = &p->nodes[i];
+        states[i].ok = setup_node(p, n, &states[i]);
+        if (!states[i].ok) printf("hw man skipping type %02X on ID %u: GPIO %u is not usable or in use\n",
+                                  n->type, n->id, n->type == MSG_HW_ADC ? ADC_PIN_FIRST + n->pin : n->pin);
+        // A keyboard types when its input goes on, not because it was on when set up.
+        if (n->type == MSG_HW_KEYBOARD) states[i].on = signal_value(p, n->in[0]) >= 0.5f;
+        if (program_logic(n->type)) program_logic_start(p, n, &states[i].logic);
+    }
+    printf("hw man running a program of %u signals and %u nodes\n", p->signal_count, p->node_count);
+}
+
+// One scan: each node in the program's order, inputs then outputs. An output is
+// driven when the value it would take changes, and at its first scan.
+static void scan(uint32_t count) {
+    hw_program *p = &programs[running];
+
+    adc_sample_channels();
+    if (count % TEMP_SAMPLE_SCANS == 0) core_temp_sample();
+
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        const prog_node *n = &p->nodes[i];
+        node_state *st = &states[i];
+        if (!st->ok) continue;
+
+        if (program_logic(n->type)) {
+            p->signals[n->out].value = program_logic_step(p, n, p->signals[n->out].value, &st->logic, SCAN_MS);
+            continue;
+        }
+
+        switch (n->type) {
+        case MSG_HW_ADC:
+            if (adc_inputs[n->pin].sampled)
+                p->signals[n->out].value = adc_inputs[n->pin].raw * PROG_ADC_VOLTS / ADC_RAW_FULL;
+            break;
+
+        case MSG_HW_GPI: {
+            bool on = gpi_read(n->pin) != !!(n->options & GPI_INVERT);
+            if (on == st->on) {
+                st->differ = 0;
+            } else if (++st->differ >= GPI_DEBOUNCE) {
+                st->on = on;
+                st->differ = 0;
+                p->signals[n->out].value = on;
+            }
+            break;
+        }
+
+        case MSG_HW_CORE:
+            if (core_temp.sampled) p->signals[n->out].value = core_temp.value;
+            break;
+
+
+        case MSG_HW_LED: {
+            bool on = signal_value(p, n->in[0]) >= 0.5f;
+            if (st->driven && on == st->on) break;
+            // The LED is on the WiFi chip, which only core 0 talks to.
             push_to_core0(FIFO_TAG_LED);
             push_to_core0(on);
+            st->on = on;
+            st->driven = true;
             break;
+        }
 
-        case MSG_HW_GPO:
-            if (log) printf("switch GPO %d, value:%i\n", el.io, value);
-            gpio_put(el.io, on);
+        case MSG_HW_GPO: {
+            bool on = signal_value(p, n->in[0]) >= 0.5f;
+            if (st->driven && on == st->on) break;
+            gpio_put(n->pin, on);
+            st->on = on;
+            st->driven = true;
             break;
+        }
 
-        case MSG_HW_KEYBOARD:
+        case MSG_HW_KEYBOARD: {
             // Core 0 types the keystroke, once each time the input goes on.
-            if (on && !el.on) {
-                if (log) printf("keyboard %d pressed\n", el.id);
+            bool on = signal_value(p, n->in[0]) >= 0.5f;
+            if (on && !st->on) {
                 push_to_core0(FIFO_TAG_KEYBOARD);
-                push_to_core0(el.id);
+                push_to_core0(n->id);
             }
-            hw_srcs->hwels[i].on = on;
+            st->on = on;
             break;
+        }
 
-        case MSG_HW_PWM:
-            if (log) printf("switch PWM %d, value:%i\n", el.io, value);
-            if (el.io >= PWM_PINS) break;
-            if (el.drives == PWM_DRIVES_FREQ) pwm_outs[el.io].freq_in = value;
-            else pwm_outs[el.io].duty_in = value;
-            pwm_apply(el.io);
+        case MSG_HW_PWM: {
+            float duty = pwm_duty(n, signal_value(p, n->in[0]));
+            uint16_t freq = pwm_freq(n, signal_value(p, n->in[1]));
+            if (st->driven && duty == st->duty && freq == st->freq) break;
+            if (!st->driven || freq != st->freq) {
+                if (!st->driven) printf("PWM on GPIO %u at %u Hz\n", n->pin, freq);
+                st->top = pwm_set_freq(n->pin, freq);
+                st->freq = freq;
+            }
+            pwm_set_gpio_level(n->pin, (uint16_t)(st->top * duty / PWM_DUTY_MAX + 0.5f));
+            st->duty = duty;
+            st->driven = true;
             break;
+        }
 
         default:
             break;
         }
     }
-    return true;
 }
 
-// ── ADC inputs ──
-// Each channel with an ADC node is sampled every ADC_SAMPLE_MS. When its value
-// (0 to VALUE_FULL, as a command's) changes, it drives the outputs wired to its
-// nodes, as a command from the browser would. Its reading is reported to core 0
-// for the browser every ADC_REPORT_MS, when it has moved by ADC_REPORT_DELTA or
-// ADC_REPORT_MAX_MS has passed since the last report.
-#define ADC_SAMPLE_MS       10
-#define ADC_AVERAGE         16      // reads averaged into one sample
-#define ADC_HYSTERESIS      12      // counts from the middle of the value's step before it changes; a step is ~16
-#define ADC_REPORT_MS       100
-#define ADC_REPORT_DELTA    8
-#define ADC_REPORT_MAX_MS   1000
-#define ADC_NODES_MAX       16
-
-typedef struct {
-    bool on;
-    bool drive;                 // drive the outputs at the next sample, whatever its value
-    bool sampled;
-    uint16_t raw;               // the last sample, 0 to ADC_RAW_FULL
-    uint8_t value;              // the value the outputs were last driven with
-    uint16_t reported;          // the last reading reported; above ADC_RAW_FULL if none
-    absolute_time_t reported_at;
-} adc_input;
-
-typedef struct {
-    uint16_t id;
-    uint8_t channel;
-} adc_node;
-
-static adc_input adc_inputs[ADC_CHANNELS];
-static adc_node adc_nodes[ADC_NODES_MAX];
-static uint8_t adc_node_count = 0;
-
-static uint16_t adc_sample(uint8_t channel) {
-    adc_select_input(channel);
-    uint32_t sum = 0;
-    for (int i = 0; i < ADC_AVERAGE; i++) sum += adc_read();
-    return (sum + ADC_AVERAGE / 2) / ADC_AVERAGE;
-}
-
-// Sample each channel, and drive the outputs of its nodes with a new value. The
-// value changes only once the reading is ADC_HYSTERESIS counts from the middle
-// of the value's step, so noise at the edge of a step doesn't flicker the outputs.
-static void adc_poll(void) {
-    for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) {
-        adc_input *in = &adc_inputs[ch];
-        if (!in->on) continue;
-
-        in->raw = adc_sample(ch);
-        in->sampled = true;
-        uint8_t value = (in->raw * VALUE_FULL + ADC_RAW_FULL / 2) / ADC_RAW_FULL;
-        int32_t middle = (in->value * ADC_RAW_FULL + VALUE_FULL / 2) / VALUE_FULL;
-        int32_t off = (int32_t)in->raw - middle;
-        if (!in->drive && (value == in->value || (off < ADC_HYSTERESIS && -off < ADC_HYSTERESIS))) continue;
-
-        in->drive = false;
-        in->value = value;
-        for (uint8_t i = 0; i < adc_node_count; i++) {
-            if (adc_nodes[i].channel == ch) drive_outputs(adc_nodes[i].id, 0, value, false);
-        }
+// A command from the browser: the new value of an output of a UI source, 0 to
+// VALUE_FULL, which becomes its signal's value, 0 to 1.
+static void command(uint32_t word) {
+    hw_program *p = &programs[running];
+    uint8_t s = program_signal(p, fifo_op_id(word), fifo_op_output(word));
+    if (s == PROG_NO_SIGNAL || !program_ui_source(p->signals[s].type)) {
+        printf("hw man: no source n%u output %u\n", fifo_op_id(word), fifo_op_output(word));
+        return;
     }
-}
-
-static void adc_report(absolute_time_t now) {
-    for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) {
-        adc_input *in = &adc_inputs[ch];
-        if (!in->on || !in->sampled) continue;
-
-        int32_t moved = (int32_t)in->raw - in->reported;
-        if (moved < ADC_REPORT_DELTA && -moved < ADC_REPORT_DELTA
-            && absolute_time_diff_us(in->reported_at, now) < ADC_REPORT_MAX_MS * 1000) continue;
-
-        push_to_core0(FIFO_TAG_ADC);
-        push_to_core0(fifo_adc_word(ch, in->raw));
-        in->reported = in->raw;
-        in->reported_at = now;
-    }
-}
-
-// Set up an ADC node on its channel. Returns false if it can't be: the channel is
-// out of range, its pin is used by a GPO or PWM, or there are ADC_NODES_MAX nodes.
-// Several nodes may share a channel.
-static bool adc_setup(uint16_t id, uint8_t channel) {
-    if (channel >= ADC_CHANNELS || adc_node_count == ADC_NODES_MAX) return false;
-    adc_input *in = &adc_inputs[channel];
-    uint pin = ADC_PIN_FIRST + channel;
-
-    if (!in->on) {
-        if (used_pins & (1u << pin)) return false;
-        adc_gpio_init(pin);
-        used_pins |= 1u << pin;
-        *in = (adc_input){ .on = true, .reported = 0xFFFF };
-    }
-    adc_nodes[adc_node_count++] = (adc_node){ id, channel };
-    printf("ADC%d on GPIO %d for ID %d\n", channel, pin, id);
-    return true;
-}
-
-// ── GPIO inputs ──
-// Each GPIO input node's pin is read every GPI_SAMPLE_MS. A new state, held for
-// GPI_DEBOUNCE reads in a row so a bouncing switch changes it once, drives the
-// outputs wired to the node (VALUE_FULL on, 0 off), as a command from the browser
-// would, and is reported to core 0 for the browser. The state is also reported
-// every GPI_REPORT_MS, so a browser that connects later learns it.
-#define GPI_SAMPLE_MS       10
-#define GPI_DEBOUNCE        3
-#define GPI_REPORT_MS       1000
-#define GPI_NODES_MAX       16
-
-typedef struct {
-    uint16_t id;
-    uint8_t pin;
-    bool invert;                // on while the pin is low
-    bool on;                    // the debounced state
-    uint8_t differ;             // reads in a row that differ from it
-    bool drive;                 // drive the outputs at the next read, whatever the state
-    absolute_time_t reported_at;
-} gpi_node;
-
-static gpi_node gpi_nodes[GPI_NODES_MAX];
-static uint8_t gpi_node_count = 0;
-
-static void gpi_report(gpi_node *in, absolute_time_t now) {
-    push_to_core0(FIFO_TAG_GPI);
-    push_to_core0(fifo_gpi_word(in->pin, in->on));
-    in->reported_at = now;
-}
-
-// Read a GPIO input's pin with its input buffer on only for the read. On the
-// RP2350's A2 stepping (erratum RP2350-E9), a pad with its input buffer on leaks
-// enough current to hold a released pin near mid-rail against the internal
-// pull-down, so it would read high long after it was let go. With the buffer
-// off between reads, the pull-down brings the pin low.
-static bool gpi_read(uint8_t pin) {
-    gpio_set_input_enabled(pin, true);
-    busy_wait_us_32(1);         // through the input synchronizer
-    bool high = gpio_get(pin);
-    gpio_set_input_enabled(pin, false);
-    return high;
-}
-
-static void gpi_poll(absolute_time_t now) {
-    for (uint8_t i = 0; i < gpi_node_count; i++) {
-        gpi_node *in = &gpi_nodes[i];
-        bool on = gpi_read(in->pin) != in->invert;
-        if (on == in->on) {
-            in->differ = 0;
-        } else if (++in->differ >= GPI_DEBOUNCE) {
-            in->on = on;
-            in->differ = 0;
-            in->drive = true;
-            gpi_report(in, now);
-        }
-        if (in->drive) {
-            in->drive = false;
-            drive_outputs(in->id, 0, in->on ? VALUE_FULL : 0, false);
-        }
-        if (absolute_time_diff_us(in->reported_at, now) >= GPI_REPORT_MS * 1000) gpi_report(in, now);
-    }
-}
-
-// Set up a GPIO input node on its pin, with its pull. Returns false if it can't
-// be: the pin isn't usable or is in use, or there are GPI_NODES_MAX nodes.
-static bool gpi_setup(uint16_t id, uint8_t pin, uint8_t options) {
-    if (!pin_usable(pin) || (used_pins & (1u << pin)) || gpi_node_count == GPI_NODES_MAX) return false;
-    gpio_init(pin);
-    gpio_set_dir(pin, GPIO_IN);
-    switch (options & GPI_PULL_MASK) {
-    case GPI_PULL_UP: gpio_pull_up(pin); break;
-    case GPI_PULL_DOWN: gpio_pull_down(pin); break;
-    default: gpio_disable_pulls(pin); break;
-    }
-    used_pins |= 1u << pin;
-
-    // Reported and driven at the first read.
-    gpi_node *in = &gpi_nodes[gpi_node_count++];
-    *in = (gpi_node){ .id = id, .pin = pin, .invert = options & GPI_INVERT, .drive = true,
-                      .reported_at = from_us_since_boot(0) };
-    in->on = gpi_read(pin) != in->invert;      // leaves the input buffer off (see gpi_read)
-    printf("GPI on GPIO %d for ID %d, options %02X\n", pin, id, options);
-    return true;
+    p->signals[s].value = (float)fifo_op_value(word) / VALUE_FULL;
 }
 
 void core1_worker() {
     printf("(core1) started\n");
-    
+
     adc_init();
     adc_set_temp_sensor_enabled(true);
 
     absolute_time_t start = get_absolute_time();
+    absolute_time_t next_scan = start;
+    uint32_t scans = 0;
     uint64_t next_uptime_timeout = 5;
-    uint64_t next_coretm_timeout = 6;
-    absolute_time_t next_adc_sample = start;
-    absolute_time_t next_adc_report = start;
-    absolute_time_t next_gpi_sample = start;
 
     core1_running = true;
     __dmb();
@@ -570,6 +533,14 @@ void core1_worker() {
     while(1) {
         // A safe point: core 1 holds no locks here.
         if (park_request) core1_park();
+        if (program_taken != program_sent) take_program();
+
+        if (time_reached(next_scan)) {
+            scan(scans++);
+            next_scan = delayed_by_ms(next_scan, SCAN_MS);
+            // Behind, as after a pause for a flash write: start again from now.
+            if (time_reached(next_scan)) next_scan = make_timeout_time_ms(SCAN_MS);
+        }
 
         int64_t up_time_elapsed = absolute_time_diff_us(start, get_absolute_time())/1200000;
         if (up_time_elapsed >= next_uptime_timeout) {
@@ -578,163 +549,11 @@ void core1_worker() {
             next_uptime_timeout = up_time_elapsed + 5;
         }
 
-        absolute_time_t now = get_absolute_time();
-        if (time_reached(next_adc_sample)) {
-            adc_poll();
-            next_adc_sample = delayed_by_ms(now, ADC_SAMPLE_MS);
-        }
-        if (time_reached(next_adc_report)) {
-            adc_report(now);
-            next_adc_report = delayed_by_ms(now, ADC_REPORT_MS);
-        }
-        if (time_reached(next_gpi_sample)) {
-            gpi_poll(now);
-            next_gpi_sample = delayed_by_ms(now, GPI_SAMPLE_MS);
-        }
-
+        // Until the next scan, take core 0's words: each is an action word.
+        int64_t wait = absolute_time_diff_us(get_absolute_time(), next_scan);
         uint32_t op;
-        if (multicore_fifo_pop_timeout_us(1000, &op)) {
-            hwel decop = decode_hwel(op);
-            // printf("hw opp %d type %d, io %d\n",decop.operation, decop.control_type, decop.io);
-            
-            switch (decop.operation) {
-            case FIFO_OP_SETUP: {
-                // An output on a pin it may not use (see PIN_USABLE_MASK), or on
-                // one already in use, is not set up: the first setup on a pin wins.
-                bool usable = true;
-                switch (decop.control_type) {
-                case MSG_HW_LED:
-                    multicore_fifo_pop_timeout_us(1000, &op);
-                    decode_hwrf(op,&decop);
-                    break;
-
-                case MSG_HW_KEYBOARD:
-                    multicore_fifo_pop_timeout_us(1000, &op);
-                    decode_hwrf(op,&decop);
-                    break;
-
-                case MSG_HW_GPO:
-                    multicore_fifo_pop_timeout_us(1000, &op);
-                    decode_hwrf(op,&decop);
-
-                    usable = pin_usable(decop.io) && !(used_pins & (1u << decop.io));
-                    if (!usable) break;
-                    gpio_init(decop.io);
-                    gpio_set_dir(decop.io, GPIO_OUT);
-                    used_pins |= 1u << decop.io;
-                    break;
-                
-                case MSG_HW_PWM: {
-                    // Reference (duty source), PWM, duty, reference (frequency
-                    // source) and frequency words follow.
-                    uint32_t w[5] = {0};
-                    for (int i = 0; i < 5; i++) multicore_fifo_pop_timeout_us(1000, &w[i]);
-                    decode_hwrf(w[0], &decop);
-
-                    uint pin = decop.io;
-                    usable = pin_usable(pin) && !(used_pins & (1u << pin));
-                    if (!usable) break;
-                    used_pins |= 1u << pin;
-                    pwm_out *p = &pwm_outs[pin];
-                    *p = (pwm_out){
-                        .options  = fifo_pwm_options(w[1]),
-                        .freq     = fifo_pwm_freq(w[1]),
-                        .duty     = fifo_duty_const(w[2]),
-                        .duty_min = fifo_duty_min(w[2]),
-                        .duty_max = fifo_duty_max(w[2]),
-                        .freq_min = fifo_freq_min(w[4]),
-                        .freq_max = fifo_freq_max(w[4]),
-                    };
-                    // Until its inputs send values they read 0: each parameter
-                    // from an input starts at its min.
-                    pwm_apply(pin);
-                    printf("PWM on GPIO %d: options %02X, %d Hz\n", pin, p->options, p->freq_now);
-
-                    // Filed under the duty source below, as every output; and
-                    // under the frequency source here.
-                    decop.drives = PWM_DRIVES_DUTY;
-                    hwel freq_el = decop;
-                    freq_el.drives = PWM_DRIVES_FREQ;
-                    decode_hwrf(w[3], &freq_el);
-                    if (fifo_ref_source(w[3])) add_packet(freq_el);
-                    break;
-                }
-
-                case MSG_HW_ADC:
-                    // A source, not an output: nothing goes in the table under it
-                    // here, but its outputs do, under its ID.
-                    if (!adc_setup(decop.id, decop.io)) {
-                        printf("hw man skipping ADC on ID %i: channel %d is not usable or its pin is in use\n",
-                               decop.id, decop.io);
-                    }
-                    break;
-
-                case MSG_HW_GPI:
-                    // A source, as an ADC: its options word follows.
-                    multicore_fifo_pop_timeout_us(1000, &op);
-                    if (!gpi_setup(decop.id, decop.io, fifo_gpi_options(op))) {
-                        printf("hw man skipping GPI on ID %i: GPIO %d is not usable or in use\n",
-                               decop.id, decop.io);
-                    }
-                    break;
-
-                default:
-                    break;
-                }
-
-                if (decop.control_type == MSG_HW_ADC || decop.control_type == MSG_HW_GPI) break;
-                if (!usable) {
-                    printf("hw man skipping control type %02X on ID %i: GPIO %d is not usable or in use\n",
-                           decop.control_type, decop.id, decop.io);
-                    break;
-                }
-                add_packet(decop);
-                printf("hw man adding control type %02X on ID %i\n",decop.control_type,decop.id);
-
-                // An output set up after its ADC or GPI source was read gets the
-                // source's value at the next read, not at its next change.
-                for (uint8_t ch = 0; ch < ADC_CHANNELS; ch++) adc_inputs[ch].drive = true;
-                for (uint8_t i = 0; i < gpi_node_count; i++) gpi_nodes[i].drive = true;
-                break;
-            }
-
-            case FIFO_OP_CLEAN_SETUP:
-                delete_all_packets();
-                memset(pwm_outs, 0, sizeof pwm_outs);
-                memset(adc_inputs, 0, sizeof adc_inputs);
-                adc_node_count = 0;
-                gpi_node_count = 0;
-                for (uint gpio = 0; gpio < PWM_PINS; gpio++) {
-                    if (!(used_pins & (1u << gpio))) continue;
-                    if (gpio_get_function(gpio) == GPIO_FUNC_PWM) {
-                        pwm_set_enabled(pwm_gpio_to_slice_num(gpio), false);
-                        pwm_set_gpio_level(gpio, 0);
-                    }
-                    gpio_set_function(gpio, GPIO_FUNC_SIO);
-                    gpio_set_dir(gpio, GPIO_IN);
-                    gpio_disable_pulls(gpio);
-                }
-                used_pins = 0;
-                printf("hw man cleared controls\n");
-                break;
-
-            case FIFO_OP_CONTROL_ACTION:
-                printf("hw man buffer %02X %02X %02X %02X\n",op>>24&0xFF,op>>16&0xFF,op>>8&0xFF,op&0xFF);
-                if (!drive_outputs(decop.id, fifo_op_output(op), decop.value, true)) {
-                    printf("hw sources with ID %d, output %d not found\n",decop.id,fifo_op_output(op));
-                }
-                break;
-            }
-        }
-
-        int64_t core_time_elapsed = absolute_time_diff_us(start, get_absolute_time())/1200000;
-        if (core_time_elapsed >= next_coretm_timeout) {
-            float temperature = read_internal_temperature();
-            push_to_core0(FIFO_TAG_TEMPERATURE);
-            uint32_t data;
-            memcpy(&data, &temperature, sizeof(float));
-            push_to_core0(data);
-            next_coretm_timeout = core_time_elapsed + 5;
+        if (multicore_fifo_pop_timeout_us(wait > 0 ? (uint64_t)wait : 0, &op)) {
+            if (fifo_op(op) == FIFO_OP_CONTROL_ACTION) command(op);
         }
     }
 }

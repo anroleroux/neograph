@@ -25,3 +25,5 @@
 /* {{gpi-js}} */
 
 /* {{keyboard-js}} */
+
+/* {{logic-js}} */

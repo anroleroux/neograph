@@ -192,6 +192,7 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
     static uint8_t config[FLASH_SIZE];
     uint16_t config_length = retrieve_store(config);
     if (config_length > 0) {
+        // Only sent: core 1 has run it since boot, or since it was saved.
         printf("config exist, sending to client\n");
         send_websocket_binary(clientstate, config, config_length+3);
     }

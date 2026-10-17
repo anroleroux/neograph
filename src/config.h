@@ -42,6 +42,11 @@ void retrieve_networking_config(network_setup *out);
 void apply_config(const uint8_t* data, size_t length);
 void update_config(const uint8_t* new_val, size_t new_len);
 void update_secrets(const uint8_t* new_val, size_t new_len);
+// Read the stored config packet into data_buffer (FLASH_SIZE bytes) and return
+// its payload length, 0 if none is stored. It is not applied.
 uint16_t retrieve_store(uint8_t* data_buffer);
+// Set up core 1 (and the USB keyboards) from the stored config, if there is one.
+// Called once at boot, after core 1 is launched, so the graph runs without a browser.
+void apply_stored_config(void);
 
 #endif

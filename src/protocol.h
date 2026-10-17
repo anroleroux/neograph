@@ -4,12 +4,14 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_ and KEYBOARD_ constants are mirrored in
+ * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_ and SCALE_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
 
 #include <stdint.h>
+#include <string.h>
 
 /* ── Packets (UI <-> HW, one per WebSocket binary frame) ─────────────── */
 
@@ -34,11 +36,12 @@
    sources had several outputs. */
 #define MSG_FLAG_OUTPUT         0x01
 
-/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) shows
-   a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
+   a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
-/* Control element types (0x00-0x3F): bit 5 set = HW, bit 4 set = input. */
+/* Control element types (0x00-0x7F): bit 6 set = logic (below); otherwise bit 5 set =
+   HW, bit 4 set = input. */
 #define MSG_HW_BIT              0x20
 #define MSG_INPUT_BIT           0x10
 
@@ -56,9 +59,26 @@
 #define MSG_HW_GPO              0x21
 #define MSG_HW_PWM              0x22
 #define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
-#define MSG_HW_CORE             0x30    /* the core temperature, from telemetry */
+#define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
+
+/* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
+   source itself, with one output, 0: boolean, or floating for a scale, min or max. */
+#define MSG_LOGIC_BIT           0x40
+#define MSG_LOGIC_COMPARE       0x40    /* a floating input above or below a threshold */
+#define MSG_LOGIC_AND           0x41    /* on while every input is on */
+#define MSG_LOGIC_OR            0x42    /* on while any input is on */
+#define MSG_LOGIC_NOT           0x43    /* on while its input is off */
+#define MSG_LOGIC_DELAY         0x44    /* its input, after an on delay and an off delay */
+#define MSG_LOGIC_SCALE         0x45    /* floating: its input mapped from one range onto another */
+#define MSG_LOGIC_MIN           0x46    /* floating: the least of its inputs */
+#define MSG_LOGIC_MAX           0x47    /* floating: the greatest of its inputs */
+#define MSG_LOGIC_PULSE         0x48    /* on for a time after its input goes on */
+#define MSG_LOGIC_BLINK         0x49    /* on and off in turn while its input is on */
+#define MSG_LOGIC_TOGGLE        0x4A    /* turns over each time its input goes on */
+#define MSG_LOGIC_LATCH         0x4B    /* on once set, off once reset; reset wins */
+#define MSG_LOGIC_LAST          0x4B    /* the last logic type: MSG_LOGIC_LATCH */
 
 /* Supporting and networking element types. */
 #define MSG_STRING              0xA0    /* a node's label, keyed by node ID */
@@ -132,6 +152,27 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ADC_CHANNELS            3
 #define ADC_PIN_FIRST           26
 #define ADC_RAW_FULL            4095    /* a 12-bit reading at the reference voltage, 3.3 V */
+
+/* Core temperature (MSG_HW_CORE): on the device it drives outputs with its value from
+   0 °C (0) to CORE_TEMP_FULL °C (VALUE_FULL), clamped. */
+#define CORE_TEMP_FULL          100
+
+/* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
+   (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
+   float, big endian. An AND or OR: 1 to LOGIC_INPUTS_MAX source references. A NOT: one.
+   A delay (MSG_LOGIC_DELAY): a source reference, then its on delay and its off delay,
+   each a 32-bit big-endian number of milliseconds, 0 to DELAY_MAX_MS.
+   A scale (MSG_LOGIC_SCALE): a source reference, its options (SCALE_CLAMP), then four
+   32-bit big-endian floats: the input's from and to, the output's from and to.
+   A min or max: 1 to LOGIC_INPUTS_MAX source references. A pulse: a source reference,
+   then its time on, 1 to DELAY_MAX_MS. A blink: a source reference (0: it always
+   blinks), then its time on and time off, each 1 to DELAY_MAX_MS. A toggle: a source
+   reference. A latch: its set source reference, then its reset one. */
+#define COMPARE_ABOVE           0x00    /* on above the threshold; off below it less the hysteresis */
+#define COMPARE_BELOW           0x01    /* on below the threshold; off above it plus the hysteresis */
+#define LOGIC_INPUTS_MAX        4
+#define DELAY_MAX_MS            86400000    /* a day */
+#define SCALE_CLAMP             0x01    /* options bit 0: keep the output within its range */
 
 /* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
    options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
@@ -226,87 +267,94 @@ static inline int pwm_payload_read(const uint8_t *pay, uint8_t len, uint8_t flag
     return 1;
 }
 
+/* A 32-bit big-endian number at p. */
+static inline uint32_t msg_u32_at(const uint8_t *p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+/* A 32-bit big-endian IEEE 754 float at p. */
+static inline float msg_float_at(const uint8_t *p) {
+    uint32_t u = msg_u32_at(p);
+    float f;
+    memcpy(&f, &u, sizeof f);
+    return f;
+}
+
+/* Whether a logic element's payload is one the device runs: its source references
+   (one; for an AND, OR, min or max 1 to LOGIC_INPUTS_MAX; a latch's two), then a
+   compare's condition, threshold and hysteresis (finite, the hysteresis 0 or more), a
+   delay's, pulse's or blink's times, or a scale's options and ranges (finite, its
+   input's from and to apart). */
+static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t len, uint8_t flags) {
+    uint8_t r = msg_ref_len(flags);
+    switch (type) {
+    case MSG_LOGIC_COMPARE: {
+        if (len != r + 9 || pay[r] > COMPARE_BELOW) return 0;
+        float threshold = msg_float_at(pay + r + 1), hysteresis = msg_float_at(pay + r + 5);
+        /* finite: x - x is 0 for a number, NaN for an infinity or NaN */
+        return threshold - threshold == 0 && hysteresis - hysteresis == 0 && hysteresis >= 0;
+    }
+    case MSG_LOGIC_AND:
+    case MSG_LOGIC_OR:
+    case MSG_LOGIC_MIN:
+    case MSG_LOGIC_MAX:
+        return len >= r && len <= r * LOGIC_INPUTS_MAX && len % r == 0;
+    case MSG_LOGIC_NOT:
+    case MSG_LOGIC_TOGGLE:
+        return len == r;
+    case MSG_LOGIC_LATCH:
+        return len == 2 * r;
+    case MSG_LOGIC_DELAY:
+        return len == r + 8 && msg_u32_at(pay + r) <= DELAY_MAX_MS && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
+    case MSG_LOGIC_PULSE:
+        return len == r + 4 && msg_u32_at(pay + r) >= 1 && msg_u32_at(pay + r) <= DELAY_MAX_MS;
+    case MSG_LOGIC_BLINK:
+        return len == r + 8 && msg_u32_at(pay + r) >= 1 && msg_u32_at(pay + r) <= DELAY_MAX_MS
+            && msg_u32_at(pay + r + 4) >= 1 && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
+    case MSG_LOGIC_SCALE: {
+        if (len != r + 17 || (pay[r] & ~SCALE_CLAMP)) return 0;
+        float k[4];
+        for (int i = 0; i < 4; i++) {
+            k[i] = msg_float_at(pay + r + 1 + 4 * i);
+            if (k[i] - k[i] != 0) return 0;     /* not finite */
+        }
+        return k[0] != k[1];                    /* an input range to map from */
+    }
+    default:
+        return 0;
+    }
+}
+
 /* ── Inter-core FIFO (core 0 <-> core 1) ──────────────────────────────── */
 
-/* Core 0 -> core 1: operation word, bits 31-30. */
+/* Core 0 -> core 1: operation word, bits 31-30. Core 0 sends only action words: the
+   config reaches core 1 as a program in shared RAM (src/program.h). */
 #define FIFO_OP_CONTROL_ACTION  1
-#define FIFO_OP_SETUP           2
-#define FIFO_OP_CLEAN_SETUP     3       /* sent first for every config, clears core 1's controls */
 
-/* Core 1 -> core 0: tag word, followed by one value word. */
+/* Core 1 -> core 0: tag word, followed by one value word. Tags 1, 3 and 5 are
+   retired: the temperature, ADC and GPIO input readings are signals, which core 0
+   reads from the program. */
 #define FIFO_TAG_UPTIME         0       /* value: uptime in 1.2 s ticks */
-#define FIFO_TAG_TEMPERATURE    1       /* value: float bits, degrees C */
 #define FIFO_TAG_LED            2       /* value: onboard LED state, 0 or 1 */
-#define FIFO_TAG_ADC            3       /* value: an ADC reading, see fifo_adc_word */
 #define FIFO_TAG_KEYBOARD       4       /* value: the ID of a USB keyboard whose input went on */
-#define FIFO_TAG_GPI            5       /* value: a GPIO input's state, see fifo_gpi_word */
 
-/* An action word carries an output index in the 5 bits a setup word carries a type in. */
+/* An action word names one of an element's first FIFO_OUTPUTS_MAX outputs. */
 #define FIFO_OUTPUTS_MAX        32
 
 /*
- * Operation word: [31:30] op · [29] unused · [28:24] type & 0x1F (setup), or output
- * index (action) · [23:8] element ID · [7:0] GPIO pin or ADC channel (setup), or
- * value (action)
+ * Action word: the new value of one output of a source, from a command.
+ * [31:30] op · [29] unused · [28:24] output index · [23:8] element ID · [7:0] value
  */
-static inline uint32_t fifo_op_word(uint8_t op, uint8_t type, uint16_t id, uint8_t value) {
-    return (uint32_t)(op & 0x03) << 30
-        | (uint32_t)(type & 0x1F) << 24
-        | (uint32_t)id << 8
-        | value;
-}
-
-static inline uint8_t fifo_op(uint32_t word) { return (word >> 30) & 0x03; }
-/* Only 5 type bits travel, and bit 5 is forced on: UI types arrive as HW types. */
-static inline uint8_t fifo_op_type(uint32_t word) { return ((word >> 24) & 0x1F) | 0x20; }
-static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
-static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
-
-/* Action word: the new value of one output of a source, from a command. */
 static inline uint32_t fifo_action_word(uint16_t id, uint8_t output, uint8_t value) {
     return (uint32_t)FIFO_OP_CONTROL_ACTION << 30
         | (uint32_t)(output & 0x1F) << 24
         | (uint32_t)id << 8
         | value;
 }
+
+static inline uint8_t fifo_op(uint32_t word) { return (word >> 30) & 0x03; }
 static inline uint8_t fifo_op_output(uint32_t word) { return (word >> 24) & 0x1F; }
-
-/* ADC word, the value after FIFO_TAG_ADC: [31:16] channel · [15:0] reading, 0 to ADC_RAW_FULL. */
-static inline uint32_t fifo_adc_word(uint8_t channel, uint16_t raw) { return (uint32_t)channel << 16 | raw; }
-static inline uint8_t fifo_adc_channel(uint32_t word) { return (word >> 16) & 0xFF; }
-static inline uint16_t fifo_adc_raw(uint32_t word) { return word & 0xFFFF; }
-
-/* GPI options word, sent after a GPIO input's setup word: [7:0] its options (GPI_). */
-static inline uint32_t fifo_gpi_options_word(uint8_t options) { return options; }
-static inline uint8_t fifo_gpi_options(uint32_t word) { return word & 0xFF; }
-
-/* GPI word, the value after FIFO_TAG_GPI: [31:16] the pin · [0] 1 = on (after GPI_INVERT). */
-static inline uint32_t fifo_gpi_word(uint8_t pin, int on) { return (uint32_t)pin << 16 | (on ? 1 : 0); }
-static inline uint8_t fifo_gpi_pin(uint32_t word) { return (word >> 16) & 0xFF; }
-static inline int fifo_gpi_on(uint32_t word) { return word & 1; }
-
-/* Reference word, sent after a setup word for LED/GPO/PWM/keyboard: [31:16] source
-   element ID · [7:0] the source's output index. */
-static inline uint32_t fifo_ref_word(msg_ref ref) { return (uint32_t)ref.id << 16 | ref.output; }
-static inline uint16_t fifo_ref_source(uint32_t word) { return (word >> 16) & 0xFFFF; }
-static inline uint8_t fifo_ref_output(uint32_t word) { return word & 0xFF; }
-
-/* PWM word, sent after the reference word for PWM: [31:16] frequency in Hz · [7:0] options (PWM_DUTY_INPUT). */
-static inline uint32_t fifo_pwm_word(uint16_t freq, uint8_t options) { return (uint32_t)freq << 16 | options; }
-static inline uint16_t fifo_pwm_freq(uint32_t word) { return (word >> 16) & 0xFFFF; }
-static inline uint8_t fifo_pwm_options(uint32_t word) { return word & 0xFF; }
-
-/* Duty word, sent after the PWM word: [31:24] constant duty · [23:16] min duty · [15:8] max duty, in percent. */
-static inline uint32_t fifo_duty_word(uint8_t duty, uint8_t min, uint8_t max) {
-    return (uint32_t)duty << 24 | (uint32_t)min << 16 | (uint32_t)max << 8;
-}
-static inline uint8_t fifo_duty_const(uint32_t word) { return (word >> 24) & 0xFF; }
-static inline uint8_t fifo_duty_min(uint32_t word) { return (word >> 16) & 0xFF; }
-static inline uint8_t fifo_duty_max(uint32_t word) { return (word >> 8) & 0xFF; }
-
-/* Frequency word, sent after the frequency's reference word: [31:16] min Hz · [15:0] max Hz. */
-static inline uint32_t fifo_freq_word(uint16_t min, uint16_t max) { return (uint32_t)min << 16 | max; }
-static inline uint16_t fifo_freq_min(uint32_t word) { return (word >> 16) & 0xFFFF; }
-static inline uint16_t fifo_freq_max(uint32_t word) { return word & 0xFFFF; }
+static inline uint16_t fifo_op_id(uint32_t word) { return (word >> 8) & 0xFFFF; }
+static inline uint8_t fifo_op_value(uint32_t word) { return word & 0xFF; }
 
 #endif

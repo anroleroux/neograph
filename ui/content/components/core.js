@@ -5,13 +5,13 @@ class uiCore extends uiComponents {
 
         this.tc = MSG_HW_CORE;
 
-        // The temperature comes from the device's telemetry, which only the
-        // browser receives, so it drives only UI outputs (see takesType).
+        // In the browser the temperature comes from the device's telemetry, in °C.
+        // On the device core 1 reads it and drives the outputs wired to it, from
+        // 0 °C (0) to CORE_TEMP_FULL °C (1).
         this.outputs.push(
             {
                 type:"float",
-                conns:[],
-                browserOnly:true
+                conns:[]
             }
         );
         this.actDir = "outputs";
@@ -41,6 +41,9 @@ class uiCore extends uiComponents {
         this.gElm = g;
         this.gElmHighlight = g.children[3];
     }
+
+    // Its signal from the device (PROTOCOL.md, "Telemetry text frames"), in °C.
+    signal(output, value) { this.update(value); }
 
     // A new temperature from the device, in °C: hand it on to the wired nodes.
     update(value) {
@@ -77,19 +80,13 @@ class uiCore extends uiComponents {
 }
 
 // Telemetry from the device, a text frame (see PROTOCOL.md, "Telemetry text
-// frames"): "core T" is the chip temperature, which the core nodes pass on, and
-// "adc C R" a reading R of ADC channel C, which that channel's ADC nodes pass on,
-// and "gpi P S" the state S (1 on, 0 off) of GPIO input pin P, which its node passes on.
+// frames"): "sig I O V" is the value V of output O of element nI, a signal of the
+// program core 1 runs. A hardware input (core temperature, ADC, GPIO input)
+// passes its value on to the nodes wired to it; other nodes ignore theirs.
 function receiveTelemetry(text) {
     const [name, ...values] = text.split(' ');
-    if (name === 'core') {
-        const temperature = parseFloat(values[0]);
-        Object.values(elements).filter(e => e instanceof uiCore).forEach(e => e.update(temperature));
-    } else if (name === 'adc') {
-        const [channel, raw] = values.map(Number);
-        Object.values(elements).filter(e => e instanceof uiADC && e.channel === channel).forEach(e => e.update(raw));
-    } else if (name === 'gpi') {
-        const [pin, on] = values.map(Number);
-        Object.values(elements).filter(e => e instanceof uiGPI && e.pin === pin).forEach(e => e.update(on === 1));
+    if (name === 'sig') {
+        const [id, output, value] = values.map(Number);
+        elements['n' + id]?.signal?.(output, value);
     }
 }

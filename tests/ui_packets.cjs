@@ -162,15 +162,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'lgc']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY', 'the groups show ' + groups.join(', '));
-    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB | ', 'clicking the open group again left ' + await menu());
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.
@@ -257,8 +257,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(plot.buttonToPlot, 'a button was wired to a plot');
     expect(plot.sliderToPlot, 'the slider was not wired to the plot');
 
-    // Add the core temperature and a second plot for it. Its values reach only
-    // the browser, so it drives a plot but no hardware output.
+    // Add the core temperature and a second plot for it. Its values are on the
+    // device too, so it drives a PWM as well as a plot; it is floating, so not a GPO.
     await page.locator('#add [title="Add the core temperature"]').dispatchEvent('click');
     // A hardware input's tile is hidden until its settings show it.
     const coreRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
@@ -276,13 +276,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         toggleConnectMode();
         return {
             marked,
-            toPwm: createEdge('n8', 'n4') === null && elements.n4.setSource('freq', elements.n8) === false,
+            forPwm: elements.n4.takesType(elements.n8),
             toLed: createEdge('n8', 'n3') === null,
             toPlot: createEdge('n8', 'n9') !== null && elements.n9.sourceID() === 8,
         };
     });
     expect(core.marked === 'n9', 'wire mode from the core temperature marks ' + core.marked);
-    expect(core.toPwm, 'the core temperature was wired to a PWM');
+    expect(core.forPwm, 'a PWM does not take the core temperature');
     expect(core.toLed, 'the core temperature was wired to a GPO');
     expect(core.toPlot, 'the core temperature was not wired to the plot');
 
@@ -441,7 +441,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const inputs = await page.$$eval('#settings .editable.select', rows => rows
         .filter(row => row.querySelector('.label').textContent === 'Input:')
         .map(row => [...row.querySelectorAll('option')].map(o => o.value + '=' + o.textContent).join(',')));
-    expect(inputs[0] === '=None,n5:0=Speed (n5),n6:0=Pitch (n6),n10:0=Level sensor (n10),n15:0=Stick X (n15),n15:1=Stick Y (n15)',
+    expect(inputs[0] === '=None,n5:0=Speed (n5),n6:0=Pitch (n6),n8:0=Core temperature (n8),n10:0=Level sensor (n10),n15:0=Stick X (n15),n15:1=Stick Y (n15)',
         'the PWM offers inputs ' + inputs[0]);
     await select('Input').first().selectOption('n15:0');
     await choice('Frequency', 'From input');
@@ -662,7 +662,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     }
 
     // The device's temperature telemetry reaches the core node, its tile and its plot.
-    await page.evaluate(() => window.__ws.receive('core 31.27'));
+    await page.evaluate(() => window.__ws.receive('sig 8 0 31.27'));
     const temperature = await page.evaluate(() => ({
         tile: document.querySelector('#command .control-reading .state').textContent,
         plot: elements.n9.samples.map(([, v]) => v).join(),
@@ -670,23 +670,24 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(temperature.tile === '31.3 °C', 'the core temperature tile shows ' + temperature.tile);
     expect(temperature.plot === ',31.27', 'the temperature plot holds ' + temperature.plot);
 
-    // ADC readings reach the ADC nodes on their channel only, in volts.
-    await page.evaluate(() => { window.__ws.receive('adc 0 4095'); window.__ws.receive('adc 1 2048'); });
+    // A signal reaches its own node only: the ADC n10's, in volts. A signal of a
+    // node the page doesn't have is ignored.
+    await page.evaluate(() => { window.__ws.receive('sig 99 0 3.3'); window.__ws.receive('sig 10 0 1.6504'); });
     const reading = await page.evaluate(() => ({
         tile: document.querySelectorAll('#command .control-reading .state')[1].textContent,
         plot: elements.n11.samples.map(([, v]) => v === null ? '' : v.toFixed(4)).join(),
     }));
     expect(reading.tile === '1.65 V', 'the ADC tile shows ' + reading.tile);
 
-    // GPIO input states reach the GPIO input on their pin only, its tile and its light.
+    // A GPIO input's signal reaches it, its tile and its light.
     const door = () => page.evaluate(() => [
         [...document.querySelectorAll('#command .control-reading')].find(t => t.title.startsWith('GPIO input')).querySelector('.state').textContent,
         document.querySelectorAll('#command .control-light')[1].querySelector('.state').textContent,
         document.querySelectorAll('#command .control-light')[1].dataset.on].join(' '));
     expect(await door() === '– – false', 'before any reading the GPIO input and its light show ' + await door());
-    await page.evaluate(() => { window.__ws.receive('gpi 8 1'); window.__ws.receive('gpi 9 0'); });
+    await page.evaluate(() => { window.__ws.receive('sig 19 0 1'); window.__ws.receive('sig 20 0 0'); });
     expect(await door() === 'On On true', 'pin 8 on shows ' + await door());
-    await page.evaluate(() => window.__ws.receive('gpi 8 0'));
+    await page.evaluate(() => window.__ws.receive('sig 19 0 0'));
     expect(await door() === 'Off Off false', 'pin 8 off shows ' + await door());
     expect(reading.plot === ',1.6504', 'the ADC plot holds ' + reading.plot);
     await toCommandView(page);
@@ -785,8 +786,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // Less those other nodes use: the GPO's 7, the GPIO input's 8 and the ADC's 27.
     expect(types.pwmPins === '0|' + [...Array(23).keys(), 26, 28].filter(p => ![2, 3, 7, 8, 14, 15, 18, 19].includes(p)).join(),
         'a new PWM, with PWMs on GPIO 15 and 2, takes and offers ' + types.pwmPins);
-    expect(types.fromPwm === 'n5,n6,n10,n15', 'wire mode from a PWM marks ' + types.fromPwm);
-    expect(types.picks === ',n5:0,n6:0,n10:0,n15:0,n15:1', 'the PWM offers inputs ' + types.picks);
+    expect(types.fromPwm === 'n5,n6,n8,n10,n15', 'wire mode from a PWM marks ' + types.fromPwm);
+    expect(types.picks === ',n5:0,n6:0,n8:0,n10:0,n15:0,n15:1', 'the PWM offers inputs ' + types.picks);
     expect(types.sliderToLed, 'a slider was wired to the LED');
     expect(types.buttonToPwm, 'a button was wired to a PWM');
 
@@ -916,6 +917,241 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await switchState() === 'connected|', 'connecting again did not clear the message: ' + await switchState());
     await page.evaluate(() => window.__ws.close());       // the device goes away
     expect((await switchState()).startsWith('disconnected|Lost the connection to '), 'a dropped connection shows ' + await switchState());
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.close();
+
+    // ── Logic: the core temperature above 40 °C, and a switch, run a fan on the
+    // GPO through a compare, an AND and a delay; a NOT lights the LED while it is off ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // the demo graph: button n1, LED n2 ← n1, GPO n3
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a compare"]').dispatchEvent('click');       // n4
+    const compareRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
+    expect(compareRows === 'Label:|On while:|Threshold:|Hysteresis:|Command view:', 'a compare\'s settings are ' + compareRows);
+    const logic = await page.evaluate(() => {
+        const cmp = elements.n4;
+        const rejected = cmp.setThreshold('x') === false && cmp.setThreshold('1e39') === false
+            && cmp.setHysteresis('-1') === false && cmp.setCondition('over') === false;
+        addNode(MSG_HW_CORE);                       // n5
+        addNode(MSG_HW_GPI);                        // n6, GPIO 3
+        addNode(MSG_LOGIC_AND);                     // n7
+        addNode(MSG_LOGIC_DELAY);                   // n8
+        addNode(MSG_LOGIC_NOT);                     // n9
+        addNode(MSG_UI_INDICATOR);                  // n10
+        cmp.setThreshold('40');
+        cmp.setHysteresis('1');
+        cmp.shown = true;
+        const delay = elements.n8;
+        const delays = delay.setOffDelay('86401') === false && delay.setOnDelay('0.0005') === false
+            && delay.setOffDelay('5') !== false;
+        const wired = [
+            createEdge('n5', 'n4'),                 // temperature → compare
+            createEdge('n4', 'n7'),                 // logic to logic: from the first to the second
+            createEdge('n6', 'n7'),                 // the switch → AND
+            createEdge('n7', 'n8'),                 // AND → delay
+            createEdge('n8', 'n9'),                 // delay → NOT
+            createEdge('n8', 'n3'),                 // delay → GPO
+            createEdge('n9', 'n2'),                 // NOT → LED, in place of the button
+            createEdge('n4', 'n10'),                // compare → light
+        ].every(e => e !== null);
+        buildCommandInterface();
+        return {
+            rejected, delays, wired,
+            text: cmp.gElm.children[1].textContent,
+            and: elements.n7.inConns().map(c => c.start.node.name).join(),
+            led: elements.n2.inConns().map(c => c.start.node.name).join(),
+            // A wire back up the chain would close a loop: not offered, not drawn.
+            loop: !elements.n7.canTakeConn(elements.n9) && createEdge('n9', 'n7') === null
+                && createEdge('n8', 'n4') === null && createEdge('n4', 'n4') === null,
+            // A slider is floating: it drives a compare, not an AND; a compare
+            // takes no boolean source.
+            types: createEdge('n1', 'n4') === null && elements.n7.takesType(elements.n4)
+                && !elements.n4.takesType(elements.n6),
+            free: elements.n7.canTakeConn(elements.n9) === false && new uiOr(0, 300).canTakeConn(elements.n9),
+        };
+    });
+    expect(logic.rejected && logic.delays, 'logic settings out of range were accepted: ' + JSON.stringify(logic));
+    expect(logic.wired && logic.text === '> 40' && logic.and === 'n4,n6' && logic.led === 'n9',
+        'the logic was not wired: ' + JSON.stringify(logic));
+    expect(logic.loop, 'a wire that closes a loop was offered or drawn');
+    expect(logic.types, 'logic took a source of the wrong type');
+    expect(logic.free, 'a new OR does not take the NOT');
+    await page.evaluate(() => elements.n11.remove());
+
+    // Not saved yet, so the device doesn't run it: the browser does, from the
+    // values its sources have in the browser. A dashed dot marks it.
+    const chain = () => page.evaluate(() => [elements.n4, elements.n7, elements.n8, elements.n9]
+        .map(e => e.value ? 1 : 0).join('') + ',' + elements.n10.on + ',' + elements.n4.gElm.children[5].getAttribute('stroke-dasharray'));
+    expect(await chain() === '0001,false,2 2', 'with no readings the logic shows ' + await chain());
+    await page.evaluate(() => window.__ws.receive('sig 5 0 45'));         // the core temperature, 45 °C
+    expect(await chain() === '1001,true,2 2', 'at 45 °C the logic shows ' + await chain());
+    await page.evaluate(() => window.__ws.receive('sig 6 0 1'));          // the switch on
+    expect(await chain() === '1110,true,2 2', 'with the switch on the logic shows ' + await chain());
+    await page.evaluate(() => window.__ws.receive('sig 5 0 39.5'));       // within the hysteresis
+    expect(await chain() === '1110,true,2 2', 'at 39.5 °C the logic shows ' + await chain());
+    await page.evaluate(() => { elements.n8.setOffDelay('0.2'); window.__ws.receive('sig 5 0 38.9'); });
+    expect(await chain() === '0010,false,2 2', 'below 39 °C the delay did not hold on: ' + await chain());
+    await page.waitForTimeout(300);
+    expect(await chain() === '0001,false,2 2', 'the off delay did not end: ' + await chain());
+    await page.evaluate(() => elements.n8.setOffDelay('5'));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const logicSaved = await sent(page);
+    const logicHex = hex(logicSaved[0]);
+    expect(logicSaved.length === 1
+        && logicHex.includes('400300040c' + '000500' + '00' + '42200000' + '3f800000')
+        && logicHex.includes('4101000706' + '000400' + '000600')
+        && logicHex.includes('440100080b' + '000700' + '00000000' + '00001388')
+        && logicHex.includes('4301000903' + '000800')
+        && logicHex.includes('2101000304' + '000800' + '01')
+        && logicHex.includes('2001000203' + '000900'),
+        'the logic was not saved as expected: ' + logicHex);
+    packets.push(...logicSaved);
+
+    // The device sends each logic element's state: its node, its tile and the light wired to it show it.
+    const compareState = () => page.evaluate(() => [elements.n4.value, elements.n10.on,
+        elements.n4.gElm.children[5].getAttribute('fill'),
+        [...document.querySelectorAll('#command .control-reading')].find(t => t.title === 'Compare')?.querySelector('.state').textContent].join());
+    await page.evaluate(() => window.__ws.receive('sig 4 0 1'));
+    expect(await compareState() === 'true,true,#4CAF50,On', 'the compare on shows ' + await compareState());
+    await page.evaluate(() => window.__ws.receive('sig 4 0 0'));
+    expect(await compareState() === 'false,false,none,Off', 'the compare off shows ' + await compareState());
+    // While the device reports it, its state wins; once it goes quiet, the browser's.
+    await page.evaluate(() => window.__ws.receive('sig 5 0 45'));
+    expect(await compareState() === 'false,false,none,Off', 'the browser overrode the device: ' + await compareState());
+    await page.waitForTimeout(2700);
+    expect(await compareState() === 'true,true,#4CAF50,On', 'after the device went quiet the compare shows ' + await compareState());
+    expect(await page.evaluate(() => elements.n4.gElm.children[5].getAttribute('stroke-dasharray')) === '2 2',
+        'the browser\'s state is not marked');
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // Reconnecting restores the logic, its settings and wires; saving it again changes nothing.
+    ({ page, errors } = await open(browser));
+    await connect(page, logicSaved[0]);
+    const logicRestored = await page.evaluate(() => ({
+        compare: [elements.n4.below, elements.n4.threshold, elements.n4.hysteresis, elements.n4.shown, elements.n4.sourceID()].join(),
+        and: elements.n7.inConns().map(c => c.start.node.name).join(),
+        delay: [elements.n8.onMs, elements.n8.offMs, elements.n8.sourceID()].join(),
+        not: elements.n9.sourceID(),
+        outputs: [elements.n3.sourceID(), elements.n2.sourceID(), elements.n10.sourceID()].join(),
+        wires: gEdges.length,
+    }));
+    expect(JSON.stringify(logicRestored) === JSON.stringify({
+        compare: 'false,40,1,true,5', and: 'n4,n6', delay: '0,5000,7', not: 8, outputs: '8,9,4', wires: 8,
+    }), 'the logic was not restored: ' + JSON.stringify(logicRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const logicResaved = await sent(page);
+    expect(logicResaved.length === 1 && hex(logicResaved[0]) === logicHex, 'saving the restored logic changed the config');
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.close();
+
+    // ── More logic: a scale for a fan's PWM, an over-temperature latch that blinks
+    // the LED until reset, a toggle and a pulse from one button, and a max ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    const more = await page.evaluate(() => {
+        [MSG_HW_CORE, MSG_LOGIC_SCALE, MSG_HW_PWM, MSG_LOGIC_COMPARE, MSG_LOGIC_LATCH, MSG_LOGIC_BLINK,
+         MSG_UI_BUTTON, MSG_LOGIC_TOGGLE, MSG_UI_BUTTON, MSG_LOGIC_MAX, MSG_HW_ADC, MSG_LOGIC_PULSE,
+         MSG_UI_INDICATOR].forEach(addNode);        // n4 to n16
+        const [scale, cmp, latch, blink, toggle, max, pulse] = ['n5', 'n7', 'n8', 'n9', 'n11', 'n13', 'n15'].map(n => elements[n]);
+        const rejected = scale.setEnd(0, '1') === false && scale.setEnd(1, 'x') === false
+            && pulse.setTime('0') === false && blink.setOffTime('0') === false;
+        scale.setEnd(0, '30'); scale.setEnd(1, '60');
+        cmp.setThreshold('50');
+        blink.setOnTime('0.1'); blink.setOffTime('0.1');
+        pulse.setTime('0.2');
+        const wired = [
+            createEdge('n4', 'n5'), createEdge('n5', 'n6'),       // temperature → scale → PWM duty
+            createEdge('n4', 'n7'), createEdge('n7', 'n8'),       // → compare → latch: set
+            createEdge('n10', 'n8'),                              // button → latch: reset
+            createEdge('n8', 'n9'), createEdge('n9', 'n2'),       // latch → blink → LED
+            createEdge('n12', 'n11'), createEdge('n11', 'n3'),    // button → toggle → GPO
+            createEdge('n4', 'n13'), createEdge('n14', 'n13'),    // temperature, ADC → max
+            createEdge('n12', 'n15'), createEdge('n15', 'n16'),   // button → pulse → light
+        ].every(e => e !== null);
+        return {
+            rejected, wired,
+            pwm: elements.n6.dutySource?.name,
+            roles: [latch.setSource?.name, latch.resetSource?.name].join(),
+            types: createEdge('n12', 'n5') === null && createEdge('n5', 'n8') === null    // a button into a scale; a scale into a latch
+                && elements.n6.takesType(max) && !elements.n2.takesType(scale),
+            unit: max.unit,
+            outputs: [scale, max].map(n => n.outputs[0].type).join() + ',' + latch.outputs[0].type,
+        };
+    });
+    expect(more.rejected, 'out-of-range settings were accepted');
+    expect(more.wired && more.pwm === 'n5' && more.roles === 'n7,n10', 'the logic was not wired: ' + JSON.stringify(more));
+    expect(more.types && more.unit === '°C' && more.outputs === 'float,float,bool', 'logic types are wrong: ' + JSON.stringify(more));
+
+    // In the browser: 45 °C is half way from 30 to 60; the max picks it over the ADC's 1.2 V.
+    const logicValues = () => page.evaluate(() => ['n5', 'n7', 'n8', 'n13'].map(n => elements[n].value).join());
+    await page.evaluate(() => { window.__ws.receive('sig 4 0 45'); window.__ws.receive('sig 14 0 1.2'); });
+    expect(await logicValues() === '0.5,false,false,45', 'at 45 °C: ' + await logicValues());
+    // Above 50 °C the latch sets and the blink starts; back below, the latch holds.
+    await page.evaluate(() => window.__ws.receive('sig 4 0 55'));
+    expect(await logicValues() === '0.8333333333333334,true,true,55', 'at 55 °C: ' + await logicValues());
+    await page.evaluate(() => window.__ws.receive('sig 4 0 20'));
+    expect(await logicValues() === '0,false,true,20', 'at 20 °C the latch did not hold, or the scale did not clamp: ' + await logicValues());
+    const blinks = await page.evaluate(async () => {
+        const seen = [];
+        for (let i = 0; i < 6; i++) { seen.push(elements.n9.value ? 1 : 0); await new Promise(r => setTimeout(r, 70)); }
+        return seen.join('');
+    });
+    expect(/^1+0+1+/.test(blinks), 'the blink did not turn over: ' + blinks);
+    // The reset button resets the latch, which stops the blink.
+    await page.evaluate(() => { const b = elements.n10; b.value = true; b.emit(1); b.value = false; b.emit(0); });
+    expect(await page.evaluate(() => [elements.n8.value, elements.n9.value].join()) === 'false,false', 'reset left the latch or blink on');
+    // One button: the toggle turns over on each press; the pulse is on for 0.2 s from each.
+    const press = () => page.evaluate(() => { const b = elements.n12; b.value = true; b.emit(1); b.value = false; b.emit(0);
+        return [elements.n11.value, elements.n15.value, elements.n16.on].join(); });
+    expect(await press() === 'true,true,true', 'the first press');
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => [elements.n15.value, elements.n16.on].join()) === 'false,false', 'the pulse did not end');
+    expect(await press() === 'false,true,true', 'the second press');
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const moreSaved = await sent(page);
+    const moreHex = hex(moreSaved[0]);
+    expect(moreSaved.length === 1
+        && moreHex.includes('4501000514' + '000400' + '01' + '41f00000' + '42700000' + '00000000' + '3f800000')
+        && moreHex.includes('4b01000806' + '000700' + '000a00')
+        && moreHex.includes('490100090b' + '000800' + '00000064' + '00000064')
+        && moreHex.includes('4a01000b03' + '000c00')
+        && moreHex.includes('4701000d06' + '000400' + '000e00')
+        && moreHex.includes('4801000f07' + '000c00' + '000000c8'),
+        'the logic was not saved as expected: ' + moreHex);
+    packets.push(...moreSaved);
+    await page.close();
+
+    // Reconnecting restores it all; saving it again changes nothing. A latch saved
+    // with only a reset source keeps it as its reset.
+    ({ page, errors } = await open(browser));
+    await connect(page, moreSaved[0]);
+    const moreRestored = await page.evaluate(() => ({
+        scale: [...elements.n5.range, elements.n5.clamp, elements.n5.sourceID()].join(),
+        latch: [elements.n8.setSource?.name, elements.n8.resetSource?.name].join(),
+        times: [elements.n9.onMs, elements.n9.offMs, elements.n15.onMs].join(),
+        max: elements.n13.inConns().map(c => c.start.node.name).join(),
+        pwm: elements.n6.dutySource?.name,
+    }));
+    expect(JSON.stringify(moreRestored) === JSON.stringify({ scale: '30,60,0,1,true,4', latch: 'n7,n10', times: '100,100,200', max: 'n4,n14', pwm: 'n5' }),
+        'the logic was not restored: ' + JSON.stringify(moreRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const moreResaved = await sent(page);
+    expect(moreResaved.length === 1 && hex(moreResaved[0]) === moreHex, 'saving the restored logic changed the config');
+    const resetOnly = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x10, 0, 0, 1, 0,                                   // button n1
+            0x4B, 1, 0, 2, 6, 0, 0, 0, 0, 1, 0,                 // latch n2: no set, reset ← n1
+        ])));
+        return [elements.n2.setSource?.name, elements.n2.resetSource?.name].join();
+    });
+    expect(resetOnly === ',n1', 'a latch with only a reset source restored as ' + resetOnly);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();
