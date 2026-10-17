@@ -1,5 +1,5 @@
 # Check that src/protocol.h and ui/content/protocol.js define the same PKT_, MSG_,
-# FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_, KEYBOARD_, CORE_,
+# FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_, KEYBOARD_, CORE_, LM35_,
 # LOGIC_, COMPARE_, DELAY_ and SCALE_
 # constants with the same values.
 #
@@ -17,9 +17,9 @@ function num(s,    i, c, v) {
 
 FNR == 1 { file++ }
 
-file == 1 && /^#define (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LOGIC|COMPARE|DELAY|SCALE)_[A-Z0-9_]+[ \t]/ { c[$2] = num($3) }
+file == 1 && /^#define (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LM35|LOGIC|COMPARE|DELAY|SCALE)_[A-Z0-9_]+[ \t]/ { c[$2] = num($3) }
 
-file == 2 && /^const (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LOGIC|COMPARE|DELAY|SCALE)_[A-Z0-9_]+[ \t]*=/ {
+file == 2 && /^const (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LM35|LOGIC|COMPARE|DELAY|SCALE)_[A-Z0-9_]+[ \t]*=/ {
     line = $0
     sub(/^const /, "", line); sub(/;.*/, "", line)
     split(line, kv, /[ \t]*=[ \t]*/)

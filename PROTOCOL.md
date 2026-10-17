@@ -235,13 +235,14 @@ Core 0 sends the most recently connected client WebSocket text frames:
   all within a second.
 - **In the UI.** A `sig` frame goes to the node `nI`. A hardware input or logic
   element hands the value to the nodes wired to it: a [core temperature](#core-temperature)
-  in °C, an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
+  in °C, an [ADC](#adc-inputs) in volts, an [LM35](#lm35-temperature-sensors) in °C, a [GPIO input](#gpio-inputs) or
   [logic](#logic) on from 0.5. Other nodes, such as a button or slider, ignore theirs,
   and so does an element the page doesn't have. The UI ignores `uptime N`.
 
 ```text
 sig 1 0 31.27               # core temperature n1: 31.27 °C
 sig 10 0 1.65               # ADC n10: 1.65 V
+sig 12 0 22.4               # LM35 n12: 22.4 °C
 sig 19 0 1                  # GPIO input n19: on
 sig 6 1 0.502               # 2D slider n6, Y: 0.502
 ```
@@ -268,7 +269,7 @@ Every packet payload except `0D` is a sequence of messages:
 | Byte | Field | Notes |
 |---|---|---|
 | 0 | Message type | Which kind of element; see [Element types](#element-types) |
-| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4B`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Other bits are 0. |
+| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC, `33` LM35) or a logic element (`40`–`4B`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Other bits are 0. |
 | 2–3 | Element ID | Big endian |
 | 4 | Payload length | Bytes after this header, 0–255 |
 | 5… | Payload | Depends on the type |
@@ -346,6 +347,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
+| `33` | `MSG_HW_LM35` | HW input: LM35 temperature sensor on an ADC pin | Implemented |
 | `40` | `MSG_LOGIC_COMPARE` | Logic: a floating input above or below a threshold | Implemented |
 | `41` | `MSG_LOGIC_AND` | Logic: on while every input is on | Implemented |
 | `42` | `MSG_LOGIC_OR` | Logic: on while any input is on | Implemented |
@@ -378,6 +380,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `30` Core temperature | 0 | None: the chip has one sensor. See [Core temperature](#core-temperature). |
 | `31` GPIO input | 2 | Byte 0: the GPIO pin, a [usable](#gpio-pins) one (UI default 3). Byte 1: options; bits 0–1 (`GPI_PULL_MASK`) the pin's pull, `GPI_PULL_NONE` (0), `GPI_PULL_UP` (1) or `GPI_PULL_DOWN` (2, UI default); bit 2 (`GPI_INVERT`): 0 = on while the pin is high (UI default), 1 = on while it is low. Other bits are 0. See [GPIO inputs](#gpio-inputs). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
+| `33` LM35 | 1 | Byte 0: the ADC channel its output is wired to, as an ADC's (UI default 0). See [LM35 temperature sensors](#lm35-temperature-sensors). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
 | `22` PWM | 17 | See below |
@@ -407,9 +410,9 @@ changing them cuts the device off the network.
 - The UI offers only the usable pins, and keeps the default pin when a config names
   another one.
 - **One node per pin.** A GPO, PWM or GPIO input is offered only the pins no other node
-  uses, and an ADC only the channels whose pin (GPIO 26–28) no other node uses. A new
+  uses, and an ADC or LM35 only the channels whose pin (GPIO 26–28) no other node uses. A new
   node takes its default pin (GPO 1, PWM 2, GPIO input 3) if it is free, otherwise the
-  lowest free one; a new ADC the first free channel.
+  lowest free one; a new ADC or LM35 the first free channel.
 - **One PWM per slice.** The pins of a PWM slice share its counter, so its frequency:
   GPIO *n* is on slice (*n* >> 1) & 7, so GPIO 0, 1, 16 and 17 are slice 0, GPIO 2, 3,
   18 and 19 slice 1, and so on. A PWM is not offered any pin on another PWM's slice,
@@ -436,8 +439,8 @@ follows an input: a source element whose value maps linearly onto it, 0 → min 
 
 - **A constant parameter is constant:** a PWM whose duty cycle and frequency are both
   constant runs from setup and ignores its inputs.
-- **Only floating sources** the device has (a slider, a 2D slider's X or Y, or an ADC)
-  can drive a PWM; see [Wire types](#wire-types).
+- **Only floating sources** the device has (a slider, a 2D slider's X or Y, an ADC, an LM35 or the core
+  temperature) can drive a PWM; see [Wire types](#wire-types).
 - **A logarithmic frequency** (`PWM_FREQ_LOG`) is min × (max / min)^value: each step
   of the input multiplies it by the same factor, so a slider spends as long on
   100–1000 Hz as on 1–10 kHz. With 100 and 10000 Hz, 0.5 gives 1 kHz (5050 Hz when
@@ -471,15 +474,15 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button, `31` GPIO input, `40`–`44` and `48`–`4B` logic | `20` LED, `21` GPO, `23` USB keyboard, `01` light, `41`–`44` and `48`–`4B` logic | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max | `22` PWM, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` LM35, `45` scale, `46` min, `47` max | `22` PWM, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or an LM35 in °C |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
-ADC or core temperature drives a PWM on the device and a plot in the browser, and a
+ADC, LM35 or core temperature drives a PWM on the device and a plot in the browser, and a
 GPIO input an LED, GPO or USB keyboard on the device and a light in the browser. A PWM
 maps a floating value onto its range as a fraction of the source's full scale: 1 for
-a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature, and
-for a min or max that of its first wired input.
+a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature, `LM35_TEMP_FULL` (100) °C
+for an LM35, and for a min or max that of its first wired input.
 The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
 
@@ -538,16 +541,16 @@ When a config arrives, the UI rebuilds the graph from it:
   graph it has, so a new device starts from the built-in demo graph.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, and the logic `40`–`4B`)
+  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, `33` LM35, and the logic `40`–`4B`)
   becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC or LM35 its channel, a GPIO input its pin, pull and when it is on, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
-  restored node of the output's [type](#wire-types): an LED's, GPO's, USB keyboard's or light's button, GPIO input or logic, a plot's or compare's slider, 2D slider, ADC or core temperature,
+  restored node of the output's [type](#wire-types): an LED's, GPO's, USB keyboard's or light's button, GPIO input or logic, a plot's or compare's slider, 2D slider, ADC, LM35 or core temperature,
   each of an AND's, OR's, min's or max's inputs, a latch's set and reset sources, the other logic's input, and the floating sources of a PWM's parameters that follow an input. A reference without an output
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
@@ -575,7 +578,8 @@ that time.
 - **The history lives in the page.** It is lost on reload, and kept for the largest
   window (255 s), so a wider window shows what was already received.
 - **The unit** is shown after the value. By default it is the source's: V for an
-  [ADC](#adc-inputs), °C for a [core temperature](#core-temperature), none for a
+  [ADC](#adc-inputs), °C for a [core temperature](#core-temperature) or an
+  [LM35](#lm35-temperature-sensors), none for a
   slider. A unit set in the plot's settings (up to 16 bytes) overrides it, and is
   saved in the plot's message; clearing it, or setting "auto", goes back to the
   source's.
@@ -609,7 +613,7 @@ s0 n1.0 button = 0
 
 ### Hardware input tiles
 
-A hardware input (core temperature, GPIO input, ADC) or a [logic](#logic) element shows
+A hardware input (core temperature, GPIO input, ADC, LM35) or a [logic](#logic) element shows
 a tile in the Command view only if its settings say so: "Command view: Show | Hide", Hide by default. A light or
 plot wired to it shows its values either way. The choice is saved as `MSG_FLAG_SHOWN`
 in its message's flags; a message without it, such as one saved before the choice
@@ -714,6 +718,46 @@ An ADC on ADC1 (GPIO 27) driving a PWM's duty cycle, and drawn on a plot:
 ```hex example=adc-config
 0A 00 25                                        # Config, 37 bytes
 32 02 00 01 01  01                              # ADC n1 on ADC1, its tile shown
+22 01 00 02 11  00 01 00 02 03 E8 01            # PWM n2: duty ← n1, pin 2, 1000 Hz, duty from input
+                32 00 64  00 00 00 00 64 27 10  #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
+02 01 00 03 04  00 01 00 0A                     # plot n3 ← n1, 10 s
+```
+
+### LM35 temperature sensors
+
+An LM35 node (`33`) is a floating source: an LM35 temperature sensor whose output pin
+is wired to one of the device's analog inputs, ADC0 to ADC2 on GPIO 26 to 28. The
+sensor puts out 10 mV per °C (`LM35_MV_PER_C`), so its value is the temperature in °C,
+the reading in mV ÷ 10, and its unit is °C. The Command view can show it on a tile
+(see [Hardware input tiles](#hardware-input-tiles)), and a plot wired to it draws it.
+
+- **Wiring.** The LM35 needs 4 V to 30 V: its +Vs pin to VBUS (pin 40, 5 V from USB)
+  or VSYS (pin 39), GND to a ground pin, and Vout to the channel's pin. Its output
+  stays within 0 to 1.5 V, well inside the ADC's 3.3 V, whatever its supply.
+- **Range.** An LM35DZ reads 0 to 100 °C. The basic wiring above can't go below about
+  2 °C: its output can't go below ground. An LM35 is accurate to about ±1 °C; one ADC
+  count is about 0.08 °C.
+- **On the device.** Core 1 reads the channel every 100 ms: 64 reads averaged, then
+  smoothed as the [core temperature](#core-temperature) is, so each sample moves the
+  temperature 1/8 of the way to it. Its [signal](#signals) is the temperature in °C,
+  which changes when the smoothed temperature has moved 0.1 °C from it. A PWM takes it
+  as a fraction of `LM35_TEMP_FULL` (100) °C, clamped: 25 °C puts a PWM's duty 25 %
+  of the way from its min to its max.
+- **In the browser.** Core 0 sends its signal as a `sig`
+  [telemetry text frame](#telemetry-text-frames); the node hands it to its plots.
+- **After a save.** The device reads a channel once a saved config has an LM35 node on
+  it, so a new node's tile shows `–` until the graph is saved.
+- **One sensor to a channel.** The UI doesn't offer its pin to another node (see
+  [GPIO pins](#gpio-pins)). Core 1 refuses a GPO, PWM, GPIO input, ADC or other LM35
+  on the same pin from an older config: inputs are set up before outputs, and the first
+  on a pin wins (see [Known issues](#known-issues)).
+
+An LM35 on ADC0 (GPIO 26) driving a fan's PWM duty cycle, 0 % at 0 °C to 100 % at
+100 °C, and drawn on a plot:
+
+```hex example=lm35-config
+0A 00 25                                        # Config, 37 bytes
+33 02 00 01 01  00                              # LM35 n1 on ADC0, its tile shown
 22 01 00 02 11  00 01 00 02 03 E8 01            # PWM n2: duty ← n1, pin 2, 1000 Hz, duty from input
                 32 00 64  00 00 00 00 64 27 10  #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
 02 01 00 03 04  00 01 00 0A                     # plot n3 ← n1, 10 s
@@ -1085,6 +1129,7 @@ Every source in the config has its signals, wired or not:
 | `40`–`4B` [logic](#logic) | 1 | 0 off, 1 on; a scale, min or max its value | 0, then its state at the first scan |
 | `31` GPIO input | 1 | 0 off, 1 on | the pin when it is set up |
 | `32` ADC | 1 | volts, 0 to 3.3 | 0, then its first reading |
+| `33` LM35 | 1 | °C | 0, then its first reading |
 
 - **The browser sets a UI source's** (button, slider, 2D slider) with a
   [command](#01-command): each byte becomes byte ÷ 255.
@@ -1105,6 +1150,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | Node | Reads | Writes | Does |
 |---|---|---|---|
 | `32` ADC | its channel | its signal | See [ADC inputs](#adc-inputs) |
+| `33` LM35 | its channel | its signal | See [LM35 temperature sensors](#lm35-temperature-sensors) |
 | `31` GPIO input | its pin | its signal | See [GPIO inputs](#gpio-inputs) |
 | `30` core temperature | the chip's sensor | its signal | See [Core temperature](#core-temperature) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
@@ -1127,7 +1173,7 @@ of the config; then the **logic**, each after the logic it reads; then the
   left them.
 - **Left out:** the elements core 1 doesn't run (plots, lights, labels, positions,
   wires, networking), messages of the wrong length (the [payloads](#control-payloads)
-  give the lengths), an ADC channel over 2, a compare with a threshold or hysteresis
+  give the lengths), an ADC or LM35 channel over 2, a compare with a threshold or hysteresis
   that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
   of its range, a scale whose ranges aren't finite numbers or whose input range is
   empty, and anything over the limits:
@@ -1161,6 +1207,15 @@ the ADC's volts as a fraction of 3.3:
 s0 n1.0 adc = 0
 ADC n1 channel 1 -> s0
 PWM n2 pin 2 options 01 duty 50 0-100 <- s0 / 3.3 freq 1000 100-10000 <- - / 1
+```
+
+For the [lm35-config example](#lm35-temperature-sensors): the plot is left out, and
+the PWM takes the temperature as a fraction of 100 °C:
+
+```program example=lm35-config
+s0 n1.0 lm35 = 0
+LM35 n1 channel 0 -> s0
+PWM n2 pin 2 options 01 duty 50 0-100 <- s0 / 100 freq 1000 100-10000 <- - / 1
 ```
 
 For the [core-config example](#core-temperature): the PWM takes the temperature as a
@@ -1297,6 +1352,7 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    node's hardware in program order, inputs first:
    - an ADC takes its channel's pin, GPIO 26 + channel (several ADC nodes may share a
      channel);
+   - an LM35 takes its channel's pin, and no other node may share it;
    - a GPIO input takes its pin, sets its pull, and reads it for its signal;
    - a GPO takes its pin as an output; a PWM takes its pin, and starts its slice at
      the first scan;
@@ -1316,6 +1372,10 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - **Core temperature:** every 10th scan (100 ms) the sensor is read and smoothed
      (see [Core temperature](#core-temperature)); each core temperature signal is the
      temperature once it has moved 0.1 °C from it.
+   - **LM35:** every 10th scan (100 ms) each channel with an LM35 node is read 64
+     times, averaged and smoothed (see [LM35 temperature sensors](#lm35-temperature-sensors));
+     its signal is the temperature, reading × 3.3 / 4095 × 100 °C, once it has moved
+     0.1 °C from it.
 3. **The logic**, in program order, writes its signals from the signals it reads
    (see [Logic](#logic)).
 4. **The outputs**, in program order, each from the signals it reads, when the state
@@ -1338,7 +1398,8 @@ A PWM's duty cycle and frequency are each constant, or follow a signal (its
 - **The fraction.** A parameter that follows a signal takes it as a fraction of the
   source's full scale, clamped to 0–1: the signal ÷ 1 for a button, slider or 2D
   slider, ÷ 3.3 for an ADC's volts, ÷ `CORE_TEMP_FULL` (100) for the core
-  temperature's °C. A signal wired to nothing reads 0, so the parameter is at its min.
+  temperature's °C, ÷ `LM35_TEMP_FULL` (100) for an LM35's °C. A signal wired to
+  nothing reads 0, so the parameter is at its min.
 - **Duty:** min + (max − min) × fraction, in percent; min may be above max, which
   inverts the input.
 - **Frequency:** min + (max − min) × fraction, or with `PWM_FREQ_LOG` min × (max /

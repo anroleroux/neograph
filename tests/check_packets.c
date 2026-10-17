@@ -56,12 +56,12 @@ static bool has_refs(uint8_t type) {
 
 /* A source reference must name an output of a source the output takes (PROTOCOL.md,
    "Wire types"): a button, GPIO input or logic for an LED, GPO, keyboard, light, AND, OR, NOT or
-   delay, and a slider, 2D slider, ADC or the core temperature for a PWM, plot or compare. `types` lists the types it
+   delay, and a slider, 2D slider, ADC, LM35 or the core temperature for a PWM, plot or compare. `types` lists the types it
    may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
                                    MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
                                    MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, 0 };
-static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE,
+static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_LM35,
                                     MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, 0 };
 
 static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_t *types, const char *what) {
@@ -108,7 +108,7 @@ static void check_config(const uint8_t *p, size_t len) {
             if (it.len < r + 1 || it.len > r + 1 + 16) fail("plot message is not a source and window plus a unit of up to 16");
             else if (it.pay[r] == 0) fail("plot window is 0 seconds");
             else check_source(p, len, msg_ref_at(it.pay, it.flags), FLOATING,
-                              "a plot is wired from something other than a slider, an ADC or the core temperature");
+                              "a plot is wired from something other than a slider, an ADC, an LM35 or the core temperature");
             break;
         case MSG_UI_BUTTON:
             /* The device ignores it; the UI restores the options byte. */
@@ -127,6 +127,10 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_HW_ADC:
             if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
             else if (it.pay[0] >= ADC_CHANNELS) fail("ADC channel is not below ADC_CHANNELS");
+            break;
+        case MSG_HW_LM35:
+            if (it.len != 1) fail("LM35 message is not 1 byte; the device would skip it");
+            else if (it.pay[0] >= ADC_CHANNELS) fail("LM35 channel is not below ADC_CHANNELS");
             break;
         case MSG_LOGIC_COMPARE:
         case MSG_LOGIC_AND:
@@ -181,8 +185,8 @@ static void check_config(const uint8_t *p, size_t len) {
             else if (pwm.freq_source.id && !(pwm.options & PWM_FREQ_INPUT))
                 fail("a PWM has a frequency source but a constant frequency");
             else {
-                check_source(p, len, pwm.duty_source, FLOATING, "a PWM's duty is wired from something other than a slider, an ADC or the core temperature");
-                check_source(p, len, pwm.freq_source, FLOATING, "a PWM's frequency is wired from something other than a slider, an ADC or the core temperature");
+                check_source(p, len, pwm.duty_source, FLOATING, "a PWM's duty is wired from something other than a slider, an ADC, an LM35 or the core temperature");
+                check_source(p, len, pwm.freq_source, FLOATING, "a PWM's frequency is wired from something other than a slider, an ADC, an LM35 or the core temperature");
             }
             break;
         }
@@ -295,7 +299,8 @@ int main(int argc, char **argv) {
         config_element_iterator_init(&it, p + 3, data_length);
         while (it.next(&it))
             if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN)) fail("a message's flags set an unknown bit");
-            else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
+            else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_LM35
+                     && it.type != MSG_HW_GPI
                      && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_LAST))
                 fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");

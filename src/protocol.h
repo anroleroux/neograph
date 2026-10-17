@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_ and SCALE_ constants are mirrored in
+ * KEYBOARD_, CORE_, LM35_, LOGIC_, COMPARE_, DELAY_ and SCALE_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -36,7 +36,7 @@
    sources had several outputs. */
 #define MSG_FLAG_OUTPUT         0x01
 
-/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, LM35) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
@@ -62,6 +62,7 @@
 #define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
+#define MSG_HW_LM35             0x33    /* an LM35 temperature sensor on an analog input pin */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
    source itself, with one output, 0: boolean, or floating for a scale, min or max. */
@@ -156,6 +157,12 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 /* Core temperature (MSG_HW_CORE): on the device it drives outputs with its value from
    0 °C (0) to CORE_TEMP_FULL °C (VALUE_FULL), clamped. */
 #define CORE_TEMP_FULL          100
+
+/* LM35 temperature sensor (MSG_HW_LM35) payload byte 0: its ADC channel, as an ADC input's.
+   Its output is LM35_MV_PER_C mV per °C above 0 °C. On the device it drives outputs with
+   its value from 0 °C (0) to LM35_TEMP_FULL °C (VALUE_FULL), clamped: an LM35DZ's range. */
+#define LM35_MV_PER_C           10
+#define LM35_TEMP_FULL          100
 
 /* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
    (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit

@@ -64,7 +64,7 @@
      HWI UIO LGC          row 3: HW inputs, UI outputs, logic
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM                 e.g. UII's or HWO's
-     TMP ADC GPI
+     TMP ADC GPI LM35
      PLT LGT
      KEY
      CMP AND OR NOT DLY   (logic: rows 4 to 6)

@@ -319,13 +319,13 @@ static uint8_t element_type(const struct protocol_example *ex, uint16_t id)
     return 0;
 }
 
-/* A floating output the device has: a slider's, a 2D slider's X or Y, an ADC's or the core temperature's. */
+/* A floating output the device has: a slider's, a 2D slider's X or Y, an ADC's, an LM35's or the core temperature's. */
 static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
 {
     if (src.id == 0) return;
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
-                             || type == MSG_HW_CORE || program_logic_floating(type), ex->name);
+                             || type == MSG_HW_CORE || type == MSG_HW_LM35 || program_logic_floating(type), ex->name);
     TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);
 }
 
@@ -381,6 +381,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_KEYBOARD & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_LM35 & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
@@ -530,6 +531,33 @@ void test_gpi_config(void)
     assert_message(&it, MSG_HW_LED, 2, 3);
     assert_message(&it, MSG_UI_INDICATOR, 3, 3);
     TEST_ASSERT_FALSE(it.next(&it));
+}
+
+/* An LM35 on ADC0 drives a PWM from 0 to LM35_TEMP_FULL °C; one on a channel past ADC2 is left out. */
+void test_lm35_config(void)
+{
+    config_element_iterator it;
+    messages(&it, example("lm35-config"));
+
+    assert_message(&it, MSG_HW_LM35, 1, 1);
+    TEST_ASSERT_EQUAL_HEX8(MSG_FLAG_SHOWN, it.flags);
+    TEST_ASSERT_EQUAL_UINT8(0, it.pay[0]);
+    assert_message(&it, MSG_HW_PWM, 2, 17);
+    assert_message(&it, MSG_UI_GRAPH, 3, 4);
+    TEST_ASSERT_FALSE(it.next(&it));
+
+    const struct protocol_example *ex = example("lm35-config");
+    static hw_program p;
+    program_compile(ex->bytes + PKT_HEADER_LEN, ex->len - PKT_HEADER_LEN, &p);
+    TEST_ASSERT_EQUAL_UINT8(2, p.node_count);
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_LM35, p.nodes[0].type);
+    TEST_ASSERT_EQUAL_UINT8(0, p.nodes[0].pin);
+    TEST_ASSERT_EQUAL_FLOAT(LM35_TEMP_FULL, p.nodes[1].in_full[0]);
+
+    static const uint8_t bad[] = { MSG_HW_LM35, 0, 0, 1, 1, ADC_CHANNELS };
+    program_compile(bad, sizeof bad, &p);
+    TEST_ASSERT_EQUAL_UINT8(0, p.node_count);
+    TEST_ASSERT_EQUAL_UINT8(0, p.signal_count);
 }
 
 void test_light_config(void)
@@ -996,6 +1024,7 @@ int main(void)
     RUN_TEST(test_legacy_config);
     RUN_TEST(test_light_config);
     RUN_TEST(test_gpi_config);
+    RUN_TEST(test_lm35_config);
     RUN_TEST(test_program_examples_match_their_configs);
     RUN_TEST(test_every_config_example_with_hardware_has_a_program);
     RUN_TEST(test_program_signals);

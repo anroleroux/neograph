@@ -22,6 +22,8 @@
 
 /* {{adc-js}} */
 
+/* {{lm35-js}} */
+
 /* {{gpi-js}} */
 
 /* {{keyboard-js}} */
