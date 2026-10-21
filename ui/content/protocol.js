@@ -26,6 +26,11 @@ const MSG_FLAG_OUTPUT        = 0x01;
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
+// Message header byte 1, bit 2: a part of a block (MSG_FLAG_PART): logic the UI wrote
+// for one copy of a block (MSG_SUB). The device runs it as any logic; the UI skips it
+// when it restores the graph, and builds the block's parts again from its definition.
+const MSG_FLAG_PART          = 0x04;
+
 // A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which
 // closes a loop. Logic reads it as the last scan left it. Bits 0-6 are the output.
 const MSG_REF_FEEDBACK       = 0x80;
@@ -71,10 +76,20 @@ const MSG_LOGIC_LATCH        = 0x4B;  // on once set, off once reset; reset wins
 const MSG_LOGIC_COUNTER      = 0x4C;  // counts its input going on, up to a preset; two outputs
 const MSG_LOGIC_LAST         = 0x4C;  // the last logic type: MSG_LOGIC_COUNTER
 
+// Blocks (subroutines): see src/protocol.h.
+const MSG_SUB                = 0x60;  // a copy of a block
+const MSG_SUB_INPUT          = 0x61;  // in a definition: an input, its type then its index
+const MSG_SUB_OUTPUT         = 0x62;  // in a definition: an output, its source, type and index
+const SUB_PORTS_MAX          = 8;     // inputs, and outputs, of a block
+const SUB_TYPE_BOOL          = 0x00;  // a port's type: on/off
+const SUB_TYPE_FLOAT         = 0x01;  // a port's type: a number
+
 // Supporting and networking element types.
 const MSG_STRING             = 0xA0;  // a node's label, keyed by node ID
 const MSG_LAYOUT             = 0xA1;  // a node's position, keyed by node ID
 const MSG_WIRE               = 0xA2;  // the shape of an output's wire, keyed by output ID
+const MSG_SUB_DEF            = 0xA3;  // a block's definition: its name, keyed by definition ID
+const MSG_SUB_PART           = 0xA4;  // one message of a block's definition, whole, keyed by definition ID
 const MSG_DEVICE             = 0xB0;
 const MSG_DEVICE_FIELD       = 0xB1;
 const MSG_NETWORK            = 0xB2;

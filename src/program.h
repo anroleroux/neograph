@@ -77,6 +77,8 @@ typedef struct {
 // Compile a config's payload (its messages, after the packet header) into a
 // program. Messages the device doesn't run (lights, plots, labels, networking)
 // and malformed ones are left out, as are signals and nodes over the limits.
+// A block (MSG_SUB) isn't run itself: its parts are, and a reference to one of its
+// outputs reads what the block's table says that output stands for.
 void program_compile(const uint8_t *payload, size_t len, hw_program *out);
 
 // The signal of an output of a source; PROG_NO_SIGNAL if the program has none.

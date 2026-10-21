@@ -5,7 +5,7 @@ its settings. [PROTOCOL.md](PROTOCOL.md) has the bytes behind each one.
 
 ## Finding a node
 
-The **+** button in the Graph view opens the seven groups. A group opens its nodes
+The **+** button in the Graph view opens the eight groups. A group opens its nodes
 under it. In this document, a node's place is written as `GROUP-BUTTON`: `HWI-TMP` is
 the TMP button in the HWI group.
 
@@ -18,6 +18,7 @@ the TMP button in the HWI group.
 | **USB** | USB: the device acting as a USB device | KEY |
 | **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
 | **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, SCL, MIN, MAX, TGL, LCH, CNT |
+| **SUB** | Blocks: logic you define once and place many times | NEW, then one per block; in a block, IN, OUT |
 
 ## Things every node shares
 
@@ -533,6 +534,64 @@ it blinks all the time.
 
 ---
 
+## SUB: Blocks
+
+A block is a piece of logic you build once and use in several places, like a
+function. It has inputs and outputs of its own. Inside, it is a small graph of logic
+and time nodes; outside, each copy of it is one node, wired like any other.
+
+- **Make one:** **SUB → NEW** makes "Block 1", with one input and one output, and puts
+  a copy of it in the graph.
+- **Edit it:** double-click a copy, or press **Edit block** in its settings. The graph
+  shows the block's inside, with its name in a bar at the top. Add logic from LGC and
+  TM, and inputs and outputs from **SUB → IN** and **SUB → OUT**, and wire them up.
+  Press **‹ Graph** in the bar to go back: every copy takes the change.
+- **Use it again:** in the main graph, **SUB** has a button for each block (its first
+  three letters; point at it for its name). Each press adds another copy.
+- **Each copy is separate:** it has its own state (a toggle in one copy doesn't turn
+  over another) and its own wires. On the device each copy costs as many nodes as
+  the logic inside the block.
+
+A block can hold logic and time nodes, and its inputs and outputs. Buttons, sliders,
+pins, plots and other blocks stay in the main graph and are wired to the copy.
+
+### Block copy
+
+| | |
+|---|---|
+| Category | Logic, run by the device as the logic inside it |
+| Inputs | One per IN in the block, each on/off or a number |
+| Outputs | One per OUT in the block, each on/off or a number |
+| Default label | The block's name |
+
+The node shows the block's name. A wire drawn in goes to the first input of its type
+with nothing wired yet. Each wire leaving it is labelled with the output's label.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Block | 1 to 32 characters | Block N | The block's name, shared by every copy. Copies still labelled with the old name take the new one. |
+| Definition | Edit block | | Opens the block's inside. |
+| Wire from | The block's outputs | The first | With more than one output: which one the next wire you draw leaves from. |
+| One per input | A source of its type, or None | | What each input is wired from. Picking one draws its wire. |
+
+### Block input: `SUB-IN` and output: `SUB-OUT`
+
+Only inside a block. An input is a source inside the block: whatever is wired into
+that input of a copy. An output is wired from inside the block: a copy hands it on
+from that output. They are numbered in the order you add them, and a copy shows
+their labels ("In 1", "Out 1" by default).
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Type | On/off, Number | On/off | What the input or output carries. Changing it takes its wires off, inside the block and on every copy. |
+
+Taking an input or output out of a block takes it, and its wires, off every copy.
+
+Example: a block "Flip" with IN → Toggle → OUT. Two copies: a button → Flip → Flip →
+light. The first copy turns over on each press, the second on every other press.
+
+---
+
 ## Loops
 
 A wire may go back up the graph, from a logic node into logic that drives it. That
@@ -578,3 +637,6 @@ for a longer kick, or to a Counter to count the ticks.
 | SLD, XY (X or Y), ADC, TMP | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
 | SCL, MIN, MAX, CNT (Count) | | ✓ | ✓ | |
+
+A block's copy takes, on each input, and gives, on each output, what the block's IN or
+OUT says: on/off like a button, or a number like a slider.

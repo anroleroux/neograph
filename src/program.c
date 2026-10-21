@@ -214,7 +214,32 @@ static float signal_full(const hw_program *p, uint8_t s) {
     }
 }
 
+// The config program_compile is compiling, where resolve_ref looks blocks up.
+static const uint8_t *compiling;
+static size_t compiling_len;
+
+// What a reference stands for: a reference to an output of a block (MSG_SUB) stands
+// for the reference in the block's table for that output, which may itself name a
+// block's output, up to SUB_PORTS_MAX blocks deep. A feedback wire on the way makes
+// it a feedback one. Not connected if it names an output a block doesn't have, or
+// goes deeper.
+static msg_ref resolve_ref(msg_ref ref) {
+    for (int depth = 0; depth <= SUB_PORTS_MAX; depth++) {
+        config_element_iterator itr;
+        config_element_iterator_init(&itr, compiling, compiling_len);
+        bool block = false;
+        while (!block && itr.next(&itr)) block = itr.type == MSG_SUB && itr.id == ref.id && ref.id;
+        if (!block) return ref;
+        if (!sub_payload_valid(itr.pay, itr.len, itr.flags) || ref.output >= itr.pay[4]) break;
+        bool feedback = ref.feedback;
+        ref = msg_ref_at(itr.pay + 5 + 3 * (itr.pay[3] + ref.output), itr.flags);
+        ref.feedback |= feedback;
+    }
+    return (msg_ref){ 0, 0, 0 };
+}
+
 static uint8_t ref_signal(const hw_program *p, msg_ref ref) {
+    ref = resolve_ref(ref);
     return ref.id ? program_signal(p, ref.id, ref.output) : PROG_NO_SIGNAL;
 }
 
@@ -252,6 +277,8 @@ static void order_logic(hw_program *p, uint8_t first) {
 void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
     p->signal_count = 0;
     p->node_count = 0;
+    compiling = payload;
+    compiling_len = len;
 
     config_element_iterator itr;
     config_element_iterator_init(&itr, payload, len);
@@ -328,7 +355,7 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             || itr.type == MSG_LOGIC_MAX ? itr.len / r
             : itr.type == MSG_LOGIC_LATCH || itr.type == MSG_LOGIC_COUNTER ? 2 : 1;
         for (uint8_t i = 0; i < n->in_count; i++) {
-            msg_ref ref = msg_ref_at(itr.pay + i * r, itr.flags);
+            msg_ref ref = resolve_ref(msg_ref_at(itr.pay + i * r, itr.flags));
             n->in[i] = ref_signal(p, ref);
             if (ref.feedback) n->feedback |= 1 << i;
         }

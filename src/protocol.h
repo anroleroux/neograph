@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_ and COUNTER_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -39,6 +39,11 @@
 /* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
+
+/* Message header byte 1, bit 2: a part of a block (MSG_FLAG_PART): logic the UI wrote
+   for one copy of a block (MSG_SUB). The device runs it as any logic; the UI skips it
+   when it restores the graph, and builds the block's parts again from its definition. */
+#define MSG_FLAG_PART           0x04
 
 /* Control element types (0x00-0x7F): bit 6 set = logic (below); otherwise bit 5 set =
    HW, bit 4 set = input. */
@@ -82,10 +87,25 @@
 #define MSG_LOGIC_COUNTER       0x4C    /* counts its input going on, up to a preset; two outputs */
 #define MSG_LOGIC_LAST          0x4C    /* the last logic type: MSG_LOGIC_COUNTER */
 
+/* Blocks (subroutines): a graph of logic defined once (MSG_SUB_DEF, MSG_SUB_PART) and
+   placed any number of times (MSG_SUB). The device runs each copy's parts
+   (MSG_FLAG_PART), not the block: it only looks a reference to a block's output up in
+   the block's table. A block's payload: its definition's ID, the ID of its first part,
+   its number of inputs and outputs, a source reference for each input, then for each
+   output the source reference it stands for (SUB_PORTS_MAX of each at most). */
+#define MSG_SUB                 0x60    /* a copy of a block */
+#define MSG_SUB_INPUT           0x61    /* in a definition: an input, its type then its index */
+#define MSG_SUB_OUTPUT          0x62    /* in a definition: an output, its source, type and index */
+#define SUB_PORTS_MAX           8       /* inputs, and outputs, of a block */
+#define SUB_TYPE_BOOL           0x00    /* a port's type: on/off */
+#define SUB_TYPE_FLOAT          0x01    /* a port's type: a number */
+
 /* Supporting and networking element types. */
 #define MSG_STRING              0xA0    /* a node's label, keyed by node ID */
 #define MSG_LAYOUT              0xA1    /* a node's position, keyed by node ID */
 #define MSG_WIRE                0xA2    /* the shape of an output's wire, keyed by output ID */
+#define MSG_SUB_DEF             0xA3    /* a block's definition: its name, keyed by definition ID */
+#define MSG_SUB_PART            0xA4    /* one message of a block's definition, whole, keyed by definition ID */
 #define MSG_DEVICE              0xB0
 #define MSG_DEVICE_FIELD        0xB1
 #define MSG_NETWORK             0xB2
@@ -278,6 +298,13 @@ static inline int pwm_payload_read(const uint8_t *pay, uint8_t len, uint8_t flag
     out->freq_min = f[0] << 8 | f[1];
     out->freq_max = f[2] << 8 | f[3];
     return 1;
+}
+
+/* Whether a block's (MSG_SUB) payload is well formed: written with outputs, its
+   counts within SUB_PORTS_MAX, and a reference for each input and output. */
+static inline int sub_payload_valid(const uint8_t *pay, uint8_t len, uint8_t flags) {
+    if (!(flags & MSG_FLAG_OUTPUT) || len < 5 || pay[3] > SUB_PORTS_MAX || pay[4] > SUB_PORTS_MAX) return 0;
+    return len == 5 + 3 * (pay[3] + pay[4]);
 }
 
 /* A 32-bit big-endian number at p. */

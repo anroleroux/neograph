@@ -167,7 +167,8 @@ class uiLogic extends uiComponents {
     createSettings() {
         super.createSettings();
         this.logicSettings(document.getElementById('settings'));
-        document.getElementById('settings').appendChild(shownSetting(this));
+        // Logic in a block's definition shows no tile: its copies' parts don't.
+        if (!scope.def) document.getElementById('settings').appendChild(shownSetting(this));
     }
 
     // Settings of its own, before the Command view choice.
@@ -651,6 +652,9 @@ class uiRoles extends uiLogic {
         this.evaluate();
     }
 
+    // Whether a role may take an output of a source node: any of the right type.
+    roleTakes(role, node, output) { return this.takesType(node, output); }
+
     drivenBy(role, node, output) {
         return this[role + 'Source'] === node && this[role + 'Output'] === output;
     }
@@ -688,13 +692,13 @@ class uiRoles extends uiLogic {
     }
 
     logicSettings(settings) {
-        const choices = Object.values(elements).filter(n => n !== this).flatMap(n => n.outputs
-            .map((out, i) => [n, out, i]).filter(([, , i]) => this.takesType(n, i) && !statelessLoop(n, this))
+        const choices = (role) => Object.values(elements).filter(n => n !== this).flatMap(n => n.outputs
+            .map((out, i) => [n, out, i]).filter(([, , i]) => this.roleTakes(role, n, i) && !statelessLoop(n, this))
             .map(([n, out, i]) => [`${n.name}:${i}`,
                 n.outputs.length > 1 ? `${n.label} ${out.name} (${n.name})` : `${n.label} (${n.name})`]));
         for (const [role, label] of this.roles) {
             const source = this[role + 'Source'];
-            settings.appendChild(selectSetting(label, [['', 'None'], ...choices],
+            settings.appendChild(selectSetting(label, [['', 'None'], ...choices(role)],
                 () => source ? `${source.name}:${this[role + 'Output']}` : '',
                 (pick) => {
                     const [name, output] = pick.split(':');

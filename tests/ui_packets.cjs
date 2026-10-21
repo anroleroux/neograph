@@ -195,15 +195,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB TM LGC | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB TM LGC SUB | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'tm', 'lgc']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'tm', 'lgc', 'sub']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP AND OR NOT SCL MIN MAX TGL LCH CNT', 'the groups show ' + groups.join(', '));
-    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB TM LGC | ', 'clicking the open group again left ' + await menu());
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP AND OR NOT SCL MIN MAX TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO USB TM LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.
@@ -1296,6 +1296,155 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [still, out('n7', 'n5').feedback, out('n7', 'n5').path.hasAttribute('stroke-dasharray')].join();
     });
     expect(broken === 'true,false,false', 'a feedback wire was not made ordinary once its loop was broken: ' + broken);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // ── Blocks: "Flip" turns over each time its input goes on, and counts how often.
+    // Defined once, it is placed twice: the second copy flips on the first's output. ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
+    await page.locator('#add [title="Make a new block"]').dispatchEvent('click');    // copy n4 of Block 1
+    await page.locator('#settings .choice button', { hasText: 'Edit block' }).dispatchEvent('click');
+    const inBlock = await page.evaluate(() => {
+        const shown = (sel) => [...document.querySelectorAll(sel)].filter(b => getComputedStyle(b).display !== 'none')
+            .map(b => b.textContent.trim()).join(' ');
+        toggleAddMenu();
+        toggleAddGroup('sub');
+        return { bar: document.querySelector('#block-bar').hidden ? '' : document.querySelector('#block-bar .name').textContent,
+            groups: shown('#add .group'), sub: shown('#add .node.shown'),
+            led: addNode(MSG_HW_LED) === null, nodes: Object.values(elements).map(e => e.label).join() };
+    });
+    expect(JSON.stringify(inBlock) === JSON.stringify({ bar: 'Block 1', groups: 'TM LGC SUB', sub: 'IN OUT', led: true, nodes: 'In 1,Out 1' }),
+        'the block\'s view is not as expected: ' + JSON.stringify(inBlock));
+    const defined = await page.evaluate(() => {
+        const [inp, out] = Object.values(elements);
+        const out2 = addNode(MSG_SUB_OUTPUT);
+        out2.setType('float');
+        const toggle = addNode(MSG_LOGIC_TOGGLE), counter = addNode(MSG_LOGIC_COUNTER);
+        counter.setPreset('100');
+        const wired = [createEdge(inp.name, toggle.name), createEdge(toggle.name, out.name),
+            createEdge(inp.name, counter.name)].every(e => e);
+        counter.setWireOutput(1);
+        const typed = createEdge(counter.name, out.name) === null && createEdge(counter.name, out2.name) !== null;
+        editingBlock.rename('Flip');
+        return { wired, typed, ids: Object.values(elements).map(e => e.name).join() };
+    });
+    expect(defined.wired && defined.typed, 'the block was not defined: ' + JSON.stringify(defined));
+    await page.locator('#block-bar .back').dispatchEvent('click');
+    const placed = await page.evaluate(() => {
+        const flip = elements.n4;
+        const button = addNode(MSG_UI_BUTTON);
+        button.setAction('momentary');
+        const plot = addNode(MSG_UI_GRAPH);
+        const flip2 = addBlock(flip.def);
+        const light = addNode(MSG_UI_INDICATOR);
+        window.t = { flip: flip.name, button: button.name, plot: plot.name, flip2: flip2.name, light: light.name };
+        flip.setWireOutput(1);
+        const wired = [createEdge(button.name, 'n4'), createEdge('n4', plot.name), createEdge('n4', flip2.name, 0),
+            createEdge(flip2.name, light.name)].every(e => e) && new gEdge(flip, elements.n2, 0);
+        return {
+            t: window.t, label: flip.label + ',' + flip.text,
+            ports: [flip.roles.map(r => r[1] + ':' + r[2]).join(), flip.outputs.map(o => o.name + ':' + o.type).join()].join(' | '),
+            wired: !!wired, led: elements.n2.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            types: createEdge('n4', 'n3') === null,     // a number into a GPO: no (output 1 is active)
+            parts: [flip.partCount, flip2.partCount, flip.base !== flip2.base].join(),
+        };
+    });
+    const t = placed.t;
+    expect(placed.label === 'Flip,Flip' && placed.ports === 'In 1:bool | Out 1:bool,Out 2:float'
+        && placed.wired && placed.led === 'n4:0' && placed.types && placed.parts === '2,2,true',
+        'the block was not placed: ' + JSON.stringify(placed));
+
+    // In the browser: each press flips the first copy and counts; the second copy flips
+    // each time the first goes on.
+    const flips = await page.evaluate(() => {
+        const press = () => { const b = elements[t.button]; b.value = true; b.emit(1); b.value = false; b.emit(0);
+            return [elements.n4.outs.join('/'), elements[t.flip2].outs[0], elements[t.light].on].join(); };
+        return [press(), press(), press()].join(' ');
+    });
+    expect(flips === '1/1,1,true 0/2,1,true 1/3,0,false', 'the blocks did not flip: ' + flips);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const blockSaved = await sent(page);
+    const blockInfo = await page.evaluate((bytes) => {
+        const msgs = configMessages(Uint8Array.from(bytes).slice(3));
+        const of = (type) => msgs.filter(m => m.type === type);
+        return {
+            def: of(MSG_SUB_DEF).map(m => m.id + ':' + new TextDecoder().decode(m.pay)).join(),
+            wrapped: of(MSG_SUB_PART).length,
+            copies: of(MSG_SUB).map(m => [m.id, ...m.pay.slice(0, 5)].join('.')).join(),
+            parts: msgs.filter(m => m.flags & MSG_FLAG_PART).map(m => m.type.toString(16) + '@' + m.id).join(),
+            bases: [elements.n4.base, elements[t.flip2].base].join(),
+            led: [...of(MSG_HW_LED)[0].pay].join('.'),
+        };
+    }, blockSaved[0]);
+    const [b4, b7] = blockInfo.bases.split(',').map(Number);
+    const id7 = Number(t.flip2.slice(1));
+    expect(blockSaved.length === 1 && blockInfo.def === '1:Flip' && blockInfo.wrapped > 0
+        && blockInfo.copies === `4.1.${b4 >> 8}.${b4 & 255}.1.2,${id7}.1.${b7 >> 8}.${b7 & 255}.1.2`
+        && blockInfo.parts === `4a@${b4},4c@${b4 + 1},4a@${b7},4c@${b7 + 1}` && blockInfo.led === '0.4.0',
+        'the blocks were not saved as expected: ' + JSON.stringify(blockInfo));
+    packets.push(...blockSaved);
+
+    // The device reports each copy's parts: the first's toggle off, the second's on.
+    const reportedFlip = await page.evaluate(([a, b]) => {
+        window.__ws.receive(`sig ${a} 0 0`);
+        window.__ws.receive(`sig ${b} 0 1`);
+        return [elements.n4.outs[0], elements[t.flip2].outs[0]].join();
+    }, [b4, b7]);
+    expect(reportedFlip === '0,1', 'the device\'s part was not shown on the block\'s output: ' + reportedFlip);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // Reconnecting restores the blocks; saving again changes nothing. Taking a port out
+    // of the definition takes it, and its wires, off each copy.
+    ({ page, errors } = await open(browser));
+    await connect(page, blockSaved[0]);
+    const blockRestored = await page.evaluate((t) => ({
+        defs: [...subDefs.values()].map(d => d.name + ':' + d.nodes().map(n => n.label).join('/')).join(),
+        copies: ['n4', t.flip2].map(n => [elements[n].def?.name, elements[n].base, elements[n].roles.length,
+            elements[n].outputs.length].join('.')).join(),
+        wires: gEdges.map(e => e.start.node.name + ':' + e.start.output + '>' + e.end.node.name).join(),
+    }), t);
+    const wanted = [`${t.button}:0>n4`, `n4:1>${t.plot}`, `n4:0>${t.flip2}`, `${t.flip2}:0>${t.light}`, 'n4:0>n2'];
+    expect(blockRestored.defs === 'Flip:In 1/Out 1/Out 2/Toggle/Counter'
+        && blockRestored.copies === `Flip.${b4}.1.2,Flip.${b7}.1.2`
+        && wanted.every(w => blockRestored.wires.split(',').includes(w)),
+        'the blocks were not restored: ' + JSON.stringify(blockRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const blockResaved = await sent(page);
+    expect(blockResaved.length === 1 && hex(blockResaved[0]) === hex(blockSaved[0]), 'saving the restored blocks changed the config');
+    // Saving from inside the block updates its copies in the main graph.
+    const portGone = await page.evaluate((t) => {
+        openBlock(elements.n4.def);
+        Object.values(elements).find(e => e.label === 'Out 2').remove();
+        saveGraph();
+        closeBlock();
+        return [elements.n4.outputs.length, elements[t.plot].inConns().length, elements[t.flip2].outputs.length,
+            gEdges.every(e => !e.removed)].join();
+    }, t);
+    packets.push(...await sent(page));
+    expect(portGone === '1,0,1,true', 'a port taken out of the definition was left on its copies: ' + portGone);
+    // The block-config example in PROTOCOL.md restores as it says.
+    const example = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0xA3, 0, 0, 1, 4, 0x46, 0x6C, 0x69, 0x70,
+            0xA4, 0, 0, 1, 7, 0x61, 1, 0, 1, 2, 0, 0,
+            0xA4, 0, 0, 1, 10, 0x62, 1, 0, 2, 5, 0, 3, 0, 0, 0,
+            0xA4, 0, 0, 1, 8, 0x4A, 1, 0, 3, 3, 0, 1, 0,
+            0x10, 0, 0, 1, 1, 1,
+            0x60, 1, 0, 2, 11, 1, 0, 10, 1, 1, 0, 1, 0, 0, 10, 0,
+            0x4A, 5, 0, 10, 3, 0, 1, 0,
+            0x20, 1, 0, 3, 3, 0, 2, 0,
+        ])));
+        const copy = elements.n2;
+        return [Object.keys(elements).join(' '), copy.def.name, copy.base, copy.in0Source?.name,
+            elements.n3.inConns().map(c => c.start.node.name).join(), copy.partMessages().join('.'), idCounter].join();
+    });
+    expect(example === 'n1 n2 n3,Flip,10,n1,n2,74.5.0.10.3.0.1.0,11', 'the block-config example restored as ' + example);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

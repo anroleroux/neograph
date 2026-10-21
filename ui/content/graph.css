@@ -61,7 +61,7 @@
 
      +                    row 1
      UII HWO USB TM       row 2: UI inputs, HW outputs, USB, time
-     HWI UIO LGC          row 3: HW inputs, UI outputs, logic
+     HWI UIO LGC SUB      row 3: HW inputs, UI outputs, logic, blocks
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM                 e.g. UII's or HWO's
      TMP ADC GPI
@@ -70,6 +70,7 @@
      DLY PLS BLK
      CMP AND OR NOT SCL   (logic: rows 4 and 5)
      MIN MAX TGL LCH CNT
+     NEW B1 B2 …          (blocks: a new one, and a copy of each; in a block, IN OUT)
 
    Each button's --col and --row give its grid cell. Folded, a button hides behind
    the one that opens it (the plus, or its group) and slides out to its place;
@@ -119,6 +120,40 @@
     transform: translate(var(--dx, 0), var(--dy, 0));
     opacity: 0;
     pointer-events: none;
+}
+
+/* In a block's definition, the groups it can't hold. */
+#graph > .buttons.add > .group.off {
+    display: none;
+}
+
+/* Over a block's definition: the way back, and its name. */
+#block-bar {
+    position: absolute;
+    top: var(--step-0);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: var(--step-0);
+    padding: var(--step--2) var(--step-0);
+    border: 2px solid var(--clr-face);
+    border-radius: var(--step--1);
+    background-color: var(--clr-pane);
+    color: #BFCDE7;
+}
+
+#block-bar[hidden] {
+    display: none;
+}
+
+#block-bar > .back {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid #BFCDE780;
+    border-radius: var(--step--2);
+    cursor: pointer;
 }
 
 #graph > .buttons > .connector {

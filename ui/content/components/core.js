@@ -87,6 +87,6 @@ function receiveTelemetry(text) {
     const [name, ...values] = text.split(' ');
     if (name === 'sig') {
         const [id, output, value] = values.map(Number);
-        elements['n' + id]?.signal?.(output, value);
+        (mainElements()['n' + id] ?? partNodes.get(id))?.signal?.(output, value);
     }
 }

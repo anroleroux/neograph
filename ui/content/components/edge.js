@@ -150,7 +150,7 @@ class gEdge {
     // loop in the browser goes round once a scan rather than all at once.
     handOn(value) {
         setTimeout(() => {
-            if (!this.feedback || !gEdges.includes(this)) return;
+            if (!this.feedback || this.removed) return;
             this.held = value;
             this.end.node.receive(value);
         }, FEEDBACK_MS);
@@ -172,6 +172,7 @@ class gEdge {
         inp.conns = inp.conns.filter(c => c !== this);
         gEdges = gEdges.filter(e => e !== this);
         this.elm.remove();
+        this.removed = true;
         this.end.node.edgeRemoved(this);
         for (const e of gEdges) {
             if (e.feedback && !closesLoop(e.start.node, e.end.node)) e.setFeedback(false);

@@ -159,6 +159,8 @@ function pinSetting(node, get, set) {
 // which of its outputs, with MSG_REF_FEEDBACK for a feedback wire. ID 0 and output
 // 0 if there is no source.
 function refBytes(node, output = 0, feedback = false) {
+    // A block's input inside one of its copies stands for the copy's input's source.
+    if (node?.deviceRef) ({ node, output, feedback } = node.deviceRef(output, feedback));
     const id = node?.id ?? 0;
     return [(id >> 8) & 0xFF, id & 0xFF, node ? output | (feedback ? MSG_REF_FEEDBACK : 0) : 0];
 }
@@ -223,12 +225,15 @@ const pendingLogic = new Set();
 let runningLogic = false;
 
 // How far down the graph a node is: 0 for one nothing ordinary is wired into,
-// else one more than the furthest node wired into it.
-function graphDepth(node, seen = new Set()) {
-    if (seen.has(node)) return 0;
-    seen.add(node);
-    const ins = node.inConns().filter(c => !c.feedback);
-    return ins.length ? 1 + Math.max(...ins.map(c => graphDepth(c.start.node, seen))) : 0;
+// else one more than the furthest node wired into it. A block's copy comes after
+// its parts, and their inputs after what the copy's inputs read (depthSources).
+function graphDepth(node, visiting = new Set()) {
+    if (visiting.has(node)) return 0;
+    visiting.add(node);
+    const from = node.depthSources?.() ?? node.inConns().filter(c => !c.feedback).map(c => c.start.node);
+    const depth = from.length ? 1 + Math.max(...from.map(n => graphDepth(n, visiting))) : 0;
+    visiting.delete(node);
+    return depth;
 }
 
 // Have a node work out its state again (evaluate), in order (see pendingLogic).
@@ -240,7 +245,7 @@ function evaluateLater(node) {
         while (pendingLogic.size) {
             const next = [...pendingLogic].reduce((a, b) => graphDepth(b) < graphDepth(a) ? b : a);
             pendingLogic.delete(next);
-            if (elements[next.name] === next) next.evaluate();
+            if (!next.removed) next.evaluate();
         }
     } finally {
         runningLogic = false;
@@ -346,8 +351,9 @@ class uiComponents {
     setLabel(label) {
         label = label.trim();
         if (!label) return;
-        // A label is saved as one message, whose payload is at most 255 bytes.
-        if (new TextEncoder().encode(label).length > 255) return false;
+        // A label is saved as one message, whose payload is at most 255 bytes; in a
+        // block's definition, wrapped in another (MSG_SUB_PART), 250.
+        if (new TextEncoder().encode(label).length > (scope.def ? 250 : 255)) return false;
         this.label = label;
         this.gElm.children[2].textContent = label;
     }
@@ -456,6 +462,7 @@ class uiComponents {
     }
 
     clearSettings() {
+        if (scope.hidden) return;       // a block's copy's parts, built out of sight
         const settings = document.getElementById('settings');
         settings.innerHTML = "<h3>Settings</h3><p>No node selected</p>";
     }
@@ -472,6 +479,7 @@ class uiComponents {
         this.inConns().forEach(conn => conn.remove());
         this.gElm.remove();
         delete elements[this.name];
+        this.removed = true;
     }
 
     // A wire from or to this node: from one of its outputs, or into its input.

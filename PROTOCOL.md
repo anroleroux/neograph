@@ -269,7 +269,7 @@ Every packet payload except `0D` is a sequence of messages:
 | Byte | Field | Notes |
 |---|---|---|
 | 0 | Message type | Which kind of element; see [Element types](#element-types) |
-| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4B`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Other bits are 0. |
+| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4C`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Bit 2 `MSG_FLAG_PART`: logic that is a part of a copy of a [block](#blocks); the device runs it as any logic, and the UI skips it when it restores the graph. Other bits are 0. |
 | 2–3 | Element ID | Big endian |
 | 4 | Payload length | Bytes after this header, 0–255 |
 | 5… | Payload | Depends on the type |
@@ -282,6 +282,9 @@ Every packet payload except `0D` is a sequence of messages:
   created on first boot both have ID 0.
 - **Labels, positions and wires** (`A0`–`A2`) take the ID of the control element
   they describe (see [Labels, positions and wires](#labels-positions-and-wires)).
+- **Block definitions** (`A3`, `A4`) have their own IDs, 1 to 255. The messages
+  inside a definition have IDs of their own too, counting from 1 in each (see
+  [Blocks](#blocks)). The parts of a copy of a block take control element IDs.
 - IDs are unique within each of those groups, not across them.
 - **ID 0 in a source reference means "not connected"**, so a control element never
   has ID 0.
@@ -364,9 +367,14 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `4A` | `MSG_LOGIC_TOGGLE` | Logic: turns over each time its input goes on | Implemented |
 | `4B` | `MSG_LOGIC_LATCH` | Logic: on once set, off once reset | Implemented |
 | `4C` | `MSG_LOGIC_COUNTER` | Logic: counts its input going on, up to a preset; two outputs, done and its count | Implemented |
+| `60` | `MSG_SUB` | A copy of a [block](#blocks); the device runs its parts, not it | Implemented |
+| `61` | `MSG_SUB_INPUT` | In a block's definition: an input | Implemented |
+| `62` | `MSG_SUB_OUTPUT` | In a block's definition: an output | Implemented |
 | `A0` | `MSG_STRING` | String: a node's label | Implemented |
 | `A1` | `MSG_LAYOUT` | A node's position in the graph | Implemented |
 | `A2` | `MSG_WIRE` | The shape of the wire into an output | Implemented |
+| `A3` | `MSG_SUB_DEF` | A block's definition: its name | Implemented |
+| `A4` | `MSG_SUB_PART` | One message of a block's definition, whole | Implemented |
 | `B0` | `MSG_DEVICE` | Device | Implemented |
 | `B1` | `MSG_DEVICE_FIELD` | Device field | Implemented |
 | `B2` | `MSG_NETWORK` | Network | Implemented |
@@ -398,6 +406,11 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `4A` Toggle | 3 | Bytes 0–2: source reference |
 | `4B` Latch | 6 | Bytes 0–2: its set source reference · bytes 3–5: its reset source reference (each 0 = not connected) |
 | `4C` Counter | 10 | Bytes 0–2: its count source reference · bytes 3–5: its reset source reference (each 0 = not connected) · bytes 6–9: its preset, a 32-bit big-endian number, 1 to `COUNTER_MAX` (1000000; UI default 3). See [Logic](#logic). |
+| `60` Block | 5–53 | Byte 0: its definition's ID · bytes 1–2: the ID of its first part · byte 3: its inputs, 0 to `SUB_PORTS_MAX` (8) · byte 4: its outputs, 0 to 8 · then a source reference for each input · then, for each output, the source reference it stands for. Always with `MSG_FLAG_OUTPUT`. See [Blocks](#blocks). |
+| `61` Block input | 2 | In a definition only. Byte 0: its type, `SUB_TYPE_BOOL` (0) or `SUB_TYPE_FLOAT` (1) · byte 1: its index among the definition's inputs |
+| `62` Block output | 5 | In a definition only. Bytes 0–2: its source reference · byte 3: its type · byte 4: its index among the definition's outputs |
+| `A3` Block definition | 1–32 | Its name, UTF-8. Keyed by the definition's ID |
+| `A4` Block definition message | 5–255 | One message of the definition, header and all. Keyed by the definition's ID |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
@@ -548,8 +561,11 @@ When a config arrives, the UI rebuilds the graph from it:
   and NOT `n7`), driving a light `n6` rather than the LED.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, and the logic `40`–`4C`)
-  becomes a node with the message's ID. If an ID
+  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, the logic `40`–`4C`
+  and a block's copy `60`) becomes a node with the message's ID. Messages marked
+  `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
+  definition, which is restored first from its `A3` and `A4` messages (see
+  [Blocks](#blocks)). If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
@@ -562,7 +578,7 @@ When a config arrives, the UI rebuilds the graph from it:
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
-  get IDs above the highest restored one.
+  get IDs above the highest restored one, and above every copy's parts.
 
 ### Plots
 
@@ -938,6 +954,55 @@ them. The counter is reset while the latch is off, so each press counts from 0:
 20 01 00 06 03  00 03 00                        # LED n6 ← n3
 ```
 
+### Blocks
+
+A **block** is a graph of logic defined once and placed any number of times, like a
+function or subroutine. Its **definition** is a graph of its own, edited in its own
+view, with **input** and **output ports** (`61`, `62`) where its copies' wires come in
+and go out; each port is on/off or a number. A **copy** (`60`) is a node in the main
+graph with the definition's inputs and outputs.
+
+- **What a definition holds:** logic (`40`–`4C`) and ports, with their labels,
+  positions and wire shapes. Hardware and UI elements stay in the main graph, and a
+  definition holds no copy of a block.
+- **How it is saved:** the definition's name (`A3`), then each of its messages,
+  whole, in an `A4` keyed by the definition's ID, with IDs of the definition's own.
+  The device ignores both. Only the blocks the graph has a copy of are saved.
+- **What the device runs:** each copy's **parts**. For each copy the UI writes a copy
+  of the definition's logic, as ordinary logic messages marked `MSG_FLAG_PART`, with
+  IDs from the copy's first part (byte 1–2 of its payload), in the definition's order.
+  A part's reference to an input port is written as the copy's input's source
+  reference.
+- **A copy's outputs:** a reference to output k of a copy stands for the k-th
+  reference in the copy's table: what that output port is wired from inside, as the
+  parts read it. Core 1 follows it (`resolve_ref`), through up to 8 copies; a
+  feedback wire on the way makes it a feedback reference. The copy itself is not run
+  and has no signal.
+- **In the browser** each copy runs its own parts, and shows the device's reports
+  of them (`sig` frames for the parts' IDs). When the definition changes, every copy
+  builds its parts again: a wire into or out of a port that is gone, or whose type
+  changed, goes.
+- **Limits:** the parts count towards the device's 64 nodes and 96 signals, and the
+  definition and the parts towards the 4096-byte config. A label in a definition is
+  at most 250 bytes.
+
+A block "Flip", whose output turns over each time its input goes on, placed once
+between a momentary button and the onboard LED. Its definition is an input, a toggle
+and an output; the copy's part is the toggle `n10`:
+
+```hex example=block-config
+0A 00 57                                        # Config, 87 bytes
+A3 00 00 01 04  46 6C 69 70                     # definition 1: "Flip"
+A4 00 00 01 07  61 01 00 01 02 00 00            #   input n1: on/off, index 0
+A4 00 00 01 0A  62 01 00 02 05 00 03 00 00 00   #   output n2 ← n3: on/off, index 0
+A4 00 00 01 08  4A 01 00 03 03 00 01 00         #   toggle n3 ← n1
+10 00 00 01 01  01                              # button n1, momentary
+60 01 00 02 0B  01 00 0A 01 01                  # copy n2 of definition 1, parts from n10, 1 input, 1 output
+                00 01 00  00 0A 00              #   input ← n1; output = n10
+4A 05 00 0A 03  00 01 00                        # toggle n10 ← n1: n2's part
+20 01 00 03 03  00 02 00                        # LED n3 ← n2's output
+```
+
 ### USB keyboards
 
 A USB keyboard node (`23`) types a keystroke to the PC the device is plugged into,
@@ -1175,7 +1240,8 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `23` USB keyboard | 1 signal | a keystroke, through core 0 | Types when its signal goes from below 0.5 to 0.5 or up |
 
 - **An output reads the signals its source references name.** A reference to an
-  element that isn't in the program, or to nothing (ID 0), reads 0.
+  element that isn't in the program, or to nothing (ID 0), reads 0. A reference to
+  an output of a [block's](#blocks) copy reads what the copy's table says it stands for.
 - **Logic in order.** Of the logic nodes, the first in the config that reads no
   logic still to be placed comes next; so each comes after the logic it reads, and
   otherwise they keep the config's order. A [feedback wire](#loops) doesn't count:
@@ -1323,6 +1389,16 @@ BLINK n3 on 250 off 250 <- s1 -> s2
 NOT n5 <- s1 -> s5
 COUNTER n4 preset 3 count s2 reset s5 -> s3 s4
 LED n6 <- s2
+```
+
+For the [block-config example](#blocks): the definition and the copy are left out;
+the part runs, and the LED, wired to the copy's output, reads it:
+
+```program example=block-config
+s0 n1.0 button = 0
+s1 n10.0 toggle = 0
+TOGGLE n10 <- s0 -> s1
+LED n3 <- s1
 ```
 
 For the [legacy-config example](#source-references): a reference saved without its
