@@ -942,6 +942,134 @@ void test_program_pwm_full_scale_through_logic(void)
     TEST_ASSERT_EQUAL_FLOAT(1.0f, pwm->in_full[1]);
 }
 
+/* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
+void test_counter_payload_valid(void)
+{
+    const uint8_t F = MSG_FLAG_OUTPUT;
+    uint8_t counter[] = { 0, 1, 0,  0, 2, 0,  0, 0, 0, 3 };
+    TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_COUNTER, counter, sizeof counter, F));
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COUNTER, counter, sizeof counter - 1, F));
+    counter[9] = 0;                                                     /* a preset of 0 */
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COUNTER, counter, sizeof counter, F));
+    counter[6] = 0x00; counter[7] = 0x0F; counter[8] = 0x42; counter[9] = 0x41;     /* COUNTER_MAX + 1 */
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_COUNTER, counter, sizeof counter, F));
+    counter[9] = 0x40;                                                  /* COUNTER_MAX */
+    TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_COUNTER, counter, sizeof counter, F));
+}
+
+/* A feedback wire's reference has MSG_REF_FEEDBACK in its output byte. */
+void test_feedback_reference(void)
+{
+    const uint8_t ref[] = { 0x01, 0x02, MSG_REF_FEEDBACK | 1 };
+    msg_ref r = msg_ref_at(ref, MSG_FLAG_OUTPUT);
+    TEST_ASSERT_EQUAL_HEX16(0x0102, r.id);
+    TEST_ASSERT_EQUAL_UINT8(1, r.output);
+    TEST_ASSERT_TRUE(r.feedback);
+    r = msg_ref_at(ref, 0);                                             /* 2 bytes: output 0, no feedback */
+    TEST_ASSERT_EQUAL_UINT8(0, r.output);
+    TEST_ASSERT_FALSE(r.feedback);
+}
+
+/* One scan of a program's logic, as core 1 runs it (scan in src/hwman.c). */
+static void scan_logic(hw_program *p, prog_logic_state *st)
+{
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        const prog_node *n = &p->nodes[i];
+        if (!program_logic(n->type)) continue;
+        p->signals[n->out].value = program_logic_step(p, n, p->signals[n->out].value, &st[i], 10);
+        if (n->out_count != PROG_NO_SIGNAL) p->signals[n->out_count].value = (float)st[i].count;
+    }
+}
+
+/* A counter counts its input going on up to its preset, and is on there; reset wins. */
+void test_program_counter(void)
+{
+    static const uint8_t cfg[] = {
+        MSG_UI_BUTTON, 0, 0, 1, 0,                                          /* button n1 */
+        MSG_UI_BUTTON, 0, 0, 2, 0,                                          /* button n2 */
+        MSG_LOGIC_COUNTER, MSG_FLAG_OUTPUT, 0, 3, 10, 0, 1, 0,  0, 2, 0,    /* counter n3: count <- n1, reset <- n2, */
+            0, 0, 0, 3,                                                     /*   preset 3 */
+    };
+    static hw_program p;
+    static prog_logic_state st[PROG_NODES_MAX];
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(4, p.signal_count);                         /* the buttons, done and the count */
+    TEST_ASSERT_EQUAL_UINT8(1, p.node_count);
+    const prog_node *c = &p.nodes[0];
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 3, 0), c->out);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 3, 1), c->out_count);
+    TEST_ASSERT_EQUAL_UINT32(3, c->preset);
+    TEST_ASSERT_EQUAL_FLOAT(3.0f, (float)c->preset);
+
+    p.signals[0].value = 1;                                             /* on at the start: not counted */
+    program_logic_start(&p, c, &st[0]);
+    scan_logic(&p, st);
+    TEST_ASSERT_EQUAL_FLOAT(0, p.signals[c->out_count].value);
+    const float presses[] = { 0, 1, 1, 0, 1, 0, 1, 0, 1 };              /* goes on 4 times */
+    const float counts[] = { 0, 1, 1, 1, 2, 2, 3, 3, 3 };
+    for (int i = 0; i < 9; i++) {
+        p.signals[0].value = presses[i];
+        scan_logic(&p, st);
+        TEST_ASSERT_EQUAL_FLOAT(counts[i], p.signals[c->out_count].value);
+        TEST_ASSERT_EQUAL_FLOAT(counts[i] >= 3, p.signals[c->out].value);
+    }
+    p.signals[1].value = 1;                                             /* reset, while counting */
+    p.signals[0].value = 0; scan_logic(&p, st);
+    p.signals[0].value = 1; scan_logic(&p, st);
+    TEST_ASSERT_EQUAL_FLOAT(0, p.signals[c->out_count].value);
+    TEST_ASSERT_EQUAL_FLOAT(0, p.signals[c->out].value);
+}
+
+/* A feedback wire closes a loop: the logic it comes from runs after the logic it goes
+   into, which reads it as the last scan left it. A button starts three blinks: the
+   latch runs the blink until the counter, fed back to the latch's reset, is done; the
+   counter is reset while the latch is off. */
+void test_program_feedback_loop(void)
+{
+    static const uint8_t cfg[] = {
+        MSG_LOGIC_COUNTER, MSG_FLAG_OUTPUT, 0, 4, 10, 0, 3, 0,  0, 5, 0,    /* counter n4: count <- n3, reset <- n5, */
+            0, 0, 0, 3,                                                     /*   preset 3 */
+        MSG_LOGIC_BLINK, MSG_FLAG_OUTPUT, 0, 3, 11, 0, 2, 0,                /* blink n3 <- n2, */
+            0, 0, 0, 10,  0, 0, 0, 10,                                      /*   10 ms on, 10 ms off */
+        MSG_UI_BUTTON, 0, 0, 1, 0,                                          /* button n1 */
+        MSG_LOGIC_LATCH, MSG_FLAG_OUTPUT, 0, 2, 6,                          /* latch n2: set <- n1, */
+            0, 1, 0,  0, 4, MSG_REF_FEEDBACK,                               /*   reset <- n4 done, fed back */
+        MSG_LOGIC_NOT, MSG_FLAG_OUTPUT, 0, 5, 3, 0, 2, 0,                   /* NOT n5 <- n2 */
+    };
+    static hw_program p;
+    static prog_logic_state st[PROG_NODES_MAX];
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(4, p.node_count);
+    TEST_ASSERT_EQUAL_UINT16(2, p.nodes[0].id);     /* the latch first: it reads the counter fed back */
+    TEST_ASSERT_EQUAL_UINT16(3, p.nodes[1].id);
+    TEST_ASSERT_EQUAL_UINT16(5, p.nodes[2].id);
+    TEST_ASSERT_EQUAL_UINT16(4, p.nodes[3].id);
+    TEST_ASSERT_EQUAL_HEX8(0x02, p.nodes[0].feedback);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 4, 0), p.nodes[0].in[1]);
+
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "LATCH n2 set s3 reset s0' -> s4"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "COUNTER n4 preset 3 count s2 reset s5 -> s0 s1"));
+
+    for (uint8_t i = 0; i < p.node_count; i++) program_logic_start(&p, &p.nodes[i], &st[i]);
+    uint8_t button = program_signal(&p, 1, 0), latch = program_signal(&p, 2, 0), blink = program_signal(&p, 3, 0);
+    p.signals[button].value = 1;
+    scan_logic(&p, st);
+    p.signals[button].value = 0;                    /* pressed for one scan */
+    int blinks = 0;
+    bool was = false;
+    for (int i = 0; i < 20; i++) {
+        bool on = p.signals[blink].value >= 0.5f;
+        blinks += on && !was;
+        was = on;
+        scan_logic(&p, st);
+    }
+    TEST_ASSERT_EQUAL_INT(3, blinks);
+    TEST_ASSERT_EQUAL_FLOAT(0, p.signals[latch].value);
+    TEST_ASSERT_EQUAL_FLOAT(0, p.signals[blink].value);
+}
+
 /* The action words core 0 sends for a command (handle_websocket_msg in src/websockets.c):
  * one per payload byte, for the element's output of the same index. */
 static void assert_action_words(const char *name)
@@ -1006,6 +1134,10 @@ int main(void)
     RUN_TEST(test_program_logic_step);
     RUN_TEST(test_program_logic_more);
     RUN_TEST(test_program_pwm_full_scale_through_logic);
+    RUN_TEST(test_counter_payload_valid);
+    RUN_TEST(test_feedback_reference);
+    RUN_TEST(test_program_counter);
+    RUN_TEST(test_program_feedback_loop);
     RUN_TEST(test_fifo_action_word_matches_command_button);
     RUN_TEST(test_fifo_action_word_matches_command_slider);
     RUN_TEST(test_fifo_action_words_match_command_slider_2d);

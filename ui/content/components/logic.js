@@ -85,19 +85,29 @@ class uiLogic extends uiComponents {
     // Its signal from the device (PROTOCOL.md, "Telemetry text frames"): 1 on, 0
     // off. It is shown while fresh; once stale, the browser's state is.
     signal(output, value) {
-        this.deviceValue = this.floating ? value : value >= 0.5;
+        this.deviceSignal(output, value);
         this.deviceAt = performance.now();
         clearTimeout(this.staleTimer);
         this.staleTimer = setTimeout(() => this.show(), LOGIC_DEVICE_FRESH_MS + 50);
         this.show();
     }
 
-    // The value of the source wired into this node's k-th wire, as a number; a
-    // source with no value yet, or no wire, reads 0, as on the device.
-    inputValue(k = 0) {
-        const conn = this.inConns()[k];
-        const v = conn ? conn.start.node.outputValue(conn.start.output) : null;
+    // The device's value of one of its outputs: most have one.
+    deviceSignal(output, value) {
+        this.deviceValue = this.floating ? value : value >= 0.5;
+    }
+
+    // The value a wire brings, as a number: its source's, or through a feedback
+    // wire what it last handed on. A source with no value yet, or no wire, reads
+    // 0, as on the device.
+    static connValue(conn) {
+        const v = !conn ? null : conn.feedback ? conn.held : conn.start.node.outputValue(conn.start.output);
         return v == null || !Number.isFinite(Number(v)) ? 0 : Number(v);
+    }
+
+    // The value of this node's k-th wire in (see connValue).
+    inputValue(k = 0) {
+        return uiLogic.connValue(this.inConns()[k]);
     }
 
     // A boolean input is on from 0.5, as on the device.
@@ -126,9 +136,10 @@ class uiLogic extends uiComponents {
         this.emit(this.outputValue(0));
     }
 
-    // A source wired into it has a new value; a wire came in or went. A wire
-    // coming or going is not an input going on (see rewired).
-    receive(value) { this.evaluate(); }
+    // A source wired into it has a new value: once the change has reached all its
+    // inputs (see evaluateLater). A wire came in or went: at once. A wire coming
+    // or going is not an input going on (see rewired).
+    receive(value) { evaluateLater(this); }
     addEdge(e) {
         super.addEdge(e);
         if (e.end.node !== this) return;
@@ -310,7 +321,7 @@ class uiGate extends uiLogic {
 
     // A source reference for each wire in; one to nothing if there are none.
     marshal() {
-        const refs = this.inConns().flatMap(c => refBytes(c.start.node, c.start.output));
+        const refs = this.inConns().flatMap(connRef);
         return this.message(refs.length ? refs : refBytes(null));
     }
 }
@@ -332,6 +343,7 @@ class uiNot extends uiLogic {
 class uiDelay extends uiLogic {
     constructor(x = 0, y = 0) {
         super("delay", MSG_LOGIC_DELAY, "DLY", "Delay", { type: "bool", max: 1 }, x, y);
+        this.holdsState = true;
         this.onMs = 0;
         this.offMs = 0;
         this.pending = null;        // the state it is waiting to take, or null
@@ -465,7 +477,7 @@ class uiExtreme extends uiLogic {
     }
 
     marshal() {
-        const refs = this.inConns().flatMap(c => refBytes(c.start.node, c.start.output));
+        const refs = this.inConns().flatMap(connRef);
         return this.message(refs.length ? refs : refBytes(null));
     }
 }
@@ -477,6 +489,7 @@ class uiMax extends uiExtreme { constructor(x = 0, y = 0) { super(true, x, y); }
 class uiPulse extends uiLogic {
     constructor(x = 0, y = 0) {
         super("pulse", MSG_LOGIC_PULSE, "PLS", "Pulse", { type: "bool", max: 1 }, x, y);
+        this.holdsState = true;
         this.onMs = 1000;
         this.inWas = false;
         this.evaluate();
@@ -524,6 +537,7 @@ class uiPulse extends uiLogic {
 class uiBlink extends uiLogic {
     constructor(x = 0, y = 0) {
         super("blink", MSG_LOGIC_BLINK, "BLK", "Blink", { type: "bool", max: 1 }, x, y);
+        this.holdsState = true;
         this.onMs = 500;
         this.offMs = 500;
         this.blinking = false;
@@ -585,6 +599,7 @@ class uiBlink extends uiLogic {
 class uiToggle extends uiLogic {
     constructor(x = 0, y = 0) {
         super("toggle", MSG_LOGIC_TOGGLE, "TGL", "Toggle", { type: "bool", max: 1 }, x, y);
+        this.holdsState = true;
         this.inWas = false;
         this.evaluate();
     }
@@ -599,34 +614,37 @@ class uiToggle extends uiLogic {
     }
 }
 
-// A latch: on once its set source goes on, and off once its reset source does;
-// while both are on, off. Its two wires are told apart in its settings, as a
-// PWM's: a wire drawn in sets it if it has no set source yet, else resets it.
-class uiLatch extends uiLogic {
-    constructor(x = 0, y = 0) {
-        super("latch", MSG_LOGIC_LATCH, "LCH", "Latch", { type: "bool", max: 2 }, x, y);
-        this.setSource = null;      // the source node, and which of its outputs
-        this.setOutput = 0;
-        this.resetSource = null;
-        this.resetOutput = 0;
-        this.evaluate();
+// Logic whose wires in each have a role, told apart in its settings as a PWM's
+// are: a latch's set and reset, a counter's count and reset. A wire drawn in
+// takes the first role with no source yet, else the last. `roles` lists [role,
+// setting label] pairs, in the order they are saved.
+class uiRoles extends uiLogic {
+    constructor(type, tc, text, label, roles, x = 0, y = 0) {
+        super(type, tc, text, label, { type: "bool", max: roles.length }, x, y);
+        this.roles = roles;
+        this.holdsState = true;
+        for (const [role] of roles) {
+            this[role + 'Source'] = null;      // the source node, and which of its outputs
+            this[role + 'Output'] = 0;
+        }
     }
 
-    // The value of a role's source; 0 with none.
+    // The wire bringing a role's source; null with none.
+    roleConn(role) {
+        const node = this[role + 'Source'], output = this[role + 'Output'];
+        return node ? this.inConns().find(c => c.start.node === node && c.start.output === output) ?? null : null;
+    }
+
+    // The value of a role's source (see connValue); 0 with none.
     roleValue(role) {
-        const v = this[role + 'Source']?.outputValue(this[role + 'Output']);
-        return v == null ? 0 : Number(v);
+        return uiLogic.connValue(this.roleConn(role));
     }
 
-    compute() {
-        if (uiLogic.isOn(this.roleValue('reset'))) return false;
-        return this.browserValue === true || uiLogic.isOn(this.roleValue('set'));
-    }
-
-    // Set or reset from an output of a boolean source node, or from none, and
-    // redraw the wires. A source of another type, or one that would close a loop, is refused.
+    // A role from an output of a boolean source node, or from none, and redraw
+    // the wires. A source of another type, or one that would close a loop through
+    // nothing that holds a state, is refused.
     setRole(role, node, output = 0) {
-        if (node && (!this.takesType(node, output) || closesLoop(node, this))) return false;
+        if (node && (!this.takesType(node, output) || statelessLoop(node, this))) return false;
         this[role + 'Source'] = node;
         this[role + 'Output'] = node ? output : 0;
         this.syncWires();
@@ -637,9 +655,9 @@ class uiLatch extends uiLogic {
         return this[role + 'Source'] === node && this[role + 'Output'] === output;
     }
 
-    // Make the wires into this latch match its two sources.
+    // Make the wires into this node match its roles' sources.
     syncWires() {
-        const refs = ['set', 'reset'].filter(r => this[r + 'Source'])
+        const refs = this.roles.map(([r]) => r).filter(r => this[r + 'Source'])
             .map(r => ({ node: this[r + 'Source'], output: this[r + 'Output'] }));
         const wired = (c, r) => c.start.node === r.node && c.start.output === r.output;
         this.inConns().filter(c => !refs.some(r => wired(c, r))).forEach(c => c.remove());
@@ -650,8 +668,8 @@ class uiLatch extends uiLogic {
 
     addEdge(e) {
         const src = e.start.node, output = e.start.output;
-        if (e.end.node === this && !this.drivenBy('set', src, output) && !this.drivenBy('reset', src, output)) {
-            const role = this.setSource ? 'reset' : 'set';
+        if (e.end.node === this && !this.roles.some(([r]) => this.drivenBy(r, src, output))) {
+            const role = (this.roles.find(([r]) => !this[r + 'Source']) ?? this.roles.at(-1))[0];
             this[role + 'Source'] = src;
             this[role + 'Output'] = output;
             if (selected === this) this.createSettings();
@@ -660,7 +678,7 @@ class uiLatch extends uiLogic {
     }
 
     edgeRemoved(e) {
-        for (const role of ['set', 'reset']) {
+        for (const [role] of this.roles) {
             if (!this.drivenBy(role, e.start.node, e.start.output)) continue;
             this[role + 'Source'] = null;
             this[role + 'Output'] = 0;
@@ -671,10 +689,10 @@ class uiLatch extends uiLogic {
 
     logicSettings(settings) {
         const choices = Object.values(elements).filter(n => n !== this).flatMap(n => n.outputs
-            .map((out, i) => [n, out, i]).filter(([, , i]) => this.takesType(n, i) && !closesLoop(n, this))
+            .map((out, i) => [n, out, i]).filter(([, , i]) => this.takesType(n, i) && !statelessLoop(n, this))
             .map(([n, out, i]) => [`${n.name}:${i}`,
                 n.outputs.length > 1 ? `${n.label} ${out.name} (${n.name})` : `${n.label} (${n.name})`]));
-        for (const [role, label] of [['set', 'Set'], ['reset', 'Reset']]) {
+        for (const [role, label] of this.roles) {
             const source = this[role + 'Source'];
             settings.appendChild(selectSetting(label, [['', 'None'], ...choices],
                 () => source ? `${source.name}:${this[role + 'Output']}` : '',
@@ -686,8 +704,113 @@ class uiLatch extends uiLogic {
         }
     }
 
-    // Its set source, then its reset source.
+    // Its roles' source references, in order; a feedback wire's marked.
+    roleRefs() {
+        return this.roles.flatMap(([role]) => refBytes(this[role + 'Source'], this[role + 'Output'],
+            this.roleConn(role)?.feedback));
+    }
+
     marshal() {
-        return this.message([...refBytes(this.setSource, this.setOutput), ...refBytes(this.resetSource, this.resetOutput)]);
+        return this.message(this.roleRefs());
+    }
+}
+
+// A latch: on once its set source goes on, and off once its reset source does;
+// while both are on, off.
+class uiLatch extends uiRoles {
+    constructor(x = 0, y = 0) {
+        super("latch", MSG_LOGIC_LATCH, "LCH", "Latch", [['set', 'Set'], ['reset', 'Reset']], x, y);
+        this.evaluate();
+    }
+
+    compute() {
+        if (uiLogic.isOn(this.roleValue('reset'))) return false;
+        return this.browserValue === true || uiLogic.isOn(this.roleValue('set'));
+    }
+}
+
+// A counter: counts each time its count source goes on, up to its preset, and is
+// done (its boolean output 0, on) there; its reset source sets it back to 0, and
+// wins. Its count is its floating output 1. A wire leaves from the output picked
+// in its settings, as a 2D slider's.
+class uiCounter extends uiRoles {
+    constructor(x = 0, y = 0) {
+        super("counter", MSG_LOGIC_COUNTER, "", "Counter", [['count', 'Count'], ['reset', 'Reset']], x, y);
+        this.outputs[0].name = 'Done';
+        this.outputs.push({ type: "float", name: "Count", conns: [] });
+        this.preset = 3;
+        this.inWas = false;
+        this.browserCount = 0;      // the count the browser works out
+        this.deviceCount = null;    // the count the device last reported
+        this.count = null;          // the count shown
+        this.evaluate();
+    }
+
+    rewired() { this.inWas = uiLogic.isOn(this.roleValue('count')); }
+
+    compute() {
+        const input = uiLogic.isOn(this.roleValue('count')), rose = input && !this.inWas;
+        this.inWas = input;
+        if (uiLogic.isOn(this.roleValue('reset'))) this.browserCount = 0;
+        else if (rose && this.browserCount < this.preset) this.browserCount++;
+        return this.browserCount >= this.preset;
+    }
+
+    deviceSignal(output, value) {
+        if (output === 1) this.deviceCount = value;
+        else super.deviceSignal(output, value);
+    }
+
+    // Its done state, as any logic's; then its count, handed on from output 1.
+    show() {
+        super.show();
+        const count = this.fromDevice() && this.deviceCount != null ? this.deviceCount : this.browserCount;
+        const changed = count !== this.count;
+        this.count = count;
+        this.setText(`${count}/${this.preset}`);
+        if (this.tileState?.isConnected) this.tileState.textContent = this.reading();
+        if (changed) this.emit(count, 1);
+    }
+
+    outputValue(output) {
+        return output === 1 ? this.count : super.outputValue(output);
+    }
+
+    reading() {
+        return this.count == null ? '–' : `${this.count} of ${this.preset}`;
+    }
+
+    // A whole number from 1 to COUNTER_MAX. A count past it comes back to it.
+    setPreset(v) {
+        v = String(v).trim();
+        if (!/^\d+$/.test(v) || Number(v) < 1 || Number(v) > COUNTER_MAX) return false;
+        this.preset = Number(v);
+        this.browserCount = Math.min(this.browserCount, this.preset);
+        this.evaluate();
+    }
+
+    // The output new wires leave from: 0 (done) or 1 (its count).
+    setWireOutput(output) {
+        this.actNum = output;
+        if (wireMode && selected) highlightSelection();     // mark what that output can be wired to
+    }
+
+    logicSettings(settings) {
+        settings.appendChild(choiceSetting('Wire from', {0: 'Done', 1: 'Count'},
+            () => String(this.actNum), (o) => this.setWireOutput(Number(o))));
+        settings.appendChild(editableSetting('Preset', () => String(this.preset),
+            (v) => this.setPreset(v), {type: 'number', min: 1, max: COUNTER_MAX, step: 1}));
+        super.logicSettings(settings);
+    }
+
+    // Its count and reset sources, then its preset.
+    marshal() {
+        return this.message([...this.roleRefs(), ...uint32Bytes(this.preset)]);
+    }
+
+    // From a saved payload: its preset after its two source references.
+    restore(pay, r, len) {
+        if (len !== 2 * r + 4) return;
+        this.setPreset(uint32At(pay, 2 * r));
     }
 }

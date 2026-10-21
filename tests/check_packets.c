@@ -45,8 +45,9 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
     return 0;
 }
 
-/* The outputs a source of a type has: a 2D slider's X and Y, one for the others. */
-static uint8_t outputs_of(uint8_t type) { return type == MSG_UI_SLIDER_2D ? 2 : 1; }
+/* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
+   count, one for the others. */
+static uint8_t outputs_of(uint8_t type) { return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER ? 2 : 1; }
 
 /* Whether a message holds source references, which the UI writes with their outputs. */
 static bool has_refs(uint8_t type) {
@@ -60,9 +61,9 @@ static bool has_refs(uint8_t type) {
    may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
                                    MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
-                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, 0 };
+                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE,
-                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, 0 };
+                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, 0 };
 
 static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_t *types, const char *what) {
     if (src.id == 0) {
@@ -72,6 +73,8 @@ static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_
     uint8_t type = control_type(p, len, src.id);
     if (type == 0) { fail("a source reference names no element in the config"); return; }
     if (src.output >= outputs_of(type)) fail("a source reference names an output its source does not have");
+    /* A counter's done (0) is boolean, its count (1) floating. */
+    if (type == MSG_LOGIC_COUNTER && src.output != (types == BOOLEAN ? 0 : 1)) { fail(what); return; }
     for (; *types; types++) if (type == *types) return;
     fail(what);
 }
@@ -86,6 +89,9 @@ static void check_config(const uint8_t *p, size_t len) {
         /* The UI writes every source reference with its output. */
         uint8_t r = msg_ref_len(it.flags);
         if (has_refs(it.type) && !(it.flags & MSG_FLAG_OUTPUT)) fail("source references are written without their outputs");
+        /* Only a wire into logic closes a loop: an output's reference is never a feedback one. */
+        if (has_refs(it.type) && !(it.type & MSG_LOGIC_BIT) && it.len >= r && msg_ref_at(it.pay, it.flags).feedback)
+            fail("an output's source reference is marked feedback");
         switch (it.type) {
         case MSG_DEVICE:
             device = true;
@@ -139,12 +145,13 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_LOGIC_PULSE:
         case MSG_LOGIC_BLINK:
         case MSG_LOGIC_TOGGLE:
-        case MSG_LOGIC_LATCH: {
+        case MSG_LOGIC_LATCH:
+        case MSG_LOGIC_COUNTER: {
             /* program_compile runs only logic logic_payload_valid accepts */
             if (!logic_payload_valid(it.type, it.pay, it.len, it.flags)) { fail("logic payload is not one the device runs; it would skip it"); break; }
             bool floating_in = it.type == MSG_LOGIC_COMPARE || program_logic_floating(it.type);
             uint8_t refs = it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR || it.type == MSG_LOGIC_MIN
-                || it.type == MSG_LOGIC_MAX ? it.len / r : it.type == MSG_LOGIC_LATCH ? 2 : 1;
+                || it.type == MSG_LOGIC_MAX ? it.len / r : it.type == MSG_LOGIC_LATCH || it.type == MSG_LOGIC_COUNTER ? 2 : 1;
             for (uint8_t k = 0; k < refs; k++) {
                 msg_ref src = msg_ref_at(it.pay + k * r, it.flags);
                 if (src.id == it.id) fail("logic is wired from itself");

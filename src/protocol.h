@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_ and SCALE_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_ and COUNTER_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -64,7 +64,8 @@
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
-   source itself, with one output, 0: boolean, or floating for a scale, min or max. */
+   source itself, with one output, 0: boolean, or floating for a scale, min or max. A
+   counter has two: done (0, boolean) and its count (1, floating). */
 #define MSG_LOGIC_BIT           0x40
 #define MSG_LOGIC_COMPARE       0x40    /* a floating input above or below a threshold */
 #define MSG_LOGIC_AND           0x41    /* on while every input is on */
@@ -78,7 +79,8 @@
 #define MSG_LOGIC_BLINK         0x49    /* on and off in turn while its input is on */
 #define MSG_LOGIC_TOGGLE        0x4A    /* turns over each time its input goes on */
 #define MSG_LOGIC_LATCH         0x4B    /* on once set, off once reset; reset wins */
-#define MSG_LOGIC_LAST          0x4B    /* the last logic type: MSG_LOGIC_LATCH */
+#define MSG_LOGIC_COUNTER       0x4C    /* counts its input going on, up to a preset; two outputs */
+#define MSG_LOGIC_LAST          0x4C    /* the last logic type: MSG_LOGIC_COUNTER */
 
 /* Supporting and networking element types. */
 #define MSG_STRING              0xA0    /* a node's label, keyed by node ID */
@@ -167,12 +169,15 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    A min or max: 1 to LOGIC_INPUTS_MAX source references. A pulse: a source reference,
    then its time on, 1 to DELAY_MAX_MS. A blink: a source reference (0: it always
    blinks), then its time on and time off, each 1 to DELAY_MAX_MS. A toggle: a source
-   reference. A latch: its set source reference, then its reset one. */
+   reference. A latch: its set source reference, then its reset one. A counter: its
+   count source reference, its reset one, then its preset, a 32-bit big-endian number,
+   1 to COUNTER_MAX. */
 #define COMPARE_ABOVE           0x00    /* on above the threshold; off below it less the hysteresis */
 #define COMPARE_BELOW           0x01    /* on below the threshold; off above it plus the hysteresis */
 #define LOGIC_INPUTS_MAX        4
 #define DELAY_MAX_MS            86400000    /* a day */
 #define SCALE_CLAMP             0x01    /* options bit 0: keep the output within its range */
+#define COUNTER_MAX             1000000 /* the highest preset */
 
 /* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
    options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
@@ -197,10 +202,15 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
 
+/* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which
+   closes a loop. Logic reads it as the last scan left it. Bits 0-6 are the output. */
+#define MSG_REF_FEEDBACK        0x80
+
 /* A source reference: an output of a source element. ID 0 is "not connected". */
 typedef struct {
     uint16_t id;
     uint8_t output;
+    uint8_t feedback;   /* MSG_REF_FEEDBACK was set: a feedback wire */
 } msg_ref;
 
 /* The length of a source reference in a message with these header flags. */
@@ -208,8 +218,11 @@ static inline uint8_t msg_ref_len(uint8_t flags) { return flags & MSG_FLAG_OUTPU
 
 /* The source reference at p, in a message with these header flags. */
 static inline msg_ref msg_ref_at(const uint8_t *p, uint8_t flags) {
-    msg_ref ref = { (uint16_t)(p[0] << 8 | p[1]), 0 };
-    if (flags & MSG_FLAG_OUTPUT) ref.output = p[2];
+    msg_ref ref = { (uint16_t)(p[0] << 8 | p[1]), 0, 0 };
+    if (flags & MSG_FLAG_OUTPUT) {
+        ref.output = p[2] & ~MSG_REF_FEEDBACK;
+        ref.feedback = !!(p[2] & MSG_REF_FEEDBACK);
+    }
     return ref;
 }
 
@@ -281,10 +294,10 @@ static inline float msg_float_at(const uint8_t *p) {
 }
 
 /* Whether a logic element's payload is one the device runs: its source references
-   (one; for an AND, OR, min or max 1 to LOGIC_INPUTS_MAX; a latch's two), then a
-   compare's condition, threshold and hysteresis (finite, the hysteresis 0 or more), a
-   delay's, pulse's or blink's times, or a scale's options and ranges (finite, its
-   input's from and to apart). */
+   (one; for an AND, OR, min or max 1 to LOGIC_INPUTS_MAX; a latch's or counter's two),
+   then a compare's condition, threshold and hysteresis (finite, the hysteresis 0 or
+   more), a delay's, pulse's or blink's times, a scale's options and ranges (finite,
+   its input's from and to apart), or a counter's preset. */
 static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t len, uint8_t flags) {
     uint8_t r = msg_ref_len(flags);
     switch (type) {
@@ -304,6 +317,8 @@ static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t 
         return len == r;
     case MSG_LOGIC_LATCH:
         return len == 2 * r;
+    case MSG_LOGIC_COUNTER:
+        return len == 2 * r + 4 && msg_u32_at(pay + 2 * r) >= 1 && msg_u32_at(pay + 2 * r) <= COUNTER_MAX;
     case MSG_LOGIC_DELAY:
         return len == r + 8 && msg_u32_at(pay + r) <= DELAY_MAX_MS && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
     case MSG_LOGIC_PULSE:

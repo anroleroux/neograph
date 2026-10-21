@@ -156,23 +156,28 @@ function pinSetting(node, get, set) {
 }
 
 // A source reference as saved (see MSG_FLAG_OUTPUT): the source node's ID, then
-// which of its outputs. ID 0 and output 0 if there is no source.
-function refBytes(node, output = 0) {
+// which of its outputs, with MSG_REF_FEEDBACK for a feedback wire. ID 0 and output
+// 0 if there is no source.
+function refBytes(node, output = 0, feedback = false) {
     const id = node?.id ?? 0;
-    return [(id >> 8) & 0xFF, id & 0xFF, node ? output : 0];
+    return [(id >> 8) & 0xFF, id & 0xFF, node ? output | (feedback ? MSG_REF_FEEDBACK : 0) : 0];
 }
 
-// The source reference at byte i of a message's payload, as {node, output}:
-// three bytes in a message with MSG_FLAG_OUTPUT, otherwise two, the node's ID,
-// and output 0. The node is null if it is not in the graph (or ID 0).
+// The source reference at byte i of a message's payload, as {node, output,
+// feedback}: three bytes in a message with MSG_FLAG_OUTPUT, otherwise two, the
+// node's ID, and output 0. The node is null if it is not in the graph (or ID 0).
 function refAt(m, i) {
     const len = m.flags & MSG_FLAG_OUTPUT ? 3 : 2;
-    if (m.len < i + len) return { node: null, output: 0 };
+    if (m.len < i + len) return { node: null, output: 0, feedback: false };
     return {
         node: elements['n' + (m.pay[i] << 8 | m.pay[i + 1])] ?? null,
-        output: len === 3 ? m.pay[i + 2] : 0,
+        output: len === 3 ? m.pay[i + 2] & ~MSG_REF_FEEDBACK : 0,
+        feedback: len === 3 && !!(m.pay[i + 2] & MSG_REF_FEEDBACK),
     };
 }
+
+// The source reference of a wire, as saved: see refBytes. ID 0 if none.
+const connRef = (conn) => refBytes(conn?.start.node, conn?.start.output, conn?.feedback);
 
 // The length of a source reference in a message: see refAt.
 const refLen = (m) => m.flags & MSG_FLAG_OUTPUT ? 3 : 2;
@@ -187,13 +192,59 @@ function wireEnds(a, b) {
     return ab ? [a, b] : ba ? [b, a] : null;
 }
 
-// Whether a wire from `source` into `node` would close a loop: whether `node`
-// already drives `source`, through wires out of it.
-function closesLoop(source, node) {
+// Whether `from` drives `to` through wires out of it, following only the wires
+// `follow` takes, and passing only through the nodes `pass` takes.
+function drives(from, to, follow = () => true, pass = () => true) {
     const seen = new Set();
-    const reaches = (n) => n === source || (!seen.has(n) && (seen.add(n), n.outputs
-        .some(out => out.conns.some(c => reaches(c.end.node)))));
-    return reaches(node);
+    const reaches = (n) => n === to || (pass(n) && !seen.has(n) && (seen.add(n), n.outputs
+        .some(out => out.conns.some(c => follow(c) && reaches(c.end.node)))));
+    return reaches(from);
+}
+
+// Whether a wire from `source` into `node` would close a loop of ordinary wires:
+// whether `node` already drives `source` other than through a feedback wire. Such
+// a wire is a feedback wire, which logic reads as the last scan left it.
+function closesLoop(source, node) {
+    return drives(node, source, c => !c.feedback);
+}
+
+// Whether a wire from `source` into `node` would close a loop through no node that
+// holds a state (a delay, pulse, blink, toggle, latch or counter): one that would
+// only flip over every scan. The UI doesn't draw such a wire.
+function statelessLoop(source, node) {
+    return !source.holdsState && drives(node, source, () => true, n => !n.holdsState);
+}
+
+// Logic waiting to work out its state again after a change upstream. It runs in
+// order, each node after every node it reads other than through a feedback
+// wire, as the device's scan runs it: so a node acts on a change once it has
+// reached all its inputs, not on half of it.
+const pendingLogic = new Set();
+let runningLogic = false;
+
+// How far down the graph a node is: 0 for one nothing ordinary is wired into,
+// else one more than the furthest node wired into it.
+function graphDepth(node, seen = new Set()) {
+    if (seen.has(node)) return 0;
+    seen.add(node);
+    const ins = node.inConns().filter(c => !c.feedback);
+    return ins.length ? 1 + Math.max(...ins.map(c => graphDepth(c.start.node, seen))) : 0;
+}
+
+// Have a node work out its state again (evaluate), in order (see pendingLogic).
+function evaluateLater(node) {
+    pendingLogic.add(node);
+    if (runningLogic) return;
+    runningLogic = true;
+    try {
+        while (pendingLogic.size) {
+            const next = [...pendingLogic].reduce((a, b) => graphDepth(b) < graphDepth(a) ? b : a);
+            pendingLogic.delete(next);
+            if (elements[next.name] === next) next.evaluate();
+        }
+    } finally {
+        runningLogic = false;
+    }
 }
 
 class uiComponents {
@@ -211,6 +262,7 @@ class uiComponents {
         this.actDir = null;
         this.actNum = null;
         this.marked = false;
+        this.holdsState = false;    // logic that keeps a state from scan to scan (see statelessLoop)
 
         this.socket = socket;
 
@@ -224,18 +276,20 @@ class uiComponents {
     // outputs, or logic) and the other an output (or logic) with room for another
     // wire (most take one, a PWM two, an AND or OR four), not already wired from
     // that output of the source, that takes it (see takesType), and not closing
-    // a loop. A wire leaves a source from its active output (actNum): a 2D
-    // slider's X or Y, picked in its settings. See wireEnds for which way it goes.
+    // a loop through no node that holds a state (see statelessLoop). A wire leaves
+    // a source from its active output (actNum): a 2D slider's X or Y, or a
+    // counter's done or count, picked in its settings. Every node has at most one
+    // input. See wireEnds for which way it goes.
     canTakeConn(other) {
         if (other === this) return false;
         const ends = wireEnds(other, this);
         if (!ends) return false;
         const [source, output] = ends;
-        const input = output.inputs[output.actNum];
+        const input = output.inputs[0];
         return output.takesType(source)
             && input.conns.length < input.max
             && !input.conns.some(c => c.start.node === source && c.start.output === source.actNum)
-            && !closesLoop(source, output);
+            && !statelessLoop(source, output);
     }
 
     // Whether this output takes output `output` of `source` (its active one by
@@ -247,7 +301,7 @@ class uiComponents {
     takesType(source, output = source.actNum) {
         if (!source.outputs.length) return false;
         const out = source.outputs[output];
-        return !!out && out.type === this.inputs[this.actNum].type && !(out.browserOnly && this.tc & MSG_HW_BIT);
+        return !!out && out.type === this.inputs[0].type && !(out.browserOnly && this.tc & MSG_HW_BIT);
     }
 
     // The wires into this node.
@@ -264,8 +318,7 @@ class uiComponents {
     // source), as saved: the source's ID, then its output (see MSG_FLAG_OUTPUT).
     // ID 0 if none.
     sourceRef() {
-        const conn = this.inConns()[0];
-        return refBytes(conn?.start.node, conn?.start.output);
+        return connRef(this.inConns()[0]);
     }
 
     // The GPIO pins this node takes, which no other node may use: none for most.
@@ -358,9 +411,10 @@ class uiComponents {
 
     // Hand a new value of one of this source's outputs to the nodes wired to it.
     // UI outputs (a plot) show it in the browser; hardware outputs ignore it, as
-    // the device drives them. The value may be any number, not only 0 to 1.
+    // the device drives them. The value may be any number, not only 0 to 1. A
+    // feedback wire hands it on a scan later (see gEdge.handOn).
     emit(value, output = 0) {
-        this.outputs[output].conns.forEach(conn => conn.end.node.receive(value));
+        this.outputs[output].conns.forEach(conn => conn.feedback ? conn.handOn(value) : conn.end.node.receive(value));
     }
 
     // A new value from the source wired into this node. Only UI outputs show it:
@@ -423,7 +477,7 @@ class uiComponents {
     // A wire from or to this node: from one of its outputs, or into its input.
     addEdge(e) {
         if (e.start.node === this) this.outputs[e.start.output].conns.push(e);
-        else this.inputs[this.actNum].conns.push(e);
+        else this.inputs[0].conns.push(e);
     }
 
     // A wire into this node was taken out.

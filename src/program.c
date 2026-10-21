@@ -37,7 +37,8 @@ static bool signal_on(const hw_program *p, uint8_t s) {
 
 void program_logic_start(const hw_program *p, const prog_node *n, prog_logic_state *st) {
     *st = (prog_logic_state){ 0 };
-    if (n->type == MSG_LOGIC_PULSE || n->type == MSG_LOGIC_TOGGLE) st->in_was = signal_on(p, n->in[0]);
+    if (n->type == MSG_LOGIC_PULSE || n->type == MSG_LOGIC_TOGGLE || n->type == MSG_LOGIC_COUNTER)
+        st->in_was = signal_on(p, n->in[0]);
 }
 
 // A compare switches at its threshold, and back only past it by its hysteresis,
@@ -47,7 +48,8 @@ void program_logic_start(const hw_program *p, const prog_node *n, prog_logic_sta
 // for its time on from each time its input goes on. A blink, while its input is
 // on (or with none wired), starts on, then turns over after each time on or off.
 // A toggle turns over each time its input goes on. A latch goes on when set and
-// off when reset, and reset wins.
+// off when reset, and reset wins. A counter counts its count input going on, up to
+// its preset, and is on (done) at its preset; reset sets it back to 0, and wins.
 float program_logic_step(const hw_program *p, const prog_node *n, float out, prog_logic_state *st, uint32_t dt_ms) {
     bool on = out >= 0.5f;
     switch (n->type) {
@@ -149,6 +151,14 @@ float program_logic_step(const hw_program *p, const prog_node *n, float out, pro
         if (signal_on(p, n->in[1])) return 0;
         return on || signal_on(p, n->in[0]);
 
+    case MSG_LOGIC_COUNTER: {
+        bool in = signal_on(p, n->in[0]), rose = in && !st->in_was;
+        st->in_was = in;
+        if (signal_on(p, n->in[1])) st->count = 0;
+        else if (rose && st->count < n->preset) st->count++;
+        return st->count >= n->preset;
+    }
+
     default:
         return 0;
     }
@@ -170,20 +180,25 @@ static uint8_t add_signal(hw_program *p, uint16_t id, uint8_t output, uint8_t ty
 static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
     if (p->node_count == PROG_NODES_MAX) return NULL;
     prog_node *n = &p->nodes[p->node_count++];
-    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL, .in_full = { 1, 1 } };
+    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL, .out_count = PROG_NO_SIGNAL, .in_full = { 1, 1 } };
     memset(n->in, PROG_NO_SIGNAL, sizeof n->in);
     return n;
 }
 
 // The value of a source's signal that drives an output to its max, such as a
 // PWM's: 1 for a slider (its values are 0 to 1) or a scale, 3.3 V for an ADC,
-// CORE_TEMP_FULL °C for the core temperature, and for a min or max that of what it
-// picks from.
+// CORE_TEMP_FULL °C for the core temperature, for a min or max that of what it
+// picks from, and for a counter's count its preset.
 static float signal_full(const hw_program *p, uint8_t s) {
     if (s == PROG_NO_SIGNAL) return 1;
     switch (p->signals[s].type) {
     case MSG_HW_ADC: return PROG_ADC_VOLTS;
     case MSG_HW_CORE: return CORE_TEMP_FULL;
+    case MSG_LOGIC_COUNTER:
+        for (uint8_t i = 0; i < p->node_count; i++) {
+            if (p->nodes[i].out_count == s) return (float)p->nodes[i].preset;
+        }
+        return 1;           // its done output: 0 or 1
     case MSG_LOGIC_MIN:
     case MSG_LOGIC_MAX:
         // The full scale of what it picks from: of its first wired input.
@@ -203,11 +218,13 @@ static uint8_t ref_signal(const hw_program *p, msg_ref ref) {
     return ref.id ? program_signal(p, ref.id, ref.output) : PROG_NO_SIGNAL;
 }
 
-// Whether node n reads a signal that a logic node in nodes[from, to) writes.
+// Whether node n reads a signal that a logic node in nodes[from, to) writes, other
+// than through a feedback wire.
 static bool reads_logic(const hw_program *p, const prog_node *n, uint8_t from, uint8_t to) {
     for (uint8_t i = 0; i < n->in_count; i++) {
+        if (n->in[i] == PROG_NO_SIGNAL || n->feedback & 1 << i) continue;
         for (uint8_t j = from; j < to; j++) {
-            if (n->in[i] != PROG_NO_SIGNAL && n->in[i] == p->nodes[j].out) return true;
+            if (n->in[i] == p->nodes[j].out || n->in[i] == p->nodes[j].out_count) return true;
         }
     }
     return false;
@@ -215,7 +232,9 @@ static bool reads_logic(const hw_program *p, const prog_node *n, uint8_t from, u
 
 // Put the logic nodes, nodes[first, node_count), in the order core 1 runs them:
 // each after the logic it reads, so a scan carries a change through a chain of
-// them. Otherwise they keep the config's order. In a loop, which the UI doesn't
+// them. Otherwise they keep the config's order. A feedback wire doesn't count:
+// the logic it comes from runs after the logic it goes into, which so reads it as
+// the last scan left it. In a loop with no feedback wire, which the UI doesn't
 // draw, the first of its nodes left comes first, and reads the others' signals
 // as the last scan left them.
 static void order_logic(hw_program *p, uint8_t first) {
@@ -284,8 +303,10 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
         default:
             // A logic element's signal, for the elements that read it; its node
             // comes after the inputs.
-            if (program_logic(itr.type) && logic_payload_valid(itr.type, itr.pay, itr.len, itr.flags))
+            if (program_logic(itr.type) && logic_payload_valid(itr.type, itr.pay, itr.len, itr.flags)) {
                 add_signal(p, itr.id, 0, itr.type, 0);
+                if (itr.type == MSG_LOGIC_COUNTER) add_signal(p, itr.id, 1, itr.type, 0);   // its count
+            }
             break;
         }
     }
@@ -304,8 +325,13 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
 
         uint8_t r = msg_ref_len(itr.flags);
         n->in_count = itr.type == MSG_LOGIC_AND || itr.type == MSG_LOGIC_OR || itr.type == MSG_LOGIC_MIN
-            || itr.type == MSG_LOGIC_MAX ? itr.len / r : itr.type == MSG_LOGIC_LATCH ? 2 : 1;
-        for (uint8_t i = 0; i < n->in_count; i++) n->in[i] = ref_signal(p, msg_ref_at(itr.pay + i * r, itr.flags));
+            || itr.type == MSG_LOGIC_MAX ? itr.len / r
+            : itr.type == MSG_LOGIC_LATCH || itr.type == MSG_LOGIC_COUNTER ? 2 : 1;
+        for (uint8_t i = 0; i < n->in_count; i++) {
+            msg_ref ref = msg_ref_at(itr.pay + i * r, itr.flags);
+            n->in[i] = ref_signal(p, ref);
+            if (ref.feedback) n->feedback |= 1 << i;
+        }
         if (itr.type == MSG_LOGIC_COMPARE) {
             n->options = itr.pay[r];
             n->threshold = msg_float_at(itr.pay + r + 1);
@@ -318,6 +344,9 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
         } else if (itr.type == MSG_LOGIC_SCALE) {
             n->options = itr.pay[r];
             for (int i = 0; i < 4; i++) n->scale[i] = msg_float_at(itr.pay + r + 1 + 4 * i);
+        } else if (itr.type == MSG_LOGIC_COUNTER) {
+            n->out_count = program_signal(p, itr.id, 1);
+            n->preset = msg_u32_at(itr.pay + 2 * r);
         }
     }
     order_logic(p, first_logic);
@@ -401,6 +430,7 @@ static const char *type_name(uint8_t type) {
     case MSG_LOGIC_BLINK: return "blink";
     case MSG_LOGIC_TOGGLE: return "toggle";
     case MSG_LOGIC_LATCH: return "latch";
+    case MSG_LOGIC_COUNTER: return "counter";
     default: return "?";
     }
 }
@@ -426,6 +456,13 @@ static void put_signal(text *t, uint8_t s) {
     else put(t, "s%u", s);
 }
 
+// A node's k-th input: its signal, marked ' if it comes through a feedback wire
+// (it is read as the last scan left it).
+static void put_input(text *t, const prog_node *n, uint8_t k) {
+    put_signal(t, n->in[k]);
+    if (n->feedback & 1 << k) put(t, "'");
+}
+
 size_t program_describe(const hw_program *p, char *buf, size_t size) {
     text t = { buf, size, 0 };
     if (size) buf[0] = 0;
@@ -443,7 +480,7 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);
-            put_signal(&t, n->in[0]);
+            put_input(&t, n, 0);
             put(&t, " -> ");
             put_signal(&t, n->out);
             break;
@@ -456,14 +493,14 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put(&t, "%s n%u <-", n->type == MSG_LOGIC_AND ? "AND" : n->type == MSG_LOGIC_OR ? "OR"
                 : n->type == MSG_LOGIC_NOT ? "NOT" : n->type == MSG_LOGIC_MIN ? "MIN"
                 : n->type == MSG_LOGIC_MAX ? "MAX" : "TOGGLE", n->id);
-            for (uint8_t k = 0; k < n->in_count; k++) { put(&t, " "); put_signal(&t, n->in[k]); }
+            for (uint8_t k = 0; k < n->in_count; k++) { put(&t, " "); put_input(&t, n, k); }
             put(&t, " -> ");
             put_signal(&t, n->out);
             break;
         case MSG_LOGIC_SCALE:
             put(&t, "SCALE n%u %.4g-%.4g to %.4g-%.4g%s <- ", n->id, (double)n->scale[0], (double)n->scale[1],
                 (double)n->scale[2], (double)n->scale[3], n->options & SCALE_CLAMP ? " clamp" : "");
-            put_signal(&t, n->in[0]);
+            put_input(&t, n, 0);
             put(&t, " -> ");
             put_signal(&t, n->out);
             break;
@@ -472,21 +509,31 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put(&t, "%s n%u on %lu", n->type == MSG_LOGIC_PULSE ? "PULSE" : "BLINK", n->id, (unsigned long)n->on_ms);
             if (n->type == MSG_LOGIC_BLINK) put(&t, " off %lu", (unsigned long)n->off_ms);
             put(&t, " <- ");
-            put_signal(&t, n->in[0]);
+            put_input(&t, n, 0);
             put(&t, " -> ");
             put_signal(&t, n->out);
             break;
         case MSG_LOGIC_LATCH:
             put(&t, "LATCH n%u set ", n->id);
-            put_signal(&t, n->in[0]);
+            put_input(&t, n, 0);
             put(&t, " reset ");
-            put_signal(&t, n->in[1]);
+            put_input(&t, n, 1);
             put(&t, " -> ");
             put_signal(&t, n->out);
             break;
+        case MSG_LOGIC_COUNTER:
+            put(&t, "COUNTER n%u preset %lu count ", n->id, (unsigned long)n->preset);
+            put_input(&t, n, 0);
+            put(&t, " reset ");
+            put_input(&t, n, 1);
+            put(&t, " -> ");
+            put_signal(&t, n->out);
+            put(&t, " ");
+            put_signal(&t, n->out_count);
+            break;
         case MSG_LOGIC_DELAY:
             put(&t, "DELAY n%u on %lu off %lu <- ", n->id, (unsigned long)n->on_ms, (unsigned long)n->off_ms);
-            put_signal(&t, n->in[0]);
+            put_input(&t, n, 0);
             put(&t, " -> ");
             put_signal(&t, n->out);
             break;

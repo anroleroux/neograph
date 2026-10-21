@@ -16,7 +16,7 @@ the TMP button in the HWI group.
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
-| **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, DLY, SCL, MIN, MAX, PLS, BLK, TGL, LCH |
+| **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, DLY, SCL, MIN, MAX, PLS, BLK, TGL, LCH, CNT |
 
 ## Things every node shares
 
@@ -280,16 +280,17 @@ it. Text is typed as on a US keyboard layout.
 
 Logic makes decisions on the device, every 10 ms, without the browser. Each logic
 node reads one or more sources and is a source itself. Most output on/off; Scale,
-Min and Max output numbers. A logic node is both: wires come into it, and leave it
-for outputs or other logic. Between two logic nodes, a wire goes from the node you
-picked first to the one you clicked. A wire that would make a loop isn't offered.
+Min and Max output numbers; a Counter has one of each. A logic node is both: wires
+come into it, and leave it for outputs or other logic. Between two logic nodes, a
+wire goes from the node you picked first to the one you clicked. A wire may close a
+loop, to repeat something: see [Loops](#loops).
 
 Every logic node has the **Command view** setting (Show, Hide; Hide by default),
 which puts a tile with its state or value in the Command view. The tables below list
 only each node's own settings.
 
 When a graph starts (at power-on, and on each save), logic starts off or at 0: a
-latch has to be set again, and a toggle starts off.
+latch has to be set again, a toggle starts off, and a counter starts at 0.
 
 ### Compare: `LGC-CMP`
 
@@ -495,13 +496,72 @@ Example: core temperature → Compare (above 70) → Latch Set; momentary button
 Latch Reset; Latch → Blink → onboard LED. The LED flashes after an over-temperature
 until the button is pressed.
 
+### Counter: `LGC-CNT`
+
+| | |
+|---|---|
+| Category | Logic |
+| Inputs | Two, on/off: **Count** and **Reset** |
+| Outputs | **Done** (on/off) and **Count** (a number, 0 to the preset) |
+| Default label | Counter |
+
+Counts each time Count goes on, up to its preset, and stops there. Done is on once
+the count reaches the preset. While Reset is on, the count is 0 whatever Count does.
+Use it to do something a set number of times (see [Loops](#loops)), or to act on the
+fifth press of a button. The node shows its count and preset, for example `2/3`. An
+input that is already on when the graph starts doesn't count.
+
+The first wire drawn in becomes Count and the second Reset. Pick them in the
+settings to change that. Each wire leaving it is labelled Done or Count.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Wire from | Done, Count | Done | Which output the next wire you draw leaves from. Count is a number: wire it to a compare, scale, plot or PWM (which takes it as a fraction of the preset). |
+| Preset | 1 to 1000000 | 3 | The count it stops at, and where Done turns on. |
+| Count | An on/off source, or None | The first wire in | The source it counts. Picking one draws its wire. |
+| Reset | An on/off source, or None | The second wire in | The source that sets it back to 0. |
+
+---
+
+## Loops
+
+A wire may go back up the graph, from a logic node into logic that drives it. That
+closes a loop, which goes round once every 10 ms: this is how a graph repeats
+something, and stops.
+
+- **The wire that closes a loop is a feedback wire**, drawn dashed. The node it goes
+  into reads it 10 ms late, as it was at the last scan, so the loop never runs away.
+  Delete a wire the loop needs, and the feedback wire becomes an ordinary one.
+- **A loop must go through a node that remembers**: a delay, pulse, blink, toggle,
+  latch or counter. A wire that would close a loop of only compares, ANDs, ORs, NOTs,
+  scales, mins and maxes isn't offered: such a loop would only flip on and off every
+  scan.
+- **In the browser** a loop runs the same way, so you can try it before saving.
+
+Example: blink the LED three times for each press of a button.
+
+1. Momentary button → Latch Set.
+2. Latch → Blink → onboard LED.
+3. Blink → Counter Count, with the preset at 3.
+4. Latch → NOT → Counter Reset: the count starts from 0 for each press.
+5. Counter (Done) → Latch Reset. This wire closes the loop and is drawn dashed.
+
+Pressing the button sets the latch, which runs the blink. The counter counts the
+blinks; at the third, Done resets the latch, which stops the blink and resets the
+counter, ready for the next press.
+
+Another loop: **a tick every 5 s.** NOT → Delay (on delay 5 s) → back into the NOT.
+The delay turns on 5 s after the NOT does, which turns the NOT off, which turns the
+delay off again: the delay's output is on for 10 ms every 5 s. Wire it to a Pulse
+for a longer kick, or to a Counter to count the ticks.
+
 ---
 
 ## Which node takes which
 
-| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH |
+| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT |
 |---|---|---|---|---|
 | BTN, GPI | ✓ | | | ✓ |
 | SLD, XY (X or Y), ADC, TMP | | ✓ | ✓ | |
-| CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH | ✓ | | | ✓ |
-| SCL, MIN, MAX | | ✓ | ✓ | |
+| CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
+| SCL, MIN, MAX, CNT (Count) | | ✓ | ✓ | |

@@ -426,6 +426,7 @@ static void scan(uint32_t count) {
 
         if (program_logic(n->type)) {
             p->signals[n->out].value = program_logic_step(p, n, p->signals[n->out].value, &st->logic, SCAN_MS);
+            if (n->out_count != PROG_NO_SIGNAL) p->signals[n->out_count].value = (float)st->logic.count;
             continue;
         }
 

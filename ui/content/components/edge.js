@@ -1,5 +1,11 @@
+// How long the browser takes to hand a value on through a feedback wire: a
+// scan of the device's, which reads one as the last scan left it.
+const FEEDBACK_MS = 10;
+
 // A wire from an output of a source node (start) into an output node (end).
-// `output` is which of the source's outputs, by default its active one.
+// `output` is which of the source's outputs, by default its active one. A wire
+// that closes a loop of ordinary wires is a feedback wire (see closesLoop),
+// drawn dashed.
 class gEdge {
     constructor(n1, n2, output) {
         this.id = idEdgeCounter++;
@@ -14,11 +20,13 @@ class gEdge {
 
         // An output with no room for another wire drops its oldest: on an output
         // that takes one wire, a new one replaces the old.
-        const inp = n2.inputs[n2.actNum];
+        const inp = n2.inputs[0];
         if (inp.conns.length >= inp.max) inp.conns[0].remove();
 
         this.start.node = n1;
         this.start.output = output ?? n1.actNum;
+        this.feedback = closesLoop(n1, n2);
+        this.held = n1.outputValue(this.start.output);  // a feedback wire: the value its end reads
         this.start.mvfunc = () => this.moveStart();
         this.start.handleDisplay = (display) => this.sHandle.classList.toggle('hide', !display);
         this.end.node = n2;
@@ -56,6 +64,9 @@ class gEdge {
         path.setAttribute('fill', 'none');
         g.appendChild(path);
         this.path = path;
+        this.title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        g.appendChild(this.title);
+        this.showFeedback();
 
         // A wide, invisible copy of the wire, easier to click or tap than the wire.
         const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -119,6 +130,32 @@ class gEdge {
         this.outputName.setAttribute('y', Math.round(10 * (ny - 60 * Math.sin(a) - 12 * Math.cos(a))) / 10);
     }
 
+    // A feedback wire is dashed, and says so when pointed at.
+    showFeedback() {
+        if (this.feedback) this.path.setAttribute('stroke-dasharray', '6 4');
+        else this.path.removeAttribute('stroke-dasharray');
+        this.title.textContent = this.feedback ? 'Feedback: read as the last scan left it' : '';
+    }
+
+    // A feedback wire no longer closing a loop becomes an ordinary wire, and its
+    // end takes its source's value now.
+    setFeedback(feedback) {
+        this.feedback = feedback;
+        this.held = this.start.node.outputValue(this.start.output);
+        this.showFeedback();
+        if (!feedback) this.end.node.receive(this.held);
+    }
+
+    // A feedback wire hands a value on a scan later, as the device reads it: a
+    // loop in the browser goes round once a scan rather than all at once.
+    handOn(value) {
+        setTimeout(() => {
+            if (!this.feedback || !gEdges.includes(this)) return;
+            this.held = value;
+            this.end.node.receive(value);
+        }, FEEDBACK_MS);
+    }
+
     // Show the wire as selected, with both handles, or not.
     highlight(on) {
         this.path.setAttribute('stroke', on ? '#4CAF50' : '#BFCDE7');
@@ -126,15 +163,19 @@ class gEdge {
         this.end.handleDisplay(on);
     }
 
-    // Take the wire out of the graph: off both nodes, and off the page.
+    // Take the wire out of the graph: off both nodes, and off the page. A
+    // feedback wire whose loop it broke becomes an ordinary wire.
     remove() {
         const out = this.start.node.outputs[this.start.output];
         out.conns = out.conns.filter(c => c !== this);
-        const inp = this.end.node.inputs[this.end.node.actNum];
+        const inp = this.end.node.inputs[0];
         inp.conns = inp.conns.filter(c => c !== this);
         gEdges = gEdges.filter(e => e !== this);
         this.elm.remove();
         this.end.node.edgeRemoved(this);
+        for (const e of gEdges) {
+            if (e.feedback && !closesLoop(e.start.node, e.end.node)) e.setFeedback(false);
+        }
     }
 
     setPath(d) {

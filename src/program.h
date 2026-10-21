@@ -17,8 +17,10 @@
  *   - nodes: the elements core 1 runs, in the order it runs them: the hardware
  *     inputs (ADC, GPIO input, core temperature), which write a signal; then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
- *     latch), which reads signals and writes its own, each after the logic it
- *     reads; then the outputs (LED, GPO, PWM, USB keyboard), which read one or two.
+ *     latch, counter), which reads signals and writes its own, each after the
+ *     logic it reads (except through a feedback wire, which it reads as the last
+ *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard), which read
+ *     one or two.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
  * while it runs a program; core 0 reads them for telemetry.
@@ -43,22 +45,26 @@ typedef struct {
     uint8_t pin;            // GPO, PWM, GPIO input: its GPIO; ADC: its channel
     uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options
     uint8_t out;            // an input or logic: the signal it writes
+    uint8_t out_count;      // a counter: the signal of its count, its output 1
     uint8_t in_count;       // the signals it reads
     uint8_t in[PROG_NODE_INPUTS];   // logic or an output: the signals it reads; a PWM's duty, then its
-                                    // frequency; a latch's set, then its reset
+                                    // frequency; a latch's set, then its reset; a counter's count, then its reset
+    uint8_t feedback;       // logic: bit k set when in[k] comes through a feedback wire
     float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V)
     uint8_t duty, duty_min, duty_max;       // a PWM, percent
     uint16_t freq, freq_min, freq_max;      // a PWM, Hz
     float threshold, hysteresis;            // a compare
     float scale[4];                         // a scale: the input's from and to, the output's from and to
     uint32_t on_ms, off_ms;                 // a delay's delays; a pulse's time on; a blink's times on and off
+    uint32_t preset;                        // a counter
 } prog_node;
 
 // What a logic node keeps from one scan to the next, besides its output.
 typedef struct {
     uint32_t held_ms;       // delay: how long its input has differed from its output;
                             // pulse, blink: how long it has been in its state
-    bool in_was;            // pulse, toggle: its input at the last scan; blink: whether it was blinking
+    bool in_was;            // pulse, toggle, counter: its input at the last scan; blink: whether it was blinking
+    uint32_t count;         // counter: its count, 0 to its preset
 } prog_logic_state;
 
 typedef struct {
@@ -81,12 +87,13 @@ uint8_t program_signal(const hw_program *p, uint16_t id, uint8_t output);
 bool program_logic(uint8_t type);
 bool program_logic_floating(uint8_t type);
 
-// A logic node's state when a program starts: a pulse or toggle takes its input
-// as it is, so an input already on doesn't count as going on.
+// A logic node's state when a program starts: a pulse, toggle or counter takes its
+// input as it is, so an input already on doesn't count as going on.
 void program_logic_start(const hw_program *p, const prog_node *n, prog_logic_state *st);
 
 // A logic node's output after one scan of dt_ms, from its output before (out),
-// as core 1 runs it (PROTOCOL.md, "Logic"). st carries its state between scans.
+// as core 1 runs it (PROTOCOL.md, "Logic"). st carries its state between scans;
+// a counter's count, its second output, is st->count.
 float program_logic_step(const hw_program *p, const prog_node *n, float out, prog_logic_state *st, uint32_t dt_ms);
 
 // Whether a source of this type is operated from the browser (a button, a

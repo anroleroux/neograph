@@ -26,6 +26,10 @@ const MSG_FLAG_OUTPUT        = 0x01;
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
+// A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which
+// closes a loop. Logic reads it as the last scan left it. Bits 0-6 are the output.
+const MSG_REF_FEEDBACK       = 0x80;
+
 // Control element types (0x00-0x7F): bit 6 set = logic (below); otherwise bit 5 set =
 // HW, bit 4 set = input.
 const MSG_HW_BIT             = 0x20;
@@ -64,7 +68,8 @@ const MSG_LOGIC_PULSE        = 0x48;  // on for a time after its input goes on
 const MSG_LOGIC_BLINK        = 0x49;  // on and off in turn while its input is on
 const MSG_LOGIC_TOGGLE       = 0x4A;  // turns over each time its input goes on
 const MSG_LOGIC_LATCH        = 0x4B;  // on once set, off once reset; reset wins
-const MSG_LOGIC_LAST         = 0x4B;  // the last logic type: MSG_LOGIC_LATCH
+const MSG_LOGIC_COUNTER      = 0x4C;  // counts its input going on, up to a preset; two outputs
+const MSG_LOGIC_LAST         = 0x4C;  // the last logic type: MSG_LOGIC_COUNTER
 
 // Supporting and networking element types.
 const MSG_STRING             = 0xA0;  // a node's label, keyed by node ID
@@ -126,6 +131,7 @@ const COMPARE_BELOW          = 0x01;  // on below the threshold; off above it pl
 const LOGIC_INPUTS_MAX       = 4;
 const DELAY_MAX_MS           = 86400000;  // a day
 const SCALE_CLAMP            = 0x01;  // options bit 0: keep the output within its range
+const COUNTER_MAX            = 1000000;  // the highest preset
 
 // Core temperature: on the device it drives outputs from 0 °C (0) to CORE_TEMP_FULL °C (1).
 const CORE_TEMP_FULL         = 100;

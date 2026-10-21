@@ -43,6 +43,7 @@ const NODE_CLASSES = {
     [MSG_LOGIC_BLINK]: uiBlink,
     [MSG_LOGIC_TOGGLE]: uiToggle,
     [MSG_LOGIC_LATCH]: uiLatch,
+    [MSG_LOGIC_COUNTER]: uiCounter,
 };
 
 // Whether a control message type is a logic element's.
@@ -190,10 +191,12 @@ function restoreGraph(msgs) {
     idCounter = Math.max(...controls.keys()) + 1;
 
     // Wires: each output's source references (a PWM's duty and frequency
-    // sources, an AND's or OR's several, another output's or logic's one source),
-    // shaped by their MSG_WIRE messages if there are any (otherwise drawn
-    // straight between the nodes).
-    const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
+    // sources, an AND's or OR's several, a latch's or counter's roles, another
+    // output's or logic's one source), shaped by their MSG_WIRE messages if there
+    // are any (otherwise drawn straight between the nodes). Feedback wires come
+    // last, so each closes the loop it closed when it was drawn.
+    const feedback = [];
+    const restoreWire = (ref, draw) => { if (ref.node) (ref.feedback ? feedback.push(draw) : draw()); };
     for (const [id, m] of controls) {
         const elm = elements['n' + id];
         if (!elm.inputs.length) continue;
@@ -212,13 +215,13 @@ function restoreGraph(msgs) {
                 }
             }
             elm.syncWires();
-        } else if (m.type === MSG_LOGIC_LATCH) {
-            // Its set source, then its reset source.
+        } else if (elm.roles) {
+            // A latch's set source, then its reset source; a counter's count, then its reset.
             const r = refLen(m);
-            if (m.len !== 2 * r) continue;
-            ['set', 'reset'].forEach((role, k) => {
-                const { node, output } = refAt(m, k * r);
-                if (node) elm.setRole(role, node, output);
+            if (m.len < elm.roles.length * r) continue;
+            elm.roles.forEach(([role], k) => {
+                const ref = refAt(m, k * r);
+                restoreWire(ref, () => elm.setRole(role, ref.node, ref.output));
             });
         } else {
             // An AND, OR, min or max has a reference for each wire in; the others one.
@@ -226,12 +229,18 @@ function restoreGraph(msgs) {
             const several = [MSG_LOGIC_AND, MSG_LOGIC_OR, MSG_LOGIC_MIN, MSG_LOGIC_MAX].includes(m.type);
             const refs = several ? Math.floor(m.len / r) : 1;
             for (let k = 0; k < refs; k++) {
-                const { node, output } = refAt(m, k * r);
-                // None if the types don't match, or (in a config not saved by the UI) it would close a loop.
-                if (node) createEdge(node.name, elm.name, output);
+                const ref = refAt(m, k * r);
+                // None if the types don't match, or (in a config not saved by the UI) it would close
+                // a loop through nothing that holds a state.
+                restoreWire(ref, () => createEdge(ref.node.name, elm.name, ref.output));
             }
         }
+    }
+    feedback.forEach(draw => draw());
 
+    const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
+    for (const [id, m] of controls) {
+        const elm = elements['n' + id];
         for (const edge of elm.inConns()) {
             const wire = wires.get(id + ':' + edge.start.node.id + ':' + edge.start.output) ?? wires.get(id);
             if (!wire) continue;
@@ -352,15 +361,16 @@ function createNode(id,obj) {
 }
 
 // Wire two nodes, a source and an output whose types match; null if they don't,
-// or if the wire would close a loop. Between two logic nodes it goes from the
-// first to the second (see wireEnds).
+// or if the wire would close a loop through nothing that holds a state (see
+// statelessLoop). A wire that closes a loop is a feedback wire. Between two logic
+// nodes it goes from the first to the second (see wireEnds).
 // The wire leaves the source from `sourceOutput`, by default its active output.
 function createEdge(id1, id2, sourceOutput) {
     const ends = wireEnds(elements[id1], elements[id2]);
     if (!ends) return null;
     const [source, output] = ends;
     sourceOutput ??= source.actNum;
-    if (!output.takesType(source, sourceOutput) || closesLoop(source, output)) return null;
+    if (!output.takesType(source, sourceOutput) || statelessLoop(source, output)) return null;
 
     return new gEdge(source, output, sourceOutput);
 }

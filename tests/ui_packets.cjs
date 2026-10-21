@@ -168,7 +168,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH CNT', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -962,20 +962,21 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             text: cmp.gElm.children[1].textContent,
             and: elements.n7.inConns().map(c => c.start.node.name).join(),
             led: elements.n2.inConns().map(c => c.start.node.name).join(),
-            // A wire back up the chain would close a loop: not offered, not drawn.
-            loop: !elements.n7.canTakeConn(elements.n9) && createEdge('n9', 'n7') === null
+            // A wire back up the chain closes a loop through the delay, which holds a
+            // state: offered (as a feedback wire). Not drawn here; see the loop below.
+            loop: elements.n7.canTakeConn(elements.n9)
                 && createEdge('n8', 'n4') === null && createEdge('n4', 'n4') === null,
             // A slider is floating: it drives a compare, not an AND; a compare
             // takes no boolean source.
             types: createEdge('n1', 'n4') === null && elements.n7.takesType(elements.n4)
                 && !elements.n4.takesType(elements.n6),
-            free: elements.n7.canTakeConn(elements.n9) === false && new uiOr(0, 300).canTakeConn(elements.n9),
+            free: new uiOr(0, 300).canTakeConn(elements.n9),
         };
     });
     expect(logic.rejected && logic.delays, 'logic settings out of range were accepted: ' + JSON.stringify(logic));
     expect(logic.wired && logic.text === '> 40' && logic.and === 'n4,n6' && logic.led === 'n9',
         'the logic was not wired: ' + JSON.stringify(logic));
-    expect(logic.loop, 'a wire that closes a loop was offered or drawn');
+    expect(logic.loop, 'a wire back through a delay was not offered, or a wrong one was drawn');
     expect(logic.types, 'logic took a source of the wrong type');
     expect(logic.free, 'a new OR does not take the NOT');
     await page.evaluate(() => elements.n11.remove());
@@ -1152,6 +1153,116 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [elements.n2.setSource?.name, elements.n2.resetSource?.name].join();
     });
     expect(resetOnly === ',n1', 'a latch with only a reset source restored as ' + resetOnly);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // ── A loop: a button blinks the LED three times. The latch runs the blink; the
+    // counter counts the blinks, and its done output, wired back to the latch's
+    // reset, closes the loop as a feedback wire. The counter is reset while the
+    // latch is off. A loop through nothing that holds a state isn't drawn. ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    const loop = await page.evaluate(() => {
+        [MSG_UI_BUTTON, MSG_LOGIC_LATCH, MSG_LOGIC_BLINK, MSG_LOGIC_COUNTER, MSG_LOGIC_NOT, MSG_UI_GRAPH,
+         MSG_LOGIC_NOT, MSG_LOGIC_NOT].forEach(addNode);          // n4 to n11
+        const [latch, blink, counter] = ['n5', 'n6', 'n7'].map(n => elements[n]);
+        const rejected = counter.setPreset('0') === false && counter.setPreset('1.5') === false
+            && counter.setPreset(String(COUNTER_MAX + 1)) === false;
+        counter.setPreset('3');
+        blink.setOnTime('0.05'); blink.setOffTime('0.05');
+        const wired = [
+            createEdge('n4', 'n5'),                 // button → latch: set
+            createEdge('n5', 'n6'),                 // latch → blink
+            createEdge('n6', 'n7'),                 // blink → counter: count
+            createEdge('n5', 'n8'),                 // latch → NOT
+            createEdge('n8', 'n7'),                 // NOT → counter: reset
+            createEdge('n7', 'n5'),                 // counter done → latch: reset, closing the loop
+            createEdge('n6', 'n2'),                 // blink → LED, in place of the button
+            createEdge('n10', 'n11'),               // NOT → NOT
+        ].every(e => e !== null);
+        counter.setWireOutput(1);
+        const count = createEdge('n7', 'n9');       // the count → plot
+        return {
+            rejected, wired,
+            roles: [latch.setSource?.name, latch.resetSource?.name, counter.countSource?.name, counter.resetSource?.name].join(),
+            feedback: gEdges.filter(e => e.feedback).map(e => e.start.node.name + '>' + e.end.node.name).join(),
+            dashed: gEdges.find(e => e.feedback)?.path.getAttribute('stroke-dasharray'),
+            count: count?.start.output === 1 && count.outputName?.textContent === 'Count',
+            // The count is floating: a plot takes it, a GPO doesn't.
+            types: createEdge('n7', 'n3') === null && counter.outputs.map(o => o.type).join() === 'bool,float',
+            // NOT → NOT → back again would flip every scan: not offered, not drawn.
+            stateless: !elements.n10.canTakeConn(elements.n11) && createEdge('n11', 'n10') === null,
+        };
+    });
+    expect(loop.rejected, 'a counter preset out of range was accepted');
+    expect(loop.wired && loop.roles === 'n4,n7,n6,n8' && loop.count && loop.types,
+        'the loop was not wired: ' + JSON.stringify(loop));
+    expect(loop.feedback === 'n7>n5' && loop.dashed, 'the wire closing the loop is not a feedback wire: ' + JSON.stringify(loop));
+    expect(loop.stateless, 'a loop through nothing that holds a state was offered or drawn');
+
+    // In the browser: a press blinks three times, then the loop stops and the counter is back at 0.
+    const run = await page.evaluate(async () => {
+        const blinks = [], counts = [];
+        const emit = (node, seen, output) => {
+            const base = node.emit.bind(node);
+            node.emit = (v, o = 0) => { if (o === output) seen.push(Number(v)); base(v, o); };
+        };
+        emit(elements.n6, blinks, 0);
+        emit(elements.n7, counts, 1);
+        const b = elements.n4;
+        b.value = true; b.emit(1); b.value = false; b.emit(0);
+        await new Promise(r => setTimeout(r, 600));
+        return { blinks: blinks.filter(v => v === 1).length, counts: counts.join(),
+            after: [elements.n5.value, elements.n6.value, elements.n7.value, elements.n7.count].join() };
+    });
+    expect(run.blinks === 3 && run.counts === '1,2,3,0' && run.after === 'false,false,false,0',
+        'the loop did not blink three times: ' + JSON.stringify(run));
+
+    // The device reports the counter's two outputs: its node and tile show them.
+    const reported = await page.evaluate(() => {
+        elements.n7.shown = true;
+        buildCommandInterface();
+        window.__ws.receive('sig 7 0 0');
+        window.__ws.receive('sig 7 1 2');
+        return [elements.n7.count, elements.n7.gElm.children[1].textContent, elements.n7.tileState.textContent].join();
+    });
+    expect(reported === '2,2/3,2 of 3', 'the device\'s count was not shown: ' + reported);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const loopSaved = await sent(page);
+    const loopHex = hex(loopSaved[0]);
+    expect(loopSaved.length === 1
+        && loopHex.includes('4b01000506' + '000400' + '000780')                     // latch: set ← n4, reset ← n7 fed back
+        && loopHex.includes('4c0300070a' + '000600' + '000800' + '00000003')        // counter: count ← n6, reset ← n8, preset 3
+        && loopHex.includes('0201000904' + '000701'),                               // plot ← n7's count
+        'the loop was not saved as expected: ' + loopHex);
+    packets.push(...loopSaved);
+    await page.close();
+
+    // Reconnecting restores the loop with its feedback wire; saving it again changes
+    // nothing. Taking out a wire that the loop needs makes the feedback wire an
+    // ordinary one.
+    ({ page, errors } = await open(browser));
+    await connect(page, loopSaved[0]);
+    const loopRestored = await page.evaluate(() => ({
+        feedback: gEdges.filter(e => e.feedback).map(e => e.start.node.name + '>' + e.end.node.name).join(),
+        counter: [elements.n7.preset, elements.n7.countSource?.name, elements.n7.resetSource?.name].join(),
+        plot: elements.n9.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+    }));
+    expect(JSON.stringify(loopRestored) === JSON.stringify({ feedback: 'n7>n5', counter: '3,n6,n8', plot: 'n7:1' }),
+        'the loop was not restored: ' + JSON.stringify(loopRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const loopResaved = await sent(page);
+    expect(loopResaved.length === 1 && hex(loopResaved[0]) === loopHex, 'saving the restored loop changed the config');
+    const broken = await page.evaluate(() => {
+        const out = (from, to) => gEdges.find(e => e.start.node.name === from && e.end.node.name === to);
+        out('n5', 'n6').remove();               // latch → blink: the loop still goes through the NOT
+        const still = out('n7', 'n5').feedback;
+        out('n8', 'n7').remove();               // NOT → counter: no loop left
+        return [still, out('n7', 'n5').feedback, out('n7', 'n5').path.hasAttribute('stroke-dasharray')].join();
+    });
+    expect(broken === 'true,false,false', 'a feedback wire was not made ordinary once its loop was broken: ' + broken);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();
