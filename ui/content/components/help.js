@@ -110,7 +110,7 @@ const NODE_HELP = {
     ],
     input: [
         "An input of the block: inside, a source carrying whatever is wired into that input on each copy.",
-        "Type: On/off or Number decides what a copy's input takes. Changing it takes its wires off.",
+        "It takes its type from the first wire drawn from it: wired into a NOT it is On/off, into a compare a Number. Type sets it too: it decides what a copy's input takes. Changing it takes its wires off.",
     ],
     output: [
         "An output of the block: wire into it what each copy hands on from that output.",

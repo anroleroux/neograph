@@ -302,11 +302,13 @@ class uiComponents {
     // boolean output (an LED or GPO), and a floating one (a slider, the core
     // temperature) a floating output (a PWM, a plot or a compare). A source whose values
     // only reach the browser (an output marked browserOnly) drives only UI
-    // outputs: the device never has its values.
+    // outputs: the device never has its values. A source that takes its type from
+    // its first wire (a block's input with none yet, see uiSubIn) drives either.
     takesType(source, output = source.actNum) {
         if (!source.outputs.length) return false;
         const out = source.outputs[output];
-        return !!out && out.type === this.inputs[0].type && !(out.browserOnly && this.tc & MSG_HW_BIT);
+        return !!out && (out.type === this.inputs[0].type || !!source.typeFromWire?.())
+            && !(out.browserOnly && this.tc & MSG_HW_BIT);
     }
 
     // The wires into this node.

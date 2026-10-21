@@ -1461,9 +1461,13 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         const copy = newBlock();
         openBlock(copy.def);
         const [inp, out] = Object.values(elements);
-        inp.setType('float');
-        const cmp = addNode(MSG_LOGIC_COMPARE);
-        const inside = !!createEdge(inp.name, cmp.name) && !!createEdge(cmp.name, out.name);
+        // With no wire, the input takes its type from the first one: a number, into the
+        // compare. Then it no longer drives an on/off input.
+        const cmp = addNode(MSG_LOGIC_COMPARE), not = addNode(MSG_LOGIC_NOT);
+        const typed = inp.portType === 'bool' && not.canTakeConn(inp) && cmp.canTakeConn(inp)
+            && !!createEdge(inp.name, cmp.name) && inp.portType === 'float' && createEdge(inp.name, not.name) === null;
+        not.remove();
+        const inside = typed && !!createEdge(cmp.name, out.name);
         closeBlock();
         const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
         const wired = createEdge(button.name, copy.name) === null && !!createEdge(slider.name, copy.name);

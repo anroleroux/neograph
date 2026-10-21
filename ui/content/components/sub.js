@@ -99,10 +99,20 @@ class uiSubPort extends uiLogic {
 }
 
 // An input port: a source in the definition, where a copy's input wire comes in.
+// With no wire yet, it takes its type from the first wire drawn from it: on/off
+// into a NOT, a number into a compare.
 class uiSubIn extends uiSubPort {
     constructor(x = 0, y = 0) {
         super("input", MSG_SUB_INPUT, "IN", x, y);
         this.inputs = [];
+    }
+
+    typeFromWire() { return this.outputs[0].conns.length === 0; }
+
+    addEdge(e) {
+        if (e.start.node === this && this.typeFromWire()) this.setType(e.end.node.inputs[0].type);
+        super.addEdge(e);
+        if (selected === this) this.createSettings();
     }
 
     // Its type, then its index.
