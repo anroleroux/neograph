@@ -127,12 +127,16 @@
     display: none;
 }
 
-/* Over a block's definition: the way back, and its name. */
+/* Over a block's definition, at the foot of the graph, clear of the buttons at
+   its top on a narrow screen: the way back, and its name. */
 #block-bar {
     position: absolute;
-    top: var(--step-0);
+    bottom: var(--step-0);
     left: 50%;
     transform: translateX(-50%);
+    max-width: calc(100% - 2 * var(--step-0));
+    box-sizing: border-box;
+    white-space: nowrap;
     display: flex;
     align-items: center;
     gap: var(--step-0);
@@ -141,6 +145,15 @@
     border-radius: var(--step--1);
     background-color: var(--clr-pane);
     color: #BFCDE7;
+}
+
+#block-bar > .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#block-bar > .back {
+    flex: none;
 }
 
 #block-bar[hidden] {

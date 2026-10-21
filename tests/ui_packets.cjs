@@ -1428,6 +1428,25 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     }, t);
     packets.push(...await sent(page));
     expect(portGone === '1,0,1,true', 'a port taken out of the definition was left on its copies: ' + portGone);
+    // A block with a number input: a slider drives a compare inside it; a button can't
+    // be wired to that input.
+    const numberIn = await page.evaluate(() => {
+        const copy = newBlock();
+        openBlock(copy.def);
+        const [inp, out] = Object.values(elements);
+        inp.setType('float');
+        const cmp = addNode(MSG_LOGIC_COMPARE);
+        const inside = !!createEdge(inp.name, cmp.name) && !!createEdge(cmp.name, out.name);
+        closeBlock();
+        const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
+        const wired = createEdge(button.name, copy.name) === null && !!createEdge(slider.name, copy.name);
+        const values = [0.2, 0.8].map(v => { slider.value = v; slider.emit(v); return copy.outs[0]; }).join('/');
+        saveGraph();
+        return [inside, wired, copy.roles.map(r => r[2]).join(), values].join();
+    });
+    expect(numberIn === 'true,true,float,0/1', 'a block with a number input: ' + numberIn);
+    packets.push(...await sent(page));
+
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {
         restoreGraph(configMessages(Uint8Array.from([
