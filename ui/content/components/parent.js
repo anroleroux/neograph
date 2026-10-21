@@ -470,6 +470,8 @@ class uiComponents {
     createSettings() {
         const settings = document.getElementById('settings');
         settings.innerHTML = `<h3>${this.type.toUpperCase()} ${this.name}</h3>`;
+        const help = helpSetting(this.type);
+        if (help) settings.appendChild(help);
         settings.appendChild(editableSetting('Label', () => this.label, (label) => this.setLabel(label)));
     }
 

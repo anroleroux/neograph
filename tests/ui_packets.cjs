@@ -130,22 +130,43 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const packets = [];
 
     // ── The demo graph: the button drives the LED; below, a second button starts a
-    // loop that blinks the light three times ──
+    // copy of the block "Blink 3", whose loop blinks the light three times ──
     let { page, errors } = await open(browser, true);
     const demo = await page.evaluate(async () => {
         const wires = gEdges.map(e => e.start.node.name + '>' + e.end.node.name + (e.feedback ? '~' : '')).join(' ');
+        const copy = elements.n4, def = copy.def;
+        const inside = scopeEdges(def.scope).map(e => e.start.node.label + '>' + e.end.node.label + (e.feedback ? '~' : '')).join(',');
         const blinks = [];
-        const base = elements.n5.emit.bind(elements.n5);
-        elements.n5.emit = (v, o = 0) => { if (v) blinks.push(v); base(v, o); };
+        const base = copy.emit.bind(copy);
+        copy.emit = (v, o = 0) => { if (v) blinks.push(v); base(v, o); };
         const b = elements.n3;
         b.value = true; b.emit(1); b.value = false; b.emit(0);
         await new Promise(r => setTimeout(r, 1700));
-        return { wires, types: Object.values(elements).map(e => e.type).join(), blinks: blinks.length,
-            after: [elements.n4.value, elements.n5.value, elements.n8.count].join() };
+        const parts = Object.values(copy.parts.elements);
+        return { wires, types: Object.values(elements).map(e => e.type).join(), def: def.name, inside,
+            parts: [copy.base, copy.partCount].join(), blinks: blinks.length,
+            after: [copy.outs[0], elements.n5.on, ...parts.filter(n => n instanceof uiLatch || n instanceof uiCounter)
+                .map(n => n instanceof uiCounter ? n.count : n.value)].join() };
     });
-    expect(demo.wires === 'n1>n2 n3>n4 n4>n5 n5>n6 n5>n8 n4>n7 n7>n8 n8>n4~'
-        && demo.types === 'button,led,button,latch,blink,light,not,counter', 'the demo graph is not as expected: ' + JSON.stringify(demo));
-    expect(demo.blinks === 3 && demo.after === 'false,false,0', 'the demo loop did not blink three times: ' + JSON.stringify(demo));
+    expect(demo.wires === 'n1>n2 n3>n4 n4>n5' && demo.types === 'button,led,button,block,light' && demo.def === 'Blink 3'
+        && demo.inside === 'Start>Latch,Latch>Blink,Blink>Blink,Blink>Counter,Latch>NOT,NOT>Counter,Counter>Latch~'
+        && demo.parts === '6,4', 'the demo graph is not as expected: ' + JSON.stringify(demo));
+    expect(demo.blinks === 3 && demo.after === '0,false,false,0', 'the demo loop did not blink three times: ' + JSON.stringify(demo));
+
+    // Every node's settings say how it works, folded at first; unfolded, the next
+    // node's are too.
+    const help = await page.evaluate(() => {
+        const missing = Object.values(NODE_CLASSES).filter(c => !NODE_HELP[new c(0, 0).type]).map(c => c.name);
+        selectById(1);
+        const folded = !document.querySelector('#settings h3 + details.help').open;
+        document.querySelector('#settings .help').open = true;
+        document.querySelector('#settings .help').dispatchEvent(new Event('toggle'));
+        selectById(2);
+        return { missing: missing.join(), folded, kept: document.querySelector('#settings .help').open,
+            text: document.querySelector('#settings .help p').textContent.slice(0, 18) };
+    });
+    expect(JSON.stringify(help) === JSON.stringify({ missing: '', folded: true, kept: true, text: "The Pico 2 W's onb" }),
+        'the nodes\' help is not as expected: ' + JSON.stringify(help));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
 
@@ -1310,13 +1331,19 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const inBlock = await page.evaluate(() => {
         const shown = (sel) => [...document.querySelectorAll(sel)].filter(b => getComputedStyle(b).display !== 'none')
             .map(b => b.textContent.trim()).join(' ');
+        const red = getComputedStyle(document.querySelector('#wire')).backgroundColor;
         toggleAddMenu();
         toggleAddGroup('sub');
+        const groups = [...document.querySelectorAll('#add .group')];
+        const off = groups.filter(g => g.classList.contains('off'));
         return { bar: document.querySelector('#block-bar').hidden ? '' : document.querySelector('#block-bar .name').textContent,
-            groups: shown('#add .group'), sub: shown('#add .node.shown'),
+            groups: groups.filter(g => !g.classList.contains('off')).map(g => g.textContent.trim()).join(' '),
+            off: off.map(g => g.textContent.trim()).join(' ') + (off.every(g => getComputedStyle(g).backgroundColor === red
+                && getComputedStyle(g).pointerEvents === 'none' && getComputedStyle(g).display !== 'none') ? ': red' : ''),
+            sub: shown('#add .node.shown'),
             led: addNode(MSG_HW_LED) === null, nodes: Object.values(elements).map(e => e.label).join() };
     });
-    expect(JSON.stringify(inBlock) === JSON.stringify({ bar: 'Block 1', groups: 'TM LGC SUB', sub: 'IN OUT', led: true, nodes: 'In 1,Out 1' }),
+    expect(JSON.stringify(inBlock) === JSON.stringify({ bar: 'Block 1', groups: 'TM LGC SUB', off: 'UII HWO HWI UIO USB: red', sub: 'IN OUT', led: true, nodes: 'In 1,Out 1' }),
         'the block\'s view is not as expected: ' + JSON.stringify(inBlock));
     const defined = await page.evaluate(() => {
         const [inp, out] = Object.values(elements);

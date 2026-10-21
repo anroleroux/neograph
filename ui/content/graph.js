@@ -81,7 +81,8 @@ function closeBlock(update = true) {
 }
 
 // The bar over a block's definition, with its name and the way back, and the add
-// menu's groups: a definition holds only logic (LGC, TM) and its ports (SUB).
+// menu's groups: a definition holds only logic (LGC, TM) and its ports (SUB), so
+// the others are shown off.
 function showBlockBar() {
     const bar = document.getElementById('block-bar');
     bar.hidden = !editingBlock;
@@ -769,32 +770,43 @@ function touchEnd(e) {
 svg.addEventListener('pointerup', touchEnd, true);
 svg.addEventListener('pointercancel', touchEnd, true);
 
-// The demo graph: the button drives the onboard LED. Below, a loop: a press of
-// the second button blinks the light three times. The latch runs the blink, the
-// counter counts the blinks, and its done output, wired back to the latch's
-// reset as a feedback wire, stops them; the counter is reset while the latch is off.
+// The demo graph: the button drives the onboard LED. Below, a press of the second
+// button blinks the light three times, through a copy of the block "Blink 3".
+// Inside it, a loop: its input sets the latch, which runs the blink; the counter
+// counts the blinks, and its done output, wired back to the latch's reset as a
+// feedback wire, stops them; the counter is reset while the latch is off.
 function demoGraph() {
     new uiButton(-200, -40);                    // n1
     new uiLED(100, 40);                         // n2
     createEdge('n1', 'n2');
 
+    const def = new uiSubDef('Blink 3');
+    withScope(def.scope, () => {
+        new uiSubIn(-300, 0).setLabel('Start'); // n1
+        new uiLatch(-100, 0);                   // n2
+        const blink = new uiBlink(100, 0);      // n3
+        blink.setOnTime('0.25');
+        blink.setOffTime('0.25');
+        new uiSubOut(300, 0).setLabel('Blink'); // n4
+        new uiNot(-100, 160);                   // n5
+        new uiCounter(100, 160);                // n6, preset 3
+        createEdge('n1', 'n2');                 // start → latch: set
+        createEdge('n2', 'n3');                 // latch → blink
+        createEdge('n3', 'n4');                 // blink → output
+        createEdge('n3', 'n6');                 // blink → counter: count
+        createEdge('n2', 'n5');                 // latch → NOT
+        createEdge('n5', 'n6');                 // NOT → counter: reset
+        createEdge('n6', 'n2');                 // counter done → latch: reset, closing the loop
+    });
+
     const button = new uiButton(-200, 260);     // n3
     button.setAction('momentary');
     button.setLabel('Blink 3 times');
-    new uiLatch(0, 260);                        // n4
-    const blink = new uiBlink(200, 260);        // n5
-    blink.setOnTime('0.25');
-    blink.setOffTime('0.25');
-    new uiIndicator(400, 260);                  // n6
-    new uiNot(0, 420);                          // n7
-    new uiCounter(200, 420);                    // n8, preset 3
-    createEdge('n3', 'n4');                     // button → latch: set
-    createEdge('n4', 'n5');                     // latch → blink
-    createEdge('n5', 'n6');                     // blink → light
-    createEdge('n5', 'n8');                     // blink → counter: count
-    createEdge('n4', 'n7');                     // latch → NOT
-    createEdge('n7', 'n8');                     // NOT → counter: reset
-    createEdge('n8', 'n4');                     // counter done → latch: reset, closing the loop
+    const copy = new uiSub(0, 260);             // n4
+    new uiIndicator(200, 260);                  // n5
+    copy.setDef(def);                           // its parts: n6 to n9
+    createEdge('n3', 'n4');                     // button → block: start
+    createEdge('n4', 'n5');                     // block → light
 }
 demoGraph();
 

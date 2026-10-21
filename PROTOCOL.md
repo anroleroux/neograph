@@ -556,9 +556,10 @@ When a config arrives, the UI rebuilds the graph from it:
 
 - **If the config has no control messages** (a first-boot config), the UI keeps the
   graph it has, so a new device starts from the built-in demo graph: a button `n1`
-  driving the onboard LED `n2`, and the [blink-three-times loop](#loops) of
-  `logic-loop-config` (a momentary button `n3`, latch `n4`, blink `n5`, counter `n8`
-  and NOT `n7`), driving a light `n6` rather than the LED.
+  driving the onboard LED `n2`, and a momentary button `n3` driving a light `n5`
+  through a copy `n4` of the [block](#blocks) "Blink 3" (its parts `n6` to `n9`).
+  Inside the block is the [blink-three-times loop](#loops) of `logic-loop-config`:
+  its input sets the latch, and its output is the blink.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
   `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, the logic `40`–`4C`

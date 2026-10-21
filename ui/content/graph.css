@@ -122,9 +122,10 @@
     pointer-events: none;
 }
 
-/* In a block's definition, the groups it can't hold. */
+/* In a block's definition, the groups it can't hold: shown, red, and not to be opened. */
 #graph > .buttons.add > .group.off {
-    display: none;
+    background-color: var(--clr-red);
+    pointer-events: none;
 }
 
 /* Over a block's definition, at the foot of the graph, clear of the buttons at

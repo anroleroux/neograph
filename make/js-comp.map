@@ -14,3 +14,4 @@
 {{keyboard-js}}:ui/content/components/keyboard.js
 {{logic-js}}:ui/content/components/logic.js
 {{sub-js}}:ui/content/components/sub.js
+{{help-js}}:ui/content/components/help.js

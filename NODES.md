@@ -22,6 +22,9 @@ the TMP button in the HWI group.
 
 ## Things every node shares
 
+- **How it works.** Under the heading of a node's settings, **How it works** unfolds a
+  short version of what this document says about it. It is folded at first, and stays
+  as you last left it.
 - **Label.** Every node has a Label setting. Its default is listed with each node
   below. It names the node in the graph and in the Command view.
 - **ID.** Each node shows its ID (`n5`) under its label.
@@ -543,9 +546,10 @@ and time nodes; outside, each copy of it is one node, wired like any other.
 - **Make one:** **SUB → NEW** makes "Block 1", with one input and one output, and puts
   a copy of it in the graph.
 - **Edit it:** double-click a copy, or press **Edit block** in its settings. The graph
-  shows the block's inside, with its name in a bar at the top. Add logic from LGC and
-  TM, and inputs and outputs from **SUB → IN** and **SUB → OUT**, and wire them up.
-  Press **‹ Graph** in the bar to go back: every copy takes the change.
+  shows the block's inside, with its name in a bar at the bottom. Add logic from LGC
+  and TM, and inputs and outputs from **SUB → IN** and **SUB → OUT**, and wire them up;
+  the groups a block can't hold are red and can't be opened. Press **‹ Graph** in the
+  bar to go back: every copy takes the change.
 - **Use it again:** in the main graph, **SUB** has a button for each block (its first
   three letters; point at it for its name). Each press adds another copy.
 - **Each copy is separate:** it has its own state (a toggle in one copy doesn't turn
@@ -619,8 +623,10 @@ Pressing the button sets the latch, which runs the blink. The counter counts the
 blinks; at the third, Done resets the latch, which stops the blink and resets the
 counter, ready for the next press.
 
-The demo graph, which a new device starts from, has this loop, with a light in the
-Command view in place of the LED: press **Blink 3 times**.
+The demo graph, which a new device starts from, has this loop inside a block,
+"Blink 3": a momentary button **Blink 3 times** → the block → a light in the Command
+view. The block's input, Start, sets the latch; its output, Blink, is the blink.
+Double-click the block to see the loop.
 
 Another loop: **a tick every 5 s.** NOT → Delay (on delay 5 s) → back into the NOT.
 The delay turns on 5 s after the NOT does, which turns the NOT off, which turns the
