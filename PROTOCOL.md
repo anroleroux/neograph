@@ -501,7 +501,7 @@ When the user saves, the UI sends a `0A` config whose payload is:
 Graph messages in the device's previous config are dropped, so a save replaces the
 stored graph rather than adding to it.
 
-Example: the demo graph with button `n1` wired to LED `n2` and to GPO `n3` on pin 1,
+Example: a graph with button `n1` wired to LED `n2` and to GPO `n3` on pin 1,
 with `n1` and `n2` renamed, then a PWM `n4` added on pin 2 at a constant 1000 Hz, and
 a slider `n5` "Level" wired to the PWM's duty cycle (0 % at 0, 100 % at 1), saved
 against the first-boot config below.
@@ -542,10 +542,13 @@ A1 00 00 05 04  FF 38 00 78                     #   at (-200, 120)
 When a config arrives, the UI rebuilds the graph from it:
 
 - **If the config has no control messages** (a first-boot config), the UI keeps the
-  graph it has, so a new device starts from the built-in demo graph.
+  graph it has, so a new device starts from the built-in demo graph: a button `n1`
+  driving the onboard LED `n2`, and the [blink-three-times loop](#loops) of
+  `logic-loop-config` (a momentary button `n3`, latch `n4`, blink `n5`, counter `n8`
+  and NOT `n7`), driving a light `n6` rather than the LED.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, and the logic `40`–`4B`)
+  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, and the logic `40`–`4C`)
   becomes a node with the message's ID. If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs

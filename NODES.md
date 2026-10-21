@@ -550,6 +550,9 @@ Pressing the button sets the latch, which runs the blink. The counter counts the
 blinks; at the third, Done resets the latch, which stops the blink and resets the
 counter, ready for the next press.
 
+The demo graph, which a new device starts from, has this loop, with a light in the
+Command view in place of the LED: press **Blink 3 times**.
+
 Another loop: **a tick every 5 s.** NOT → Delay (on delay 5 s) → back into the NOT.
 The delay turns on 5 s after the NOT does, which turns the NOT off, which turns the
 delay off again: the delay's output is on for 10 ms every 5 s. Wire it to a Pulse

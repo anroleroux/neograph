@@ -39,7 +39,19 @@ function expect(cond, msg) {
 
 const hex = (bytes) => bytes.map(b => b.toString(16).padStart(2, '0')).join('');
 
-async function open(browser) {
+// The graph the tests start from, in place of the demo graph: button n1, LED n2 ← n1
+// and GPO n3 on pin 1, where the demo graph used to put them.
+const TEST_GRAPH = [
+    0x10, 0x00, 0x00, 0x01, 0x00,                                   // button n1
+    0xA1, 0x00, 0x00, 0x01, 0x04, 0xFF, 0x38, 0xFF, 0xD8,           //   at (-200, -40)
+    0x20, 0x01, 0x00, 0x02, 0x03, 0x00, 0x01, 0x00,                 // LED n2 ← n1
+    0xA1, 0x00, 0x00, 0x02, 0x04, 0x00, 0x64, 0x00, 0x28,           //   at (100, 40)
+    0x21, 0x01, 0x00, 0x03, 0x04, 0x00, 0x00, 0x00, 0x01,           // GPO n3, pin 1
+    0xA1, 0x00, 0x00, 0x03, 0x04, 0x00, 0xC8, 0x00, 0x00,           //   at (200, 0)
+];
+
+// Open the page; with `demo` false, replace the demo graph with TEST_GRAPH.
+async function open(browser, demo = false) {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -84,6 +96,7 @@ async function open(browser) {
         window.WebSocket = FakeWebSocket;
     });
     await page.goto('file://' + path.resolve(page_file));
+    if (!demo) await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
     return { page, errors };
 }
 
@@ -116,13 +129,33 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const browser = await chromium.launch();
     const packets = [];
 
+    // ── The demo graph: the button drives the LED; below, a second button starts a
+    // loop that blinks the light three times ──
+    let { page, errors } = await open(browser, true);
+    const demo = await page.evaluate(async () => {
+        const wires = gEdges.map(e => e.start.node.name + '>' + e.end.node.name + (e.feedback ? '~' : '')).join(' ');
+        const blinks = [];
+        const base = elements.n5.emit.bind(elements.n5);
+        elements.n5.emit = (v, o = 0) => { if (v) blinks.push(v); base(v, o); };
+        const b = elements.n3;
+        b.value = true; b.emit(1); b.value = false; b.emit(0);
+        await new Promise(r => setTimeout(r, 1700));
+        return { wires, types: Object.values(elements).map(e => e.type).join(), blinks: blinks.length,
+            after: [elements.n4.value, elements.n5.value, elements.n8.count].join() };
+    });
+    expect(demo.wires === 'n1>n2 n3>n4 n4>n5 n5>n6 n5>n8 n4>n7 n7>n8 n8>n4~'
+        && demo.types === 'button,led,button,latch,blink,light,not,counter', 'the demo graph is not as expected: ' + JSON.stringify(demo));
+    expect(demo.blinks === 3 && demo.after === 'false,false,0', 'the demo loop did not blink three times: ' + JSON.stringify(demo));
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
     // ── First connect: a first-boot device, then edit and save the graph ──
-    let { page, errors } = await open(browser);
+    ({ page, errors } = await open(browser));
     await connect(page, FIRST_BOOT_CONFIG);
     expect(await page.evaluate(() => networks[0].ssid) === 'LRX', 'the first-boot config was not read');
     expect((await sent(page)).length === 0, 'the UI sent something on connect');
     expect(await page.evaluate(() => gEdges.map(e => e.start.node.name + '>' + e.end.node.name).join()) === 'n1>n2',
-        'the demo graph does not wire n1 to n2');
+        'the test graph does not wire n1 to n2');
 
     // Wire mode marks only the nodes a wire can join: from a source, the outputs
     // without a wire; from a free output, the sources.
