@@ -195,15 +195,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB TM LGC | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'lgc']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'tm', 'lgc']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH CNT', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP AND OR NOT SCL MIN MAX TGL LCH CNT', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'clicking the open group again left ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB TM LGC | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.

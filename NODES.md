@@ -5,7 +5,7 @@ its settings. [PROTOCOL.md](PROTOCOL.md) has the bytes behind each one.
 
 ## Finding a node
 
-The **+** button in the Graph view opens the six groups. A group opens its nodes
+The **+** button in the Graph view opens the seven groups. A group opens its nodes
 under it. In this document, a node's place is written as `GROUP-BUTTON`: `HWI-TMP` is
 the TMP button in the HWI group.
 
@@ -16,7 +16,8 @@ the TMP button in the HWI group.
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
-| **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, DLY, SCL, MIN, MAX, PLS, BLK, TGL, LCH, CNT |
+| **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
+| **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, SCL, MIN, MAX, TGL, LCH, CNT |
 
 ## Things every node shares
 
@@ -352,25 +353,6 @@ On while its input is off. With nothing wired in, on.
 
 No settings of its own.
 
-### Delay: `LGC-DLY`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One, on/off |
-| Output | On/off |
-| Default label | Delay |
-
-Follows its input, but only once the input has stayed in its new state for the on
-delay (to turn on) or the off delay (to turn off). If the input changes back before
-then, the count starts again, so short blips never get through. Use it to debounce,
-or to keep a fan running for a while after its input goes off.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| On delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay on before it turns on. 0 turns on at once. |
-| Off delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay off before it turns off. 0 turns off at once. |
-
 ### Scale: `LGC-SCL`
 
 | | |
@@ -419,42 +401,6 @@ The highest of its wired inputs, such as the hottest of several readings. With
 nothing wired in, 0.
 
 No settings of its own.
-
-### Pulse: `LGC-PLS`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One, on/off |
-| Output | On/off |
-| Default label | Pulse |
-
-Turns on for a set time each time its input goes on, however long the input stays
-on. Going on again while it is on starts the time again. Use it to give a relay or
-buzzer a fixed-length kick from a button press. An input that is already on when the
-graph starts doesn't count as going on.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| Time on (s) | 0.001 to 86400 | 1 | How long it stays on. |
-
-### Blink: `LGC-BLK`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One, on/off, or none |
-| Output | On/off |
-| Default label | Blink |
-
-Flashes while its input is on: on for the time on, off for the time off, in turn,
-starting on. When the input goes off, it stops and stays off. With nothing wired in,
-it blinks all the time.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| Time on (s) | 0.001 to 86400 | 0.5 | How long each flash is on. |
-| Time off (s) | 0.001 to 86400 | 0.5 | How long it is off between flashes. |
 
 ### Toggle: `LGC-TGL`
 
@@ -520,6 +466,70 @@ settings to change that. Each wire leaving it is labelled Done or Count.
 | Preset | 1 to 1000000 | 3 | The count it stops at, and where Done turns on. |
 | Count | An on/off source, or None | The first wire in | The source it counts. Picking one draws its wire. |
 | Reset | An on/off source, or None | The second wire in | The source that sets it back to 0. |
+
+---
+
+## TM: Time
+
+Logic that works with time: it waits, or runs for a set time. These are logic nodes,
+run by the device every 10 ms like those in [LGC](#lgc-logic), with the same
+Command view setting; they have a group of their own in the add menu. Times are in
+seconds, to the millisecond, up to a day.
+
+### Delay: `TM-DLY`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One, on/off |
+| Output | On/off |
+| Default label | Delay |
+
+Follows its input, but only once the input has stayed in its new state for the on
+delay (to turn on) or the off delay (to turn off). If the input changes back before
+then, the count starts again, so short blips never get through. Use it to debounce,
+or to keep a fan running for a while after its input goes off.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| On delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay on before it turns on. 0 turns on at once. |
+| Off delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay off before it turns off. 0 turns off at once. |
+
+### Pulse: `TM-PLS`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One, on/off |
+| Output | On/off |
+| Default label | Pulse |
+
+Turns on for a set time each time its input goes on, however long the input stays
+on. Going on again while it is on starts the time again. Use it to give a relay or
+buzzer a fixed-length kick from a button press. An input that is already on when the
+graph starts doesn't count as going on.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Time on (s) | 0.001 to 86400 | 1 | How long it stays on. |
+
+### Blink: `TM-BLK`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One, on/off, or none |
+| Output | On/off |
+| Default label | Blink |
+
+Flashes while its input is on: on for the time on, off for the time off, in turn,
+starting on. When the input goes off, it stops and stays off. With nothing wired in,
+it blinks all the time.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Time on (s) | 0.001 to 86400 | 0.5 | How long each flash is on. |
+| Time off (s) | 0.001 to 86400 | 0.5 | How long it is off between flashes. |
 
 ---
 

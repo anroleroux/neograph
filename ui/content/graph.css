@@ -60,16 +60,16 @@
    nodes in a row under the groups, one group at a time:
 
      +                    row 1
-     UII HWO USB          row 2: UI inputs, HW outputs, USB
+     UII HWO USB TM       row 2: UI inputs, HW outputs, USB, time
      HWI UIO LGC          row 3: HW inputs, UI outputs, logic
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM                 e.g. UII's or HWO's
      TMP ADC GPI
      PLT LGT
      KEY
-     CMP AND OR NOT DLY   (logic: rows 4 to 6)
-     SCL MIN MAX PLS BLK
-     TGL LCH
+     DLY PLS BLK
+     CMP AND OR NOT SCL   (logic: rows 4 and 5)
+     MIN MAX TGL LCH CNT
 
    Each button's --col and --row give its grid cell. Folded, a button hides behind
    the one that opens it (the plus, or its group) and slides out to its place;
