@@ -88,11 +88,20 @@
     pointer-events: none;
 }
 
+/* The groups and their nodes are see-through, as the graph's nodes are: a faded
+   blue, a little brighter for the UI and hardware inputs and outputs, white for
+   the open group. The plus stays solid. */
+#graph > .buttons.add {
+    --clr-menu: var(--clr-face-fade);
+    --clr-menu-io: #9DBDF566;
+    --clr-menu-sel: #FFFFFF80;
+}
+
 #graph > .buttons.add > div {
     margin: 0;
     grid-column: var(--col);
     grid-row: var(--row);
-    background-color: var(--clr-pane);      /* solid over the graph */
+    background-color: var(--clr-menu);
     pointer-events: auto;
     transition: transform 0.25s ease, opacity 0.25s ease, background-color 0.25s ease;
 }
@@ -108,8 +117,24 @@
     z-index: 1;
 }
 
+#graph > .buttons.add > .toggle {
+    background-color: var(--clr-pane);
+}
+
+#graph > .buttons.add > [data-group="uii"],
+#graph > .buttons.add > [data-group="hwo"],
+#graph > .buttons.add > [data-group="hwi"],
+#graph > .buttons.add > [data-group="uio"] {
+    background-color: var(--clr-menu-io);
+}
+
 #graph > .buttons.add > .group.sel {
-    background-color: #BFCDE740;
+    background-color: var(--clr-menu-sel);
+}
+
+/* Dark on the open group's white, to be read. */
+#graph > .buttons.add > .group.sel text {
+    fill: var(--clr-pane);
 }
 
 #graph > .buttons.add.open > .toggle {
