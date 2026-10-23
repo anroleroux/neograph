@@ -5,7 +5,7 @@ its settings. [PROTOCOL.md](PROTOCOL.md) has the bytes behind each one.
 
 ## Finding a node
 
-The **+** button in the Graph view opens the eight groups. A group opens its nodes
+The **+** button in the Graph view opens the nine groups. A group opens its nodes
 under it. In this document, a node's place is written as `GROUP-BUTTON`: `HWI-TMP` is
 the TMP button in the HWI group.
 
@@ -17,7 +17,8 @@ the TMP button in the HWI group.
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
 | **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
-| **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, SCL, MIN, MAX, TGL, LCH, CNT |
+| **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX |
+| **LGC** | Logic: decisions the device makes | AND, OR, NOT, TGL, LCH, CNT |
 | **SUB** | Blocks: logic you define once and place many times | NEW, then one per block; in a block, IN, OUT |
 
 ## Things every node shares
@@ -284,39 +285,19 @@ it. Text is typed as on a US keyboard layout.
 ## LGC: Logic
 
 Logic makes decisions on the device, every 10 ms, without the browser. Each logic
-node reads one or more sources and is a source itself. Most output on/off; Scale,
-Min and Max output numbers; a Counter has one of each. A logic node is both: wires
+node reads one or more sources and is a source itself. Most output on/off; the
+[analog](#anl-analog) Scale, Min and Max output numbers; a Counter has one of each. A logic node is both: wires
 come into it, and leave it for outputs or other logic. Between two logic nodes, a
 wire goes from the node you picked first to the one you clicked. A wire may close a
 loop, to repeat something: see [Loops](#loops).
 
-Every logic node has the **Command view** setting (Show, Hide; Hide by default),
+The time and analog nodes ([TM](#tm-time), [ANL](#anl-analog)) are logic too, in
+groups of their own. Every logic node has the **Command view** setting (Show, Hide; Hide by default),
 which puts a tile with its state or value in the Command view. The tables below list
 only each node's own settings.
 
 When a graph starts (at power-on, and on each save), logic starts off or at 0: a
 latch has to be set again, a toggle starts off, and a counter starts at 0.
-
-### Compare: `LGC-CMP`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One number |
-| Output | On/off |
-| Default label | Compare |
-
-On while its input is above (or below) a threshold. **Hysteresis** stops it
-flickering near the threshold: "above 40, hysteresis 1" turns on above 40 and off
-only below 39. The node shows its condition, for example `> 40`.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| On while | Above, Below | Above | Which side of the threshold turns it on. |
-| Threshold | Any number, in the input's unit (shown in the label, such as °C) | 0.5 | Where it switches. |
-| Hysteresis | 0 or more, in the input's unit | 0 | How far back past the threshold the input must go to switch it back. |
-
-Example: core temperature → Compare (above 40, hysteresis 1) → GPO.
 
 ### AND: `LGC-AND`
 
@@ -354,55 +335,6 @@ No settings of its own.
 | Default label | NOT |
 
 On while its input is off. With nothing wired in, on.
-
-No settings of its own.
-
-### Scale: `LGC-SCL`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One number |
-| Output | Number |
-| Default label | Scale |
-
-Maps its input from one range onto another. With 30–60 onto 0–1, 45 °C gives 0.5.
-Either range may run downwards, for example 0–1 onto 100–0. A PWM takes a scale's
-output as a fraction of 1, so set the output range to 0–1 to drive a PWM.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| Input from, Input to | Any numbers, in the input's unit; not equal | 0, 1 | The input range. |
-| Output from, Output to | Any numbers | 0, 1 | The output range: "Input from" maps to "Output from", "Input to" to "Output to". |
-| Clamp | Yes, No | Yes | Yes keeps the output within its range when the input goes outside its range. |
-
-Example: core temperature → Scale (30–60 onto 0–1) → PWM duty: a fan that runs
-faster as the chip gets hotter.
-
-### Min: `LGC-MIN`
-
-| | |
-|---|---|
-| Category | Logic |
-| Inputs | 1 to 4 numbers |
-| Output | Number, in the unit of its first input |
-| Default label | Min |
-
-The lowest of its wired inputs. With nothing wired in, 0.
-
-No settings of its own.
-
-### Max: `LGC-MAX`
-
-| | |
-|---|---|
-| Category | Logic |
-| Inputs | 1 to 4 numbers |
-| Output | Number, in the unit of its first input |
-| Default label | Max |
-
-The highest of its wired inputs, such as the hottest of several readings. With
-nothing wired in, 0.
 
 No settings of its own.
 
@@ -537,17 +469,97 @@ it blinks all the time.
 
 ---
 
+## ANL: Analog
+
+Logic that works on numbers: a slider's 0 to 1, an ADC's volts, the core
+temperature's °C, a counter's count, or another analog node's output. A compare turns
+a number into on/off; a scale, min and max give a number. These are logic nodes, run
+by the device every 10 ms like those in [LGC](#lgc-logic), with the same Command view
+setting.
+
+### Compare: `ANL-CMP`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One number |
+| Output | On/off |
+| Default label | Compare |
+
+On while its input is above (or below) a threshold. **Hysteresis** stops it
+flickering near the threshold: "above 40, hysteresis 1" turns on above 40 and off
+only below 39. The node shows its condition, for example `> 40`.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| On while | Above, Below | Above | Which side of the threshold turns it on. |
+| Threshold | Any number, in the input's unit (shown in the label, such as °C) | 0.5 | Where it switches. |
+| Hysteresis | 0 or more, in the input's unit | 0 | How far back past the threshold the input must go to switch it back. |
+
+Example: core temperature → Compare (above 40, hysteresis 1) → GPO.
+
+### Scale: `ANL-SCL`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One number |
+| Output | Number |
+| Default label | Scale |
+
+Maps its input from one range onto another. With 30–60 onto 0–1, 45 °C gives 0.5.
+Either range may run downwards, for example 0–1 onto 100–0. A PWM takes a scale's
+output as a fraction of 1, so set the output range to 0–1 to drive a PWM.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Input from, Input to | Any numbers, in the input's unit; not equal | 0, 1 | The input range. |
+| Output from, Output to | Any numbers | 0, 1 | The output range: "Input from" maps to "Output from", "Input to" to "Output to". |
+| Clamp | Yes, No | Yes | Yes keeps the output within its range when the input goes outside its range. |
+
+Example: core temperature → Scale (30–60 onto 0–1) → PWM duty: a fan that runs
+faster as the chip gets hotter.
+
+### Min: `ANL-MIN`
+
+| | |
+|---|---|
+| Category | Logic |
+| Inputs | 1 to 4 numbers |
+| Output | Number, in the unit of its first input |
+| Default label | Min |
+
+The lowest of its wired inputs. With nothing wired in, 0.
+
+No settings of its own.
+
+### Max: `ANL-MAX`
+
+| | |
+|---|---|
+| Category | Logic |
+| Inputs | 1 to 4 numbers |
+| Output | Number, in the unit of its first input |
+| Default label | Max |
+
+The highest of its wired inputs, such as the hottest of several readings. With
+nothing wired in, 0.
+
+No settings of its own.
+
+---
+
 ## SUB: Blocks
 
 A block is a piece of logic you build once and use in several places, like a
-function. It has inputs and outputs of its own. Inside, it is a small graph of logic
-and time nodes; outside, each copy of it is one node, wired like any other.
+function. It has inputs and outputs of its own. Inside, it is a small graph of logic,
+time and analog nodes; outside, each copy of it is one node, wired like any other.
 
 - **Make one:** **SUB → NEW** makes "Block 1", with one input and one output, and puts
   a copy of it in the graph.
 - **Edit it:** double-click a copy, or press **Edit block** in its settings. The graph
-  shows the block's inside, with its name in a bar at the bottom. Add logic from LGC
-  and TM, and inputs and outputs from **SUB → IN** and **SUB → OUT**, and wire them up;
+  shows the block's inside, with its name in a bar at the bottom. Add logic from LGC,
+  TM and ANL, and inputs and outputs from **SUB → IN** and **SUB → OUT**, and wire them up;
   the groups a block can't hold are red and can't be opened. Press **‹ Graph** in the
   bar to go back: every copy takes the change.
 - **Use it again:** in the main graph, **SUB** has a button for each block (its first
@@ -556,7 +568,7 @@ and time nodes; outside, each copy of it is one node, wired like any other.
   over another) and its own wires. On the device each copy costs as many nodes as
   the logic inside the block.
 
-A block can hold logic and time nodes, and its inputs and outputs. Buttons, sliders,
+A block can hold logic, time and analog nodes, and its inputs and outputs. Buttons, sliders,
 pins, plots and other blocks stay in the main graph and are wired to the copy.
 
 ### Block copy

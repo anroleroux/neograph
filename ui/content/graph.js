@@ -81,14 +81,14 @@ function closeBlock(update = true) {
 }
 
 // The bar over a block's definition, with its name and the way back, and the add
-// menu's groups: a definition holds only logic (LGC, TM) and its ports (SUB), so
-// the others are shown off.
+// menu's groups: a definition holds only logic (LGC, TM, ANL) and its ports (SUB),
+// so the others are shown off.
 function showBlockBar() {
     const bar = document.getElementById('block-bar');
     bar.hidden = !editingBlock;
     if (editingBlock) bar.querySelector('.name').textContent = editingBlock.name;
     document.querySelectorAll('#add .group').forEach(g =>
-        g.classList.toggle('off', !!editingBlock && !['lgc', 'tm', 'sub'].includes(g.dataset.group)));
+        g.classList.toggle('off', !!editingBlock && !['lgc', 'tm', 'anl', 'sub'].includes(g.dataset.group)));
     const menu = document.getElementById('add');
     menu.classList.remove('open');
     showAddGroup(menu, null);

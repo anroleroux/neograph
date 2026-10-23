@@ -216,15 +216,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB TM LGC SUB | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'tm', 'lgc', 'sub']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'tm', 'anl', 'lgc', 'sub']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP AND OR NOT SCL MIN MAX TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB TM LGC SUB | ', 'clicking the open group again left ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.
@@ -980,7 +980,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     ({ page, errors } = await open(browser));
     await connect(page, FIRST_BOOT_CONFIG);          // the demo graph: button n1, LED n2 ← n1, GPO n3
     await page.locator('#add .toggle').dispatchEvent('click');
-    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
+    await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
     await page.locator('#add [title="Add a compare"]').dispatchEvent('click');       // n4
     const compareRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
     expect(compareRows === 'Label:|On while:|Threshold:|Hysteresis:|Command view:', 'a compare\'s settings are ' + compareRows);
@@ -1343,7 +1343,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             sub: shown('#add .node.shown'),
             led: addNode(MSG_HW_LED) === null, nodes: Object.values(elements).map(e => e.label).join() };
     });
-    expect(JSON.stringify(inBlock) === JSON.stringify({ bar: 'Block 1', groups: 'TM LGC SUB', off: 'UII HWO HWI UIO USB: red', sub: 'IN OUT', led: true, nodes: 'In 1,Out 1' }),
+    expect(JSON.stringify(inBlock) === JSON.stringify({ bar: 'Block 1', groups: 'TM ANL LGC SUB', off: 'UII HWO HWI UIO USB: red', sub: 'IN OUT', led: true, nodes: 'In 1,Out 1' }),
         'the block\'s view is not as expected: ' + JSON.stringify(inBlock));
     const defined = await page.evaluate(() => {
         const [inp, out] = Object.values(elements);
