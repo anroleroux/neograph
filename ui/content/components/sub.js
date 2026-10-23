@@ -126,10 +126,19 @@ class uiSubIn extends uiSubPort {
 }
 
 // An output port: an output in the definition, which a copy's output wire reads.
+// With no wire yet, it takes its type from the first wire drawn into it.
 class uiSubOut extends uiSubPort {
     constructor(x = 0, y = 0) {
         super("output", MSG_SUB_OUTPUT, "OUT", x, y);
         this.outputs = [];
+    }
+
+    typeFromWire() { return this.inConns().length === 0; }
+
+    addEdge(e) {
+        if (e.end.node === this && this.typeFromWire()) this.setType(e.start.node.outputs[e.start.output].type);
+        super.addEdge(e);
+        if (selected === this) this.createSettings();
     }
 
     // Its source, its type, then its index.

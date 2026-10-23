@@ -114,7 +114,7 @@ const NODE_HELP = {
     ],
     output: [
         "An output of the block: wire into it what each copy hands on from that output.",
-        "Type: On/off or Number decides what a copy's output gives. Changing it takes its wires off.",
+        "It takes its type from the first wire drawn into it: from a NOT it is On/off, from a scale a Number. Type sets it too: it decides what a copy's output gives. Changing it takes its wires off.",
     ],
 };
 

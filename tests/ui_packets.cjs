@@ -1467,15 +1467,20 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         const typed = inp.portType === 'bool' && not.canTakeConn(inp) && cmp.canTakeConn(inp)
             && !!createEdge(inp.name, cmp.name) && inp.portType === 'float' && createEdge(inp.name, not.name) === null;
         not.remove();
-        const inside = typed && !!createEdge(cmp.name, out.name);
+        // An output with no wire takes its type from the first one too: a number, from
+        // the input; then an on/off source is refused.
+        const out2 = addNode(MSG_SUB_OUTPUT);
+        const typedOut = out2.portType === 'bool' && out2.canTakeConn(inp) && !!createEdge(inp.name, out2.name)
+            && out2.portType === 'float' && createEdge(cmp.name, out2.name) === null;
+        const inside = typed && typedOut && !!createEdge(cmp.name, out.name);
         closeBlock();
         const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
         const wired = createEdge(button.name, copy.name) === null && !!createEdge(slider.name, copy.name);
         const values = [0.2, 0.8].map(v => { slider.value = v; slider.emit(v); return copy.outs[0]; }).join('/');
         saveGraph();
-        return [inside, wired, copy.roles.map(r => r[2]).join(), values].join();
+        return [inside, wired, copy.roles.map(r => r[2]).join(), copy.outputs.map(o => o.type).join(), values].join();
     });
-    expect(numberIn === 'true,true,float,0/1', 'a block with a number input: ' + numberIn);
+    expect(numberIn === 'true,true,float,bool,float,0/1', 'a block with a number input: ' + numberIn);
     packets.push(...await sent(page));
 
     // The block-config example in PROTOCOL.md restores as it says.

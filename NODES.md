@@ -599,7 +599,7 @@ their labels ("In 1", "Out 1" by default).
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
-| Type | On/off, Number | On/off; an input with no wire takes the type of the first wire drawn from it | What the input or output carries. Changing it takes its wires off, inside the block and on every copy. |
+| Type | On/off, Number | On/off; with no wire, an input takes the type of the first wire drawn from it, and an output of the first wire drawn into it | What the input or output carries. Changing it takes its wires off, inside the block and on every copy. |
 
 Taking an input or output out of a block takes it, and its wires, off every copy.
 
