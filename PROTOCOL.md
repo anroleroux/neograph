@@ -244,6 +244,7 @@ sig 1 0 31.27               # core temperature n1: 31.27 °C
 sig 10 0 1.65               # ADC n10: 1.65 V
 sig 19 0 1                  # GPIO input n19: on
 sig 6 1 0.502               # 2D slider n6, Y: 0.502
+sig 4 1 2                   # counter n4, its count: 2
 ```
 
 ### Limits
@@ -268,7 +269,7 @@ Every packet payload except `0D` is a sequence of messages:
 | Byte | Field | Notes |
 |---|---|---|
 | 0 | Message type | Which kind of element; see [Element types](#element-types) |
-| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4B`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Other bits are 0. |
+| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4C`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Bit 2 `MSG_FLAG_PART`: logic that is a part of a copy of a [block](#blocks); the device runs it as any logic, and the UI skips it when it restores the graph. Other bits are 0. |
 | 2–3 | Element ID | Big endian |
 | 4 | Payload length | Bytes after this header, 0–255 |
 | 5… | Payload | Depends on the type |
@@ -281,6 +282,9 @@ Every packet payload except `0D` is a sequence of messages:
   created on first boot both have ID 0.
 - **Labels, positions and wires** (`A0`–`A2`) take the ID of the control element
   they describe (see [Labels, positions and wires](#labels-positions-and-wires)).
+- **Block definitions** (`A3`, `A4`) have their own IDs, 1 to 255. The messages
+  inside a definition have IDs of their own too, counting from 1 in each (see
+  [Blocks](#blocks)). The parts of a copy of a block take control element IDs.
 - IDs are unique within each of those groups, not across them.
 - **ID 0 in a source reference means "not connected"**, so a control element never
   has ID 0.
@@ -289,7 +293,8 @@ Every packet payload except `0D` is a sequence of messages:
 
 An output names the input wired to it with a **source reference**: which element,
 and which of its outputs. Most sources have one output, 0; a
-[2D slider](#2d-sliders) has two, X (0) and Y (1).
+[2D slider](#2d-sliders) has two, X (0) and Y (1), and a [counter](#logic) two, done
+(0) and its count (1).
 
 | Message flags | Reference | Bytes |
 |---|---|---|
@@ -302,6 +307,9 @@ and which of its outputs. Most sources have one output, 0; a
   flag clear. The device and the UI still read them, as output 0, and the next save
   writes them with outputs. A `legacy-config` example is below.
 - **Not connected** is ID 0, output 0.
+- **A feedback wire** (see [Loops](#loops)) has bit 7 of its output byte set
+  (`MSG_REF_FEEDBACK`, `80`): `00 04 80` is output 0 of `n4`, fed back. Bits 0–6 are
+  the output. Only a reference in a logic element's payload is a feedback one.
 - The payload tables below give the bytes with the flag set.
 
 ```hex example=legacy-config
@@ -322,7 +330,7 @@ Control types use bits 4 to 6 of the type byte:
 | 0 | 1 |       subtype         |   logic elements
 +---+---+-----------------------+
 L (MSG_LOGIC_BIT, 0x40): 1 = logic element: runs on the device, reads sources, and is a source
-                         (`MSG_LOGIC_LAST`, 0x4B, is the last defined)
+                         (`MSG_LOGIC_LAST`, 0x4C, is the last defined)
 H (MSG_HW_BIT, 0x20):    0 = UI element, 1 = hardware element
 I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 ```
@@ -358,9 +366,15 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `49` | `MSG_LOGIC_BLINK` | Logic: on and off in turn while its input is on | Implemented |
 | `4A` | `MSG_LOGIC_TOGGLE` | Logic: turns over each time its input goes on | Implemented |
 | `4B` | `MSG_LOGIC_LATCH` | Logic: on once set, off once reset | Implemented |
+| `4C` | `MSG_LOGIC_COUNTER` | Logic: counts its input going on, up to a preset; two outputs, done and its count | Implemented |
+| `60` | `MSG_SUB` | A copy of a [block](#blocks); the device runs its parts, not it | Implemented |
+| `61` | `MSG_SUB_INPUT` | In a block's definition: an input | Implemented |
+| `62` | `MSG_SUB_OUTPUT` | In a block's definition: an output | Implemented |
 | `A0` | `MSG_STRING` | String: a node's label | Implemented |
 | `A1` | `MSG_LAYOUT` | A node's position in the graph | Implemented |
 | `A2` | `MSG_WIRE` | The shape of the wire into an output | Implemented |
+| `A3` | `MSG_SUB_DEF` | A block's definition: its name | Implemented |
+| `A4` | `MSG_SUB_PART` | One message of a block's definition, whole | Implemented |
 | `B0` | `MSG_DEVICE` | Device | Implemented |
 | `B1` | `MSG_DEVICE_FIELD` | Device field | Implemented |
 | `B2` | `MSG_NETWORK` | Network | Implemented |
@@ -391,6 +405,12 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `49` Blink | 11 | Bytes 0–2: source reference (0: it always blinks) · bytes 3–6: time on · bytes 7–10: time off, each milliseconds, 1 to `DELAY_MAX_MS` |
 | `4A` Toggle | 3 | Bytes 0–2: source reference |
 | `4B` Latch | 6 | Bytes 0–2: its set source reference · bytes 3–5: its reset source reference (each 0 = not connected) |
+| `4C` Counter | 10 | Bytes 0–2: its count source reference · bytes 3–5: its reset source reference (each 0 = not connected) · bytes 6–9: its preset, a 32-bit big-endian number, 1 to `COUNTER_MAX` (1000000; UI default 3). See [Logic](#logic). |
+| `60` Block | 5–53 | Byte 0: its definition's ID · bytes 1–2: the ID of its first part · byte 3: its inputs, 0 to `SUB_PORTS_MAX` (8) · byte 4: its outputs, 0 to 8 · then a source reference for each input · then, for each output, the source reference it stands for. Always with `MSG_FLAG_OUTPUT`. See [Blocks](#blocks). |
+| `61` Block input | 2 | In a definition only. Byte 0: its type, `SUB_TYPE_BOOL` (0) or `SUB_TYPE_FLOAT` (1) · byte 1: its index among the definition's inputs |
+| `62` Block output | 5 | In a definition only. Bytes 0–2: its source reference · byte 3: its type · byte 4: its index among the definition's outputs |
+| `A3` Block definition | 1–32 | Its name, UTF-8. Keyed by the definition's ID |
+| `A4` Block definition message | 5–255 | One message of the definition, header and all. Keyed by the definition's ID |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
@@ -470,16 +490,16 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `40`–`44` and `48`–`4B` logic | `20` LED, `21` GPO, `23` USB keyboard, `01` light, `41`–`44` and `48`–`4B` logic | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max | `22` PWM, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C |
+| Boolean | `10` button, `31` GPIO input, `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C; a count, 0 to its preset |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
 ADC or core temperature drives a PWM on the device and a plot in the browser, and a
 GPIO input an LED, GPO or USB keyboard on the device and a light in the browser. A PWM
 maps a floating value onto its range as a fraction of the source's full scale: 1 for
-a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature, and
-for a min or max that of its first wired input.
+a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature,
+for a min or max that of its first wired input, and for a counter's count its preset.
 The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
 
@@ -494,7 +514,7 @@ When the user saves, the UI sends a `0A` config whose payload is:
 Graph messages in the device's previous config are dropped, so a save replaces the
 stored graph rather than adding to it.
 
-Example: the demo graph with button `n1` wired to LED `n2` and to GPO `n3` on pin 1,
+Example: a graph with button `n1` wired to LED `n2` and to GPO `n3` on pin 1,
 with `n1` and `n2` renamed, then a PWM `n4` added on pin 2 at a constant 1000 Hz, and
 a slider `n5` "Level" wired to the PWM's duty cycle (0 % at 0, 100 % at 1), saved
 against the first-boot config below.
@@ -535,11 +555,18 @@ A1 00 00 05 04  FF 38 00 78                     #   at (-200, 120)
 When a config arrives, the UI rebuilds the graph from it:
 
 - **If the config has no control messages** (a first-boot config), the UI keeps the
-  graph it has, so a new device starts from the built-in demo graph.
+  graph it has, so a new device starts from the built-in demo graph: a button `n1`
+  driving the onboard LED `n2`, and a momentary button `n3` driving a light `n5`
+  through a copy `n4` of the [block](#blocks) "Blink 3" (its parts `n6` to `n9`).
+  Inside the block is the [blink-three-times loop](#loops) of `logic-loop-config`:
+  its input sets the latch, and its output is the blink.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, and the logic `40`–`4B`)
-  becomes a node with the message's ID. If an ID
+  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, the logic `40`–`4C`
+  and a block's copy `60`) becomes a node with the message's ID. Messages marked
+  `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
+  definition, which is restored first from its `A3` and `A4` messages (see
+  [Blocks](#blocks)). If an ID
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
@@ -552,7 +579,7 @@ When a config arrives, the UI rebuilds the graph from it:
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
-  get IDs above the highest restored one.
+  get IDs above the highest restored one, and above every copy's parts.
 
 ### Plots
 
@@ -768,11 +795,12 @@ duty cycle from its X and frequency from its Y:
 
 ### Logic
 
-Logic elements (`40`–`4B`) make control decisions on the device: core 1 runs them in
+Logic elements (`40`–`4C`) make control decisions on the device: core 1 runs them in
 its scan, every 10 ms, with or without a browser. Each reads one or more sources and
 is a source itself, with one output: **boolean** (an LED, GPO, USB keyboard, light or
 other logic can be wired to it) or, for a scale, min or max, **floating** (a PWM,
-plot, compare or other floating logic can).
+plot, compare or other floating logic can). A counter has two: done (0, boolean) and
+its count (1, floating).
 
 | Element | Reads | On while |
 |---|---|---|
@@ -785,11 +813,13 @@ plot, compare or other floating logic can).
 | `49` Blink | 1 boolean source, or none | While its input is on (always, with none wired): on for its time on, then off for its time off, in turn, starting on |
 | `4A` Toggle | 1 boolean source | Turns over each time its input goes on: a momentary button works as a switch |
 | `4B` Latch | a set and a reset source | From when its set input goes on until its reset input does; while reset is on, off, whatever set is |
+| `4C` Counter, done (output 0) | a count and a reset source | Its count is at its preset |
 
 | Element | Reads | Value |
 |---|---|---|
 | `45` Scale | 1 floating source | Its input mapped from the input's from–to onto the output's from–to: 30–60 onto 0–1 turns 45 into 0.5. Either range may run downwards. With `SCALE_CLAMP` the output stays within its range |
 | `46` Min, `47` Max | 1 to 4 floating sources | The least or greatest of its wired inputs, in their unit; with none wired, 0 |
+| `4C` Counter, its count (output 1) | a count and a reset source | How many times its count input has gone on, up to its preset, where it stops; while its reset input is on, 0, whatever count is |
 
 - **A compare's hysteresis.** Above 40 with a hysteresis of 1 goes on when its input
   rises past 40, and off only when it falls below 39; below 40 goes on under 40 and
@@ -807,14 +837,16 @@ plot, compare or other floating logic can).
 - **In order.** Core 1 runs each logic element after the logic it reads, so a change
   goes through a chain of them in one scan; see [The program](#the-program).
 - **Going on** is a boolean input moving from below 0.5 to 0.5 or more between two
-  scans. When a program starts, a pulse or toggle takes its input as it is, so an
-  input that is already on doesn't count as going on.
+  scans. When a program starts, a pulse, toggle or counter takes its input as it is,
+  so an input that is already on doesn't count as going on.
 - **When a program starts** (at boot and on each save) logic starts off, or at 0, with
   nothing counted, and takes its state at the first scan: a latch has to be set
   again, and a toggle starts off.
 - **A latch's two wires** are told apart in its settings ("Set" and "Reset"), as a
   PWM's are: a wire drawn into it sets it if it has no set source yet, and otherwise
-  resets it.
+  resets it. A counter's are "Count" and "Reset", the same way. A wire leaves a
+  counter from the output picked in its settings ("Wire from": Done or Count), as a
+  2D slider's does.
 - **In the browser: the device first, the browser as a fallback.** Each logic
   element's state reaches the browser as a `sig`
   [telemetry text frame](#telemetry-text-frames), 1 on and 0 off: its node shows it,
@@ -829,8 +861,32 @@ plot, compare or other floating logic can).
   the LED, GPOs, PWMs and keyboards.
 - **Wiring.** In the graph a logic node is both a source and an output: a wire into it
   comes from a source, and a wire from it goes to an output. Between two logic nodes,
-  a wire goes from the selected node to the one clicked. The UI doesn't draw a wire
-  that would close a loop.
+  a wire goes from the selected node to the one clicked. A wire may close a loop: see
+  below.
+- **In the browser, in order.** The browser works a change out as core 1 does: each
+  logic node once the change has reached every input it reads (other than through a
+  feedback wire), so a node never acts on half a change.
+
+#### Loops
+
+A wire that closes a loop is a **feedback wire**: the logic it goes into reads it as
+the last scan left it, 10 ms late, and the logic it comes from runs after. A loop
+goes round once a scan. This is how a graph repeats something: a counter, fed back,
+stops what it counts.
+
+- **Which wire.** The UI makes a wire a feedback wire when it closes a loop of
+  ordinary wires as it is drawn: it is drawn dashed, and saved with
+  `MSG_REF_FEEDBACK` in its [source reference](#source-references). When a wire the
+  loop needs is taken out, the feedback wire becomes an ordinary one.
+- **Only through a state.** The UI draws a wire that closes a loop only if the loop
+  goes through logic that holds a state from scan to scan: a delay, pulse, blink,
+  toggle, latch or counter. A loop of only compares, ANDs, ORs, NOTs, scales, mins
+  and maxes would flip over every scan, or do nothing.
+- **On the device,** core 1 orders the logic leaving the feedback wires out (see
+  [The program](#the-program)). In a loop with no feedback wire (a config the UI
+  didn't save), the first of its nodes in the config runs first.
+- **In the browser,** a feedback wire hands a value on 10 ms (`FEEDBACK_MS`) after it
+  changes, as the device's next scan reads it.
 
 The core temperature `n1` above 40 °C, with 1 °C of hysteresis, drives GPIO 5 through
 the compare `n2`, whose tile is shown:
@@ -881,6 +937,71 @@ momentary button resets it:
 49 01 00 07 0B  00 06 00                        # blink n7 ← n6
                 00 00 00 FA  00 00 00 FA        #   250 ms on, 250 ms off
 20 01 00 08 03  00 07 00                        # LED n8 ← n7
+```
+
+A momentary button blinks the onboard LED three times. The latch runs the blink; the
+counter counts the blinks; its done output, fed back to the latch's reset, stops
+them. The counter is reset while the latch is off, so each press counts from 0:
+
+```hex example=logic-loop-config
+0A 00 40                                        # Config, 64 bytes
+10 00 00 01 01  01                              # button n1, momentary
+4B 01 00 02 06  00 01 00  00 04 80              # latch n2: set ← n1, reset ← n4 done, fed back
+49 01 00 03 0B  00 02 00                        # blink n3 ← n2
+                00 00 00 FA  00 00 00 FA        #   250 ms on, 250 ms off
+4C 01 00 04 0A  00 03 00  00 05 00              # counter n4: count ← n3, reset ← n5
+                00 00 00 03                     #   preset 3
+43 01 00 05 03  00 02 00                        # NOT n5 ← n2
+20 01 00 06 03  00 03 00                        # LED n6 ← n3
+```
+
+### Blocks
+
+A **block** is a graph of logic defined once and placed any number of times, like a
+function or subroutine. Its **definition** is a graph of its own, edited in its own
+view, with **input** and **output ports** (`61`, `62`) where its copies' wires come in
+and go out; each port is on/off or a number. A **copy** (`60`) is a node in the main
+graph with the definition's inputs and outputs.
+
+- **What a definition holds:** logic (`40`–`4C`) and ports, with their labels,
+  positions and wire shapes. Hardware and UI elements stay in the main graph, and a
+  definition holds no copy of a block.
+- **How it is saved:** the definition's name (`A3`), then each of its messages,
+  whole, in an `A4` keyed by the definition's ID, with IDs of the definition's own.
+  The device ignores both. Only the blocks the graph has a copy of are saved.
+- **What the device runs:** each copy's **parts**. For each copy the UI writes a copy
+  of the definition's logic, as ordinary logic messages marked `MSG_FLAG_PART`, with
+  IDs from the copy's first part (byte 1–2 of its payload), in the definition's order.
+  A part's reference to an input port is written as the copy's input's source
+  reference.
+- **A copy's outputs:** a reference to output k of a copy stands for the k-th
+  reference in the copy's table: what that output port is wired from inside, as the
+  parts read it. Core 1 follows it (`resolve_ref`), through up to 8 copies; a
+  feedback wire on the way makes it a feedback reference. The copy itself is not run
+  and has no signal.
+- **In the browser** each copy runs its own parts, and shows the device's reports
+  of them (`sig` frames for the parts' IDs). When the definition changes, every copy
+  builds its parts again: a wire into or out of a port that is gone, or whose type
+  changed, goes.
+- **Limits:** the parts count towards the device's 64 nodes and 96 signals, and the
+  definition and the parts towards the 4096-byte config. A label in a definition is
+  at most 250 bytes.
+
+A block "Flip", whose output turns over each time its input goes on, placed once
+between a momentary button and the onboard LED. Its definition is an input, a toggle
+and an output; the copy's part is the toggle `n10`:
+
+```hex example=block-config
+0A 00 57                                        # Config, 87 bytes
+A3 00 00 01 04  46 6C 69 70                     # definition 1: "Flip"
+A4 00 00 01 07  61 01 00 01 02 00 00            #   input n1: on/off, index 0
+A4 00 00 01 0A  62 01 00 02 05 00 03 00 00 00   #   output n2 ← n3: on/off, index 0
+A4 00 00 01 08  4A 01 00 03 03 00 01 00         #   toggle n3 ← n1
+10 00 00 01 01  01                              # button n1, momentary
+60 01 00 02 0B  01 00 0A 01 01                  # copy n2 of definition 1, parts from n10, 1 input, 1 output
+                00 01 00  00 0A 00              #   input ← n1; output = n10
+4A 05 00 0A 03  00 01 00                        # toggle n10 ← n1: n2's part
+20 01 00 03 03  00 02 00                        # LED n3 ← n2's output
 ```
 
 ### USB keyboards
@@ -1082,7 +1203,7 @@ Every source in the config has its signals, wired or not:
 | `12` slider | 1 | 0 to 1 | 0 |
 | `13` 2D slider | 2: X (output 0), Y (output 1) | 0 to 1 each | its [home](#2d-sliders) |
 | `30` core temperature | 1 | °C | the latest temperature |
-| `40`–`4B` [logic](#logic) | 1 | 0 off, 1 on; a scale, min or max its value | 0, then its state at the first scan |
+| `40`–`4C` [logic](#logic) | 1; a counter 2: done (output 0), its count (output 1) | 0 off, 1 on; a scale, min or max its value; a counter's count | 0, then its state at the first scan |
 | `31` GPIO input | 1 | 0 off, 1 on | the pin when it is set up |
 | `32` ADC | 1 | volts, 0 to 3.3 | 0, then its first reading |
 
@@ -1113,24 +1234,27 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `45` scale | 1 signal | its signal | See [Logic](#logic) |
 | `46` min, `47` max | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `4B` latch | 2 signals: set, reset | its signal | See [Logic](#logic) |
+| `4C` counter | 2 signals: count, reset | its two signals: done, its count | See [Logic](#logic) |
 | `20` LED | 1 signal | the onboard LED, through core 0 | On from 0.5 |
 | `21` GPO | 1 signal | its pin | High from 0.5 |
 | `22` PWM | 2 signals: duty, frequency | its pin | See [PWM outputs](#pwm-outputs) |
 | `23` USB keyboard | 1 signal | a keystroke, through core 0 | Types when its signal goes from below 0.5 to 0.5 or up |
 
 - **An output reads the signals its source references name.** A reference to an
-  element that isn't in the program, or to nothing (ID 0), reads 0.
+  element that isn't in the program, or to nothing (ID 0), reads 0. A reference to
+  an output of a [block's](#blocks) copy reads what the copy's table says it stands for.
 - **Logic in order.** Of the logic nodes, the first in the config that reads no
   logic still to be placed comes next; so each comes after the logic it reads, and
-  otherwise they keep the config's order. In a loop, which the UI doesn't draw, the
-  first of its nodes left comes first and reads the others' signals as the last scan
-  left them.
+  otherwise they keep the config's order. A [feedback wire](#loops) doesn't count:
+  the logic it goes into comes first, and reads it as the last scan left it. In a
+  loop with no feedback wire, the first of its nodes left comes first and reads the
+  others' signals as the last scan left them.
 - **Left out:** the elements core 1 doesn't run (plots, lights, labels, positions,
   wires, networking), messages of the wrong length (the [payloads](#control-payloads)
   give the lengths), an ADC channel over 2, a compare with a threshold or hysteresis
   that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
   of its range, a scale whose ranges aren't finite numbers or whose input range is
-  empty, and anything over the limits:
+  empty, a counter preset out of its range, and anything over the limits:
   `PROG_SIGNALS_MAX` (96) signals and `PROG_NODES_MAX` (64) nodes.
 - **A repeated element ID**, as in configs from older UIs, keeps one signal, whose
   last message wins.
@@ -1140,8 +1264,8 @@ of the config; then the **logic**, each after the logic it reads; then the
 A program can be written as text, one signal or node a line (`program_describe`):
 `sN` is signal N, `->` the signal an input writes, `<-` the signal an output reads,
 `-` none. A PWM's `/ F` is the value of that signal that gives its max (see
-[PWM outputs](#pwm-outputs)). A delay's delays are in milliseconds. Signals show the
-value they start at.
+[PWM outputs](#pwm-outputs)). A delay's delays are in milliseconds. An input marked
+`'` comes through a [feedback wire](#loops). Signals show the value they start at.
 
 The program for the [save-config example](#the-graph). The button and slider are
 signals only; the LED and GPO read the button's, the PWM's duty the slider's:
@@ -1248,6 +1372,34 @@ LATCH n6 set s2 reset s3 -> s4
 BLINK n7 on 250 off 250 <- s4 -> s5
 PWM n3 pin 2 options 01 duty 50 0-100 <- s1 / 1 freq 1000 100-10000 <- - / 1
 LED n8 <- s5
+```
+
+For the [logic-loop-config example](#loops): the latch comes first, and reads the
+counter's done (`s3'`) as the last scan left it; the counter, which reads the blink
+and the NOT, comes last and writes its done and its count:
+
+```program example=logic-loop-config
+s0 n1.0 button = 0
+s1 n2.0 latch = 0
+s2 n3.0 blink = 0
+s3 n4.0 counter = 0
+s4 n4.1 counter = 0
+s5 n5.0 not = 0
+LATCH n2 set s0 reset s3' -> s1
+BLINK n3 on 250 off 250 <- s1 -> s2
+NOT n5 <- s1 -> s5
+COUNTER n4 preset 3 count s2 reset s5 -> s3 s4
+LED n6 <- s2
+```
+
+For the [block-config example](#blocks): the definition and the copy are left out;
+the part runs, and the LED, wired to the copy's output, reads it:
+
+```program example=block-config
+s0 n1.0 button = 0
+s1 n10.0 toggle = 0
+TOGGLE n10 <- s0 -> s1
+LED n3 <- s1
 ```
 
 For the [legacy-config example](#source-references): a reference saved without its

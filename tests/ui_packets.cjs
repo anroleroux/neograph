@@ -39,7 +39,19 @@ function expect(cond, msg) {
 
 const hex = (bytes) => bytes.map(b => b.toString(16).padStart(2, '0')).join('');
 
-async function open(browser) {
+// The graph the tests start from, in place of the demo graph: button n1, LED n2 ← n1
+// and GPO n3 on pin 1, where the demo graph used to put them.
+const TEST_GRAPH = [
+    0x10, 0x00, 0x00, 0x01, 0x00,                                   // button n1
+    0xA1, 0x00, 0x00, 0x01, 0x04, 0xFF, 0x38, 0xFF, 0xD8,           //   at (-200, -40)
+    0x20, 0x01, 0x00, 0x02, 0x03, 0x00, 0x01, 0x00,                 // LED n2 ← n1
+    0xA1, 0x00, 0x00, 0x02, 0x04, 0x00, 0x64, 0x00, 0x28,           //   at (100, 40)
+    0x21, 0x01, 0x00, 0x03, 0x04, 0x00, 0x00, 0x00, 0x01,           // GPO n3, pin 1
+    0xA1, 0x00, 0x00, 0x03, 0x04, 0x00, 0xC8, 0x00, 0x00,           //   at (200, 0)
+];
+
+// Open the page; with `demo` false, replace the demo graph with TEST_GRAPH.
+async function open(browser, demo = false) {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -84,6 +96,7 @@ async function open(browser) {
         window.WebSocket = FakeWebSocket;
     });
     await page.goto('file://' + path.resolve(page_file));
+    if (!demo) await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
     return { page, errors };
 }
 
@@ -116,13 +129,54 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const browser = await chromium.launch();
     const packets = [];
 
+    // ── The demo graph: the button drives the LED; below, a second button starts a
+    // copy of the block "Blink 3", whose loop blinks the light three times ──
+    let { page, errors } = await open(browser, true);
+    const demo = await page.evaluate(async () => {
+        const wires = gEdges.map(e => e.start.node.name + '>' + e.end.node.name + (e.feedback ? '~' : '')).join(' ');
+        const copy = elements.n4, def = copy.def;
+        const inside = scopeEdges(def.scope).map(e => e.start.node.label + '>' + e.end.node.label + (e.feedback ? '~' : '')).join(',');
+        const blinks = [];
+        const base = copy.emit.bind(copy);
+        copy.emit = (v, o = 0) => { if (v) blinks.push(v); base(v, o); };
+        const b = elements.n3;
+        b.value = true; b.emit(1); b.value = false; b.emit(0);
+        await new Promise(r => setTimeout(r, 1700));
+        const parts = Object.values(copy.parts.elements);
+        return { wires, types: Object.values(elements).map(e => e.type).join(), def: def.name, inside,
+            parts: [copy.base, copy.partCount].join(), blinks: blinks.length,
+            after: [copy.outs[0], elements.n5.on, ...parts.filter(n => n instanceof uiLatch || n instanceof uiCounter)
+                .map(n => n instanceof uiCounter ? n.count : n.value)].join() };
+    });
+    expect(demo.wires === 'n1>n2 n3>n4 n4>n5' && demo.types === 'button,led,button,block,light' && demo.def === 'Blink 3'
+        && demo.inside === 'Start>Latch,Latch>Blink,Blink>Blink,Blink>Counter,Latch>NOT,NOT>Counter,Counter>Latch~'
+        && demo.parts === '6,4', 'the demo graph is not as expected: ' + JSON.stringify(demo));
+    expect(demo.blinks === 3 && demo.after === '0,false,false,0', 'the demo loop did not blink three times: ' + JSON.stringify(demo));
+
+    // Every node's settings say how it works, folded at first; unfolded, the next
+    // node's are too.
+    const help = await page.evaluate(() => {
+        const missing = Object.values(NODE_CLASSES).filter(c => !NODE_HELP[new c(0, 0).type]).map(c => c.name);
+        selectById(1);
+        const folded = !document.querySelector('#settings h3 + details.help').open;
+        document.querySelector('#settings .help').open = true;
+        document.querySelector('#settings .help').dispatchEvent(new Event('toggle'));
+        selectById(2);
+        return { missing: missing.join(), folded, kept: document.querySelector('#settings .help').open,
+            text: document.querySelector('#settings .help p').textContent.slice(0, 18) };
+    });
+    expect(JSON.stringify(help) === JSON.stringify({ missing: '', folded: true, kept: true, text: "The Pico 2 W's onb" }),
+        'the nodes\' help is not as expected: ' + JSON.stringify(help));
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
     // ── First connect: a first-boot device, then edit and save the graph ──
-    let { page, errors } = await open(browser);
+    ({ page, errors } = await open(browser));
     await connect(page, FIRST_BOOT_CONFIG);
     expect(await page.evaluate(() => networks[0].ssid) === 'LRX', 'the first-boot config was not read');
     expect((await sent(page)).length === 0, 'the UI sent something on connect');
     expect(await page.evaluate(() => gEdges.map(e => e.start.node.name + '>' + e.end.node.name).join()) === 'n1>n2',
-        'the demo graph does not wire n1 to n2');
+        'the test graph does not wire n1 to n2');
 
     // Wire mode marks only the nodes a wire can join: from a source, the outputs
     // without a wire; from a free output, the sources.
@@ -162,15 +216,15 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(await menu() === ' | ', 'the folded menu shows ' + await menu());
     await page.locator('#add .toggle').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'the plus shows ' + await menu());
+    expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'the plus shows ' + await menu());
     const groups = [];
-    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'lgc']) {
+    for (const g of ['uii', 'hwo', 'hwi', 'uio', 'usb', 'tm', 'anl', 'lgc', 'sub']) {
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, CMP AND OR NOT DLY SCL MIN MAX PLS BLK TGL LCH', 'the groups show ' + groups.join(', '));
-    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
-    expect(await menu() === 'UII HWO HWI UIO USB LGC | ', 'clicking the open group again left ' + await menu());
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
+    expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
 
     // Add a PWM output from the add menu, set it up and wire the button to it.
@@ -926,7 +980,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     ({ page, errors } = await open(browser));
     await connect(page, FIRST_BOOT_CONFIG);          // the demo graph: button n1, LED n2 ← n1, GPO n3
     await page.locator('#add .toggle').dispatchEvent('click');
-    await page.locator('#add .group[data-group="lgc"]').dispatchEvent('click');
+    await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
     await page.locator('#add [title="Add a compare"]').dispatchEvent('click');       // n4
     const compareRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
     expect(compareRows === 'Label:|On while:|Threshold:|Hysteresis:|Command view:', 'a compare\'s settings are ' + compareRows);
@@ -962,20 +1016,21 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             text: cmp.gElm.children[1].textContent,
             and: elements.n7.inConns().map(c => c.start.node.name).join(),
             led: elements.n2.inConns().map(c => c.start.node.name).join(),
-            // A wire back up the chain would close a loop: not offered, not drawn.
-            loop: !elements.n7.canTakeConn(elements.n9) && createEdge('n9', 'n7') === null
+            // A wire back up the chain closes a loop through the delay, which holds a
+            // state: offered (as a feedback wire). Not drawn here; see the loop below.
+            loop: elements.n7.canTakeConn(elements.n9)
                 && createEdge('n8', 'n4') === null && createEdge('n4', 'n4') === null,
             // A slider is floating: it drives a compare, not an AND; a compare
             // takes no boolean source.
             types: createEdge('n1', 'n4') === null && elements.n7.takesType(elements.n4)
                 && !elements.n4.takesType(elements.n6),
-            free: elements.n7.canTakeConn(elements.n9) === false && new uiOr(0, 300).canTakeConn(elements.n9),
+            free: new uiOr(0, 300).canTakeConn(elements.n9),
         };
     });
     expect(logic.rejected && logic.delays, 'logic settings out of range were accepted: ' + JSON.stringify(logic));
     expect(logic.wired && logic.text === '> 40' && logic.and === 'n4,n6' && logic.led === 'n9',
         'the logic was not wired: ' + JSON.stringify(logic));
-    expect(logic.loop, 'a wire that closes a loop was offered or drawn');
+    expect(logic.loop, 'a wire back through a delay was not offered, or a wrong one was drawn');
     expect(logic.types, 'logic took a source of the wrong type');
     expect(logic.free, 'a new OR does not take the NOT');
     await page.evaluate(() => elements.n11.remove());
@@ -1152,6 +1207,299 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [elements.n2.setSource?.name, elements.n2.resetSource?.name].join();
     });
     expect(resetOnly === ',n1', 'a latch with only a reset source restored as ' + resetOnly);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // ── A loop: a button blinks the LED three times. The latch runs the blink; the
+    // counter counts the blinks, and its done output, wired back to the latch's
+    // reset, closes the loop as a feedback wire. The counter is reset while the
+    // latch is off. A loop through nothing that holds a state isn't drawn. ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    const loop = await page.evaluate(() => {
+        [MSG_UI_BUTTON, MSG_LOGIC_LATCH, MSG_LOGIC_BLINK, MSG_LOGIC_COUNTER, MSG_LOGIC_NOT, MSG_UI_GRAPH,
+         MSG_LOGIC_NOT, MSG_LOGIC_NOT].forEach(addNode);          // n4 to n11
+        const [latch, blink, counter] = ['n5', 'n6', 'n7'].map(n => elements[n]);
+        const rejected = counter.setPreset('0') === false && counter.setPreset('1.5') === false
+            && counter.setPreset(String(COUNTER_MAX + 1)) === false;
+        counter.setPreset('3');
+        blink.setOnTime('0.05'); blink.setOffTime('0.05');
+        const wired = [
+            createEdge('n4', 'n5'),                 // button → latch: set
+            createEdge('n5', 'n6'),                 // latch → blink
+            createEdge('n6', 'n7'),                 // blink → counter: count
+            createEdge('n5', 'n8'),                 // latch → NOT
+            createEdge('n8', 'n7'),                 // NOT → counter: reset
+            createEdge('n7', 'n5'),                 // counter done → latch: reset, closing the loop
+            createEdge('n6', 'n2'),                 // blink → LED, in place of the button
+            createEdge('n10', 'n11'),               // NOT → NOT
+        ].every(e => e !== null);
+        counter.setWireOutput(1);
+        const count = createEdge('n7', 'n9');       // the count → plot
+        return {
+            rejected, wired,
+            roles: [latch.setSource?.name, latch.resetSource?.name, counter.countSource?.name, counter.resetSource?.name].join(),
+            feedback: gEdges.filter(e => e.feedback).map(e => e.start.node.name + '>' + e.end.node.name).join(),
+            dashed: gEdges.find(e => e.feedback)?.path.getAttribute('stroke-dasharray'),
+            count: count?.start.output === 1 && count.outputName?.textContent === 'Count',
+            // The count is floating: a plot takes it, a GPO doesn't.
+            types: createEdge('n7', 'n3') === null && counter.outputs.map(o => o.type).join() === 'bool,float',
+            // NOT → NOT → back again would flip every scan: not offered, not drawn.
+            stateless: !elements.n10.canTakeConn(elements.n11) && createEdge('n11', 'n10') === null,
+        };
+    });
+    expect(loop.rejected, 'a counter preset out of range was accepted');
+    expect(loop.wired && loop.roles === 'n4,n7,n6,n8' && loop.count && loop.types,
+        'the loop was not wired: ' + JSON.stringify(loop));
+    expect(loop.feedback === 'n7>n5' && loop.dashed, 'the wire closing the loop is not a feedback wire: ' + JSON.stringify(loop));
+    expect(loop.stateless, 'a loop through nothing that holds a state was offered or drawn');
+
+    // In the browser: a press blinks three times, then the loop stops and the counter is back at 0.
+    const run = await page.evaluate(async () => {
+        const blinks = [], counts = [];
+        const emit = (node, seen, output) => {
+            const base = node.emit.bind(node);
+            node.emit = (v, o = 0) => { if (o === output) seen.push(Number(v)); base(v, o); };
+        };
+        emit(elements.n6, blinks, 0);
+        emit(elements.n7, counts, 1);
+        const b = elements.n4;
+        b.value = true; b.emit(1); b.value = false; b.emit(0);
+        await new Promise(r => setTimeout(r, 600));
+        return { blinks: blinks.filter(v => v === 1).length, counts: counts.join(),
+            after: [elements.n5.value, elements.n6.value, elements.n7.value, elements.n7.count].join() };
+    });
+    expect(run.blinks === 3 && run.counts === '1,2,3,0' && run.after === 'false,false,false,0',
+        'the loop did not blink three times: ' + JSON.stringify(run));
+
+    // The device reports the counter's two outputs: its node and tile show them.
+    const reported = await page.evaluate(() => {
+        elements.n7.shown = true;
+        buildCommandInterface();
+        window.__ws.receive('sig 7 0 0');
+        window.__ws.receive('sig 7 1 2');
+        return [elements.n7.count, elements.n7.gElm.children[1].textContent, elements.n7.tileState.textContent].join();
+    });
+    expect(reported === '2,2/3,2 of 3', 'the device\'s count was not shown: ' + reported);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const loopSaved = await sent(page);
+    const loopHex = hex(loopSaved[0]);
+    expect(loopSaved.length === 1
+        && loopHex.includes('4b01000506' + '000400' + '000780')                     // latch: set ← n4, reset ← n7 fed back
+        && loopHex.includes('4c0300070a' + '000600' + '000800' + '00000003')        // counter: count ← n6, reset ← n8, preset 3
+        && loopHex.includes('0201000904' + '000701'),                               // plot ← n7's count
+        'the loop was not saved as expected: ' + loopHex);
+    packets.push(...loopSaved);
+    await page.close();
+
+    // Reconnecting restores the loop with its feedback wire; saving it again changes
+    // nothing. Taking out a wire that the loop needs makes the feedback wire an
+    // ordinary one.
+    ({ page, errors } = await open(browser));
+    await connect(page, loopSaved[0]);
+    const loopRestored = await page.evaluate(() => ({
+        feedback: gEdges.filter(e => e.feedback).map(e => e.start.node.name + '>' + e.end.node.name).join(),
+        counter: [elements.n7.preset, elements.n7.countSource?.name, elements.n7.resetSource?.name].join(),
+        plot: elements.n9.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+    }));
+    expect(JSON.stringify(loopRestored) === JSON.stringify({ feedback: 'n7>n5', counter: '3,n6,n8', plot: 'n7:1' }),
+        'the loop was not restored: ' + JSON.stringify(loopRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const loopResaved = await sent(page);
+    expect(loopResaved.length === 1 && hex(loopResaved[0]) === loopHex, 'saving the restored loop changed the config');
+    const broken = await page.evaluate(() => {
+        const out = (from, to) => gEdges.find(e => e.start.node.name === from && e.end.node.name === to);
+        out('n5', 'n6').remove();               // latch → blink: the loop still goes through the NOT
+        const still = out('n7', 'n5').feedback;
+        out('n8', 'n7').remove();               // NOT → counter: no loop left
+        return [still, out('n7', 'n5').feedback, out('n7', 'n5').path.hasAttribute('stroke-dasharray')].join();
+    });
+    expect(broken === 'true,false,false', 'a feedback wire was not made ordinary once its loop was broken: ' + broken);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // ── Blocks: "Flip" turns over each time its input goes on, and counts how often.
+    // Defined once, it is placed twice: the second copy flips on the first's output. ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
+    await page.locator('#add [title="Make a new block"]').dispatchEvent('click');    // copy n4 of Block 1
+    await page.locator('#settings .choice button', { hasText: 'Edit block' }).dispatchEvent('click');
+    const inBlock = await page.evaluate(() => {
+        const shown = (sel) => [...document.querySelectorAll(sel)].filter(b => getComputedStyle(b).display !== 'none')
+            .map(b => b.textContent.trim()).join(' ');
+        const red = getComputedStyle(document.querySelector('#wire')).backgroundColor;
+        toggleAddMenu();
+        toggleAddGroup('sub');
+        const groups = [...document.querySelectorAll('#add .group')];
+        const off = groups.filter(g => g.classList.contains('off'));
+        return { bar: document.querySelector('#block-bar').hidden ? '' : document.querySelector('#block-bar .name').textContent,
+            groups: groups.filter(g => !g.classList.contains('off')).map(g => g.textContent.trim()).join(' '),
+            off: off.map(g => g.textContent.trim()).join(' ') + (off.every(g => getComputedStyle(g).backgroundColor === red
+                && getComputedStyle(g).pointerEvents === 'none' && getComputedStyle(g).display !== 'none') ? ': red' : ''),
+            sub: shown('#add .node.shown'),
+            led: addNode(MSG_HW_LED) === null, nodes: Object.values(elements).map(e => e.label).join() };
+    });
+    expect(JSON.stringify(inBlock) === JSON.stringify({ bar: 'Block 1', groups: 'TM ANL LGC SUB', off: 'UII HWO HWI UIO USB: red', sub: 'IN OUT', led: true, nodes: 'In 1,Out 1' }),
+        'the block\'s view is not as expected: ' + JSON.stringify(inBlock));
+    const defined = await page.evaluate(() => {
+        const [inp, out] = Object.values(elements);
+        const out2 = addNode(MSG_SUB_OUTPUT);
+        out2.setType('float');
+        const toggle = addNode(MSG_LOGIC_TOGGLE), counter = addNode(MSG_LOGIC_COUNTER);
+        counter.setPreset('100');
+        const wired = [createEdge(inp.name, toggle.name), createEdge(toggle.name, out.name),
+            createEdge(inp.name, counter.name)].every(e => e);
+        counter.setWireOutput(1);
+        const typed = createEdge(counter.name, out.name) === null && createEdge(counter.name, out2.name) !== null;
+        editingBlock.rename('Flip');
+        return { wired, typed, ids: Object.values(elements).map(e => e.name).join() };
+    });
+    expect(defined.wired && defined.typed, 'the block was not defined: ' + JSON.stringify(defined));
+    await page.locator('#block-bar .back').dispatchEvent('click');
+    const placed = await page.evaluate(() => {
+        const flip = elements.n4;
+        const button = addNode(MSG_UI_BUTTON);
+        button.setAction('momentary');
+        const plot = addNode(MSG_UI_GRAPH);
+        const flip2 = addBlock(flip.def);
+        const light = addNode(MSG_UI_INDICATOR);
+        window.t = { flip: flip.name, button: button.name, plot: plot.name, flip2: flip2.name, light: light.name };
+        flip.setWireOutput(1);
+        const wired = [createEdge(button.name, 'n4'), createEdge('n4', plot.name), createEdge('n4', flip2.name, 0),
+            createEdge(flip2.name, light.name)].every(e => e) && new gEdge(flip, elements.n2, 0);
+        return {
+            t: window.t, label: flip.label + ',' + flip.text,
+            ports: [flip.roles.map(r => r[1] + ':' + r[2]).join(), flip.outputs.map(o => o.name + ':' + o.type).join()].join(' | '),
+            wired: !!wired, led: elements.n2.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            types: createEdge('n4', 'n3') === null,     // a number into a GPO: no (output 1 is active)
+            parts: [flip.partCount, flip2.partCount, flip.base !== flip2.base].join(),
+        };
+    });
+    const t = placed.t;
+    expect(placed.label === 'Flip,Flip' && placed.ports === 'In 1:bool | Out 1:bool,Out 2:float'
+        && placed.wired && placed.led === 'n4:0' && placed.types && placed.parts === '2,2,true',
+        'the block was not placed: ' + JSON.stringify(placed));
+
+    // In the browser: each press flips the first copy and counts; the second copy flips
+    // each time the first goes on.
+    const flips = await page.evaluate(() => {
+        const press = () => { const b = elements[t.button]; b.value = true; b.emit(1); b.value = false; b.emit(0);
+            return [elements.n4.outs.join('/'), elements[t.flip2].outs[0], elements[t.light].on].join(); };
+        return [press(), press(), press()].join(' ');
+    });
+    expect(flips === '1/1,1,true 0/2,1,true 1/3,0,false', 'the blocks did not flip: ' + flips);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const blockSaved = await sent(page);
+    const blockInfo = await page.evaluate((bytes) => {
+        const msgs = configMessages(Uint8Array.from(bytes).slice(3));
+        const of = (type) => msgs.filter(m => m.type === type);
+        return {
+            def: of(MSG_SUB_DEF).map(m => m.id + ':' + new TextDecoder().decode(m.pay)).join(),
+            wrapped: of(MSG_SUB_PART).length,
+            copies: of(MSG_SUB).map(m => [m.id, ...m.pay.slice(0, 5)].join('.')).join(),
+            parts: msgs.filter(m => m.flags & MSG_FLAG_PART).map(m => m.type.toString(16) + '@' + m.id).join(),
+            bases: [elements.n4.base, elements[t.flip2].base].join(),
+            led: [...of(MSG_HW_LED)[0].pay].join('.'),
+        };
+    }, blockSaved[0]);
+    const [b4, b7] = blockInfo.bases.split(',').map(Number);
+    const id7 = Number(t.flip2.slice(1));
+    expect(blockSaved.length === 1 && blockInfo.def === '1:Flip' && blockInfo.wrapped > 0
+        && blockInfo.copies === `4.1.${b4 >> 8}.${b4 & 255}.1.2,${id7}.1.${b7 >> 8}.${b7 & 255}.1.2`
+        && blockInfo.parts === `4a@${b4},4c@${b4 + 1},4a@${b7},4c@${b7 + 1}` && blockInfo.led === '0.4.0',
+        'the blocks were not saved as expected: ' + JSON.stringify(blockInfo));
+    packets.push(...blockSaved);
+
+    // The device reports each copy's parts: the first's toggle off, the second's on.
+    const reportedFlip = await page.evaluate(([a, b]) => {
+        window.__ws.receive(`sig ${a} 0 0`);
+        window.__ws.receive(`sig ${b} 0 1`);
+        return [elements.n4.outs[0], elements[t.flip2].outs[0]].join();
+    }, [b4, b7]);
+    expect(reportedFlip === '0,1', 'the device\'s part was not shown on the block\'s output: ' + reportedFlip);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // Reconnecting restores the blocks; saving again changes nothing. Taking a port out
+    // of the definition takes it, and its wires, off each copy.
+    ({ page, errors } = await open(browser));
+    await connect(page, blockSaved[0]);
+    const blockRestored = await page.evaluate((t) => ({
+        defs: [...subDefs.values()].map(d => d.name + ':' + d.nodes().map(n => n.label).join('/')).join(),
+        copies: ['n4', t.flip2].map(n => [elements[n].def?.name, elements[n].base, elements[n].roles.length,
+            elements[n].outputs.length].join('.')).join(),
+        wires: gEdges.map(e => e.start.node.name + ':' + e.start.output + '>' + e.end.node.name).join(),
+    }), t);
+    const wanted = [`${t.button}:0>n4`, `n4:1>${t.plot}`, `n4:0>${t.flip2}`, `${t.flip2}:0>${t.light}`, 'n4:0>n2'];
+    expect(blockRestored.defs === 'Flip:In 1/Out 1/Out 2/Toggle/Counter'
+        && blockRestored.copies === `Flip.${b4}.1.2,Flip.${b7}.1.2`
+        && wanted.every(w => blockRestored.wires.split(',').includes(w)),
+        'the blocks were not restored: ' + JSON.stringify(blockRestored));
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const blockResaved = await sent(page);
+    expect(blockResaved.length === 1 && hex(blockResaved[0]) === hex(blockSaved[0]), 'saving the restored blocks changed the config');
+    // Saving from inside the block updates its copies in the main graph.
+    const portGone = await page.evaluate((t) => {
+        openBlock(elements.n4.def);
+        Object.values(elements).find(e => e.label === 'Out 2').remove();
+        saveGraph();
+        closeBlock();
+        return [elements.n4.outputs.length, elements[t.plot].inConns().length, elements[t.flip2].outputs.length,
+            gEdges.every(e => !e.removed)].join();
+    }, t);
+    packets.push(...await sent(page));
+    expect(portGone === '1,0,1,true', 'a port taken out of the definition was left on its copies: ' + portGone);
+    // A block with a number input: a slider drives a compare inside it; a button can't
+    // be wired to that input.
+    const numberIn = await page.evaluate(() => {
+        const copy = newBlock();
+        openBlock(copy.def);
+        const [inp, out] = Object.values(elements);
+        // With no wire, the input takes its type from the first one: a number, into the
+        // compare. Then it no longer drives an on/off input.
+        const cmp = addNode(MSG_LOGIC_COMPARE), not = addNode(MSG_LOGIC_NOT);
+        const typed = inp.portType === 'bool' && not.canTakeConn(inp) && cmp.canTakeConn(inp)
+            && !!createEdge(inp.name, cmp.name) && inp.portType === 'float' && createEdge(inp.name, not.name) === null;
+        not.remove();
+        // An output with no wire takes its type from the first one too: a number, from
+        // the input; then an on/off source is refused.
+        const out2 = addNode(MSG_SUB_OUTPUT);
+        const typedOut = out2.portType === 'bool' && out2.canTakeConn(inp) && !!createEdge(inp.name, out2.name)
+            && out2.portType === 'float' && createEdge(cmp.name, out2.name) === null;
+        const inside = typed && typedOut && !!createEdge(cmp.name, out.name);
+        closeBlock();
+        const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
+        const wired = createEdge(button.name, copy.name) === null && !!createEdge(slider.name, copy.name);
+        const values = [0.2, 0.8].map(v => { slider.value = v; slider.emit(v); return copy.outs[0]; }).join('/');
+        saveGraph();
+        return [inside, wired, copy.roles.map(r => r[2]).join(), copy.outputs.map(o => o.type).join(), values].join();
+    });
+    expect(numberIn === 'true,true,float,bool,float,0/1', 'a block with a number input: ' + numberIn);
+    packets.push(...await sent(page));
+
+    // The block-config example in PROTOCOL.md restores as it says.
+    const example = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0xA3, 0, 0, 1, 4, 0x46, 0x6C, 0x69, 0x70,
+            0xA4, 0, 0, 1, 7, 0x61, 1, 0, 1, 2, 0, 0,
+            0xA4, 0, 0, 1, 10, 0x62, 1, 0, 2, 5, 0, 3, 0, 0, 0,
+            0xA4, 0, 0, 1, 8, 0x4A, 1, 0, 3, 3, 0, 1, 0,
+            0x10, 0, 0, 1, 1, 1,
+            0x60, 1, 0, 2, 11, 1, 0, 10, 1, 1, 0, 1, 0, 0, 10, 0,
+            0x4A, 5, 0, 10, 3, 0, 1, 0,
+            0x20, 1, 0, 3, 3, 0, 2, 0,
+        ])));
+        const copy = elements.n2;
+        return [Object.keys(elements).join(' '), copy.def.name, copy.base, copy.in0Source?.name,
+            elements.n3.inConns().map(c => c.start.node.name).join(), copy.partMessages().join('.'), idCounter].join();
+    });
+    expect(example === 'n1 n2 n3,Flip,10,n1,n2,74.5.0.10.3.0.1.0,11', 'the block-config example restored as ' + example);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

@@ -229,7 +229,7 @@ function toggleWebSocket(n,d) {
             let tick = 0;
             offlineTelemetry = setInterval(() => {
                 const t = performance.now() / 1000;
-                for (const e of Object.values(elements)) {
+                for (const e of Object.values(mainElements())) {
                     if (e instanceof uiCore && tick % 5 === 0) {
                         receiveTelemetry(`sig ${e.id} 0 ${(30 + 4 * Math.sin(t / 20) + Math.random() - 0.5).toFixed(2)}`);
                     } else if (e instanceof uiADC) {

@@ -60,16 +60,18 @@
    nodes in a row under the groups, one group at a time:
 
      +                    row 1
-     UII HWO USB          row 2: UI inputs, HW outputs, USB
-     HWI UIO LGC          row 3: HW inputs, UI outputs, logic
+     UII HWO USB TM ANL   row 2: UI inputs, HW outputs, USB, time, analog
+     HWI UIO LGC SUB      row 3: HW inputs, UI outputs, logic, blocks
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM                 e.g. UII's or HWO's
      TMP ADC GPI
      PLT LGT
      KEY
-     CMP AND OR NOT DLY   (logic: rows 4 to 6)
-     SCL MIN MAX PLS BLK
-     TGL LCH
+     DLY PLS BLK
+     CMP SCL MIN MAX
+     AND OR NOT TGL LCH   (logic: rows 4 and 5)
+     CNT
+     NEW B1 B2 …          (blocks: a new one, and a copy of each; in a block, IN OUT)
 
    Each button's --col and --row give its grid cell. Folded, a button hides behind
    the one that opens it (the plus, or its group) and slides out to its place;
@@ -86,11 +88,19 @@
     pointer-events: none;
 }
 
+/* The groups are see-through, as the graph's nodes are: a faded blue, a little
+   brighter for the UI and hardware inputs and outputs; the open group has a
+   thicker border. Their nodes have no fill. The plus stays solid. */
+#graph > .buttons.add {
+    --clr-menu: var(--clr-face-fade);
+    --clr-menu-io: #9DBDF566;
+}
+
 #graph > .buttons.add > div {
     margin: 0;
     grid-column: var(--col);
     grid-row: var(--row);
-    background-color: var(--clr-pane);      /* solid over the graph */
+    background-color: var(--clr-menu);
     pointer-events: auto;
     transition: transform 0.25s ease, opacity 0.25s ease, background-color 0.25s ease;
 }
@@ -106,8 +116,25 @@
     z-index: 1;
 }
 
+#graph > .buttons.add > .toggle {
+    background-color: var(--clr-pane);
+}
+
+#graph > .buttons.add > .group[data-group="uii"],
+#graph > .buttons.add > .group[data-group="hwo"],
+#graph > .buttons.add > .group[data-group="hwi"],
+#graph > .buttons.add > .group[data-group="uio"] {
+    background-color: var(--clr-menu-io);
+}
+
+#graph > .buttons.add > .node {
+    background-color: transparent;
+}
+
+/* A thicker border, with as much less padding, so the button keeps its size. */
 #graph > .buttons.add > .group.sel {
-    background-color: #BFCDE740;
+    border-width: 5px;
+    padding: calc(var(--step--3) - 2px);
 }
 
 #graph > .buttons.add.open > .toggle {
@@ -119,6 +146,54 @@
     transform: translate(var(--dx, 0), var(--dy, 0));
     opacity: 0;
     pointer-events: none;
+}
+
+/* In a block's definition, the groups it can't hold: shown, red, and not to be opened. */
+#graph > .buttons.add > .group.off {
+    background-color: var(--clr-red);
+    pointer-events: none;
+}
+
+/* Over a block's definition, at the foot of the graph, clear of the buttons at
+   its top on a narrow screen: the way back, and its name. */
+#block-bar {
+    position: absolute;
+    bottom: var(--step-0);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(100% - 2 * var(--step-0));
+    box-sizing: border-box;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: var(--step-0);
+    padding: var(--step--2) var(--step-0);
+    border: 2px solid var(--clr-face);
+    border-radius: var(--step--1);
+    background-color: var(--clr-pane);
+    color: #BFCDE7;
+}
+
+#block-bar > .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#block-bar > .back {
+    flex: none;
+}
+
+#block-bar[hidden] {
+    display: none;
+}
+
+#block-bar > .back {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid #BFCDE780;
+    border-radius: var(--step--2);
+    cursor: pointer;
 }
 
 #graph > .buttons > .connector {

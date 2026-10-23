@@ -5,7 +5,7 @@ its settings. [PROTOCOL.md](PROTOCOL.md) has the bytes behind each one.
 
 ## Finding a node
 
-The **+** button in the Graph view opens the six groups. A group opens its nodes
+The **+** button in the Graph view opens the nine groups. A group opens its nodes
 under it. In this document, a node's place is written as `GROUP-BUTTON`: `HWI-TMP` is
 the TMP button in the HWI group.
 
@@ -16,10 +16,16 @@ the TMP button in the HWI group.
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
-| **LGC** | Logic: decisions the device makes | CMP, AND, OR, NOT, DLY, SCL, MIN, MAX, PLS, BLK, TGL, LCH |
+| **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
+| **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX |
+| **LGC** | Logic: decisions the device makes | AND, OR, NOT, TGL, LCH, CNT |
+| **SUB** | Blocks: logic you define once and place many times | NEW, then one per block; in a block, IN, OUT |
 
 ## Things every node shares
 
+- **How it works.** Under the heading of a node's settings, **How it works** unfolds a
+  short version of what this document says about it. It is folded at first, and stays
+  as you last left it.
 - **Label.** Every node has a Label setting. Its default is listed with each node
   below. It names the node in the graph and in the Command view.
 - **ID.** Each node shows its ID (`n5`) under its label.
@@ -279,38 +285,19 @@ it. Text is typed as on a US keyboard layout.
 ## LGC: Logic
 
 Logic makes decisions on the device, every 10 ms, without the browser. Each logic
-node reads one or more sources and is a source itself. Most output on/off; Scale,
-Min and Max output numbers. A logic node is both: wires come into it, and leave it
-for outputs or other logic. Between two logic nodes, a wire goes from the node you
-picked first to the one you clicked. A wire that would make a loop isn't offered.
+node reads one or more sources and is a source itself. Most output on/off; the
+[analog](#anl-analog) Scale, Min and Max output numbers; a Counter has one of each. A logic node is both: wires
+come into it, and leave it for outputs or other logic. Between two logic nodes, a
+wire goes from the node you picked first to the one you clicked. A wire may close a
+loop, to repeat something: see [Loops](#loops).
 
-Every logic node has the **Command view** setting (Show, Hide; Hide by default),
+The time and analog nodes ([TM](#tm-time), [ANL](#anl-analog)) are logic too, in
+groups of their own. Every logic node has the **Command view** setting (Show, Hide; Hide by default),
 which puts a tile with its state or value in the Command view. The tables below list
 only each node's own settings.
 
 When a graph starts (at power-on, and on each save), logic starts off or at 0: a
-latch has to be set again, and a toggle starts off.
-
-### Compare: `LGC-CMP`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One number |
-| Output | On/off |
-| Default label | Compare |
-
-On while its input is above (or below) a threshold. **Hysteresis** stops it
-flickering near the threshold: "above 40, hysteresis 1" turns on above 40 and off
-only below 39. The node shows its condition, for example `> 40`.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| On while | Above, Below | Above | Which side of the threshold turns it on. |
-| Threshold | Any number, in the input's unit (shown in the label, such as °C) | 0.5 | Where it switches. |
-| Hysteresis | 0 or more, in the input's unit | 0 | How far back past the threshold the input must go to switch it back. |
-
-Example: core temperature → Compare (above 40, hysteresis 1) → GPO.
+latch has to be set again, a toggle starts off, and a counter starts at 0.
 
 ### AND: `LGC-AND`
 
@@ -350,110 +337,6 @@ No settings of its own.
 On while its input is off. With nothing wired in, on.
 
 No settings of its own.
-
-### Delay: `LGC-DLY`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One, on/off |
-| Output | On/off |
-| Default label | Delay |
-
-Follows its input, but only once the input has stayed in its new state for the on
-delay (to turn on) or the off delay (to turn off). If the input changes back before
-then, the count starts again, so short blips never get through. Use it to debounce,
-or to keep a fan running for a while after its input goes off.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| On delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay on before it turns on. 0 turns on at once. |
-| Off delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay off before it turns off. 0 turns off at once. |
-
-### Scale: `LGC-SCL`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One number |
-| Output | Number |
-| Default label | Scale |
-
-Maps its input from one range onto another. With 30–60 onto 0–1, 45 °C gives 0.5.
-Either range may run downwards, for example 0–1 onto 100–0. A PWM takes a scale's
-output as a fraction of 1, so set the output range to 0–1 to drive a PWM.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| Input from, Input to | Any numbers, in the input's unit; not equal | 0, 1 | The input range. |
-| Output from, Output to | Any numbers | 0, 1 | The output range: "Input from" maps to "Output from", "Input to" to "Output to". |
-| Clamp | Yes, No | Yes | Yes keeps the output within its range when the input goes outside its range. |
-
-Example: core temperature → Scale (30–60 onto 0–1) → PWM duty: a fan that runs
-faster as the chip gets hotter.
-
-### Min: `LGC-MIN`
-
-| | |
-|---|---|
-| Category | Logic |
-| Inputs | 1 to 4 numbers |
-| Output | Number, in the unit of its first input |
-| Default label | Min |
-
-The lowest of its wired inputs. With nothing wired in, 0.
-
-No settings of its own.
-
-### Max: `LGC-MAX`
-
-| | |
-|---|---|
-| Category | Logic |
-| Inputs | 1 to 4 numbers |
-| Output | Number, in the unit of its first input |
-| Default label | Max |
-
-The highest of its wired inputs, such as the hottest of several readings. With
-nothing wired in, 0.
-
-No settings of its own.
-
-### Pulse: `LGC-PLS`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One, on/off |
-| Output | On/off |
-| Default label | Pulse |
-
-Turns on for a set time each time its input goes on, however long the input stays
-on. Going on again while it is on starts the time again. Use it to give a relay or
-buzzer a fixed-length kick from a button press. An input that is already on when the
-graph starts doesn't count as going on.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| Time on (s) | 0.001 to 86400 | 1 | How long it stays on. |
-
-### Blink: `LGC-BLK`
-
-| | |
-|---|---|
-| Category | Logic |
-| Input | One, on/off, or none |
-| Output | On/off |
-| Default label | Blink |
-
-Flashes while its input is on: on for the time on, off for the time off, in turn,
-starting on. When the input goes off, it stops and stays off. With nothing wired in,
-it blinks all the time.
-
-| Setting | Values | Default | What it does |
-|---|---|---|---|
-| Time on (s) | 0.001 to 86400 | 0.5 | How long each flash is on. |
-| Time off (s) | 0.001 to 86400 | 0.5 | How long it is off between flashes. |
 
 ### Toggle: `LGC-TGL`
 
@@ -495,13 +378,283 @@ Example: core temperature → Compare (above 70) → Latch Set; momentary button
 Latch Reset; Latch → Blink → onboard LED. The LED flashes after an over-temperature
 until the button is pressed.
 
+### Counter: `LGC-CNT`
+
+| | |
+|---|---|
+| Category | Logic |
+| Inputs | Two, on/off: **Count** and **Reset** |
+| Outputs | **Done** (on/off) and **Count** (a number, 0 to the preset) |
+| Default label | Counter |
+
+Counts each time Count goes on, up to its preset, and stops there. Done is on once
+the count reaches the preset. While Reset is on, the count is 0 whatever Count does.
+Use it to do something a set number of times (see [Loops](#loops)), or to act on the
+fifth press of a button. The node shows its count and preset, for example `2/3`. An
+input that is already on when the graph starts doesn't count.
+
+The first wire drawn in becomes Count and the second Reset. Pick them in the
+settings to change that. Each wire leaving it is labelled Done or Count.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Wire from | Done, Count | Done | Which output the next wire you draw leaves from. Count is a number: wire it to a compare, scale, plot or PWM (which takes it as a fraction of the preset). |
+| Preset | 1 to 1000000 | 3 | The count it stops at, and where Done turns on. |
+| Count | An on/off source, or None | The first wire in | The source it counts. Picking one draws its wire. |
+| Reset | An on/off source, or None | The second wire in | The source that sets it back to 0. |
+
+---
+
+## TM: Time
+
+Logic that works with time: it waits, or runs for a set time. These are logic nodes,
+run by the device every 10 ms like those in [LGC](#lgc-logic), with the same
+Command view setting; they have a group of their own in the add menu. Times are in
+seconds, to the millisecond, up to a day.
+
+### Delay: `TM-DLY`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One, on/off |
+| Output | On/off |
+| Default label | Delay |
+
+Follows its input, but only once the input has stayed in its new state for the on
+delay (to turn on) or the off delay (to turn off). If the input changes back before
+then, the count starts again, so short blips never get through. Use it to debounce,
+or to keep a fan running for a while after its input goes off.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| On delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay on before it turns on. 0 turns on at once. |
+| Off delay (s) | 0 to 86400, to the ms | 0 | How long the input must stay off before it turns off. 0 turns off at once. |
+
+### Pulse: `TM-PLS`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One, on/off |
+| Output | On/off |
+| Default label | Pulse |
+
+Turns on for a set time each time its input goes on, however long the input stays
+on. Going on again while it is on starts the time again. Use it to give a relay or
+buzzer a fixed-length kick from a button press. An input that is already on when the
+graph starts doesn't count as going on.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Time on (s) | 0.001 to 86400 | 1 | How long it stays on. |
+
+### Blink: `TM-BLK`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One, on/off, or none |
+| Output | On/off |
+| Default label | Blink |
+
+Flashes while its input is on: on for the time on, off for the time off, in turn,
+starting on. When the input goes off, it stops and stays off. With nothing wired in,
+it blinks all the time.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Time on (s) | 0.001 to 86400 | 0.5 | How long each flash is on. |
+| Time off (s) | 0.001 to 86400 | 0.5 | How long it is off between flashes. |
+
+---
+
+## ANL: Analog
+
+Logic that works on numbers: a slider's 0 to 1, an ADC's volts, the core
+temperature's °C, a counter's count, or another analog node's output. A compare turns
+a number into on/off; a scale, min and max give a number. These are logic nodes, run
+by the device every 10 ms like those in [LGC](#lgc-logic), with the same Command view
+setting.
+
+### Compare: `ANL-CMP`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One number |
+| Output | On/off |
+| Default label | Compare |
+
+On while its input is above (or below) a threshold. **Hysteresis** stops it
+flickering near the threshold: "above 40, hysteresis 1" turns on above 40 and off
+only below 39. The node shows its condition, for example `> 40`.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| On while | Above, Below | Above | Which side of the threshold turns it on. |
+| Threshold | Any number, in the input's unit (shown in the label, such as °C) | 0.5 | Where it switches. |
+| Hysteresis | 0 or more, in the input's unit | 0 | How far back past the threshold the input must go to switch it back. |
+
+Example: core temperature → Compare (above 40, hysteresis 1) → GPO.
+
+### Scale: `ANL-SCL`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One number |
+| Output | Number |
+| Default label | Scale |
+
+Maps its input from one range onto another. With 30–60 onto 0–1, 45 °C gives 0.5.
+Either range may run downwards, for example 0–1 onto 100–0. A PWM takes a scale's
+output as a fraction of 1, so set the output range to 0–1 to drive a PWM.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Input from, Input to | Any numbers, in the input's unit; not equal | 0, 1 | The input range. |
+| Output from, Output to | Any numbers | 0, 1 | The output range: "Input from" maps to "Output from", "Input to" to "Output to". |
+| Clamp | Yes, No | Yes | Yes keeps the output within its range when the input goes outside its range. |
+
+Example: core temperature → Scale (30–60 onto 0–1) → PWM duty: a fan that runs
+faster as the chip gets hotter.
+
+### Min: `ANL-MIN`
+
+| | |
+|---|---|
+| Category | Logic |
+| Inputs | 1 to 4 numbers |
+| Output | Number, in the unit of its first input |
+| Default label | Min |
+
+The lowest of its wired inputs. With nothing wired in, 0.
+
+No settings of its own.
+
+### Max: `ANL-MAX`
+
+| | |
+|---|---|
+| Category | Logic |
+| Inputs | 1 to 4 numbers |
+| Output | Number, in the unit of its first input |
+| Default label | Max |
+
+The highest of its wired inputs, such as the hottest of several readings. With
+nothing wired in, 0.
+
+No settings of its own.
+
+---
+
+## SUB: Blocks
+
+A block is a piece of logic you build once and use in several places, like a
+function. It has inputs and outputs of its own. Inside, it is a small graph of logic,
+time and analog nodes; outside, each copy of it is one node, wired like any other.
+
+- **Make one:** **SUB → NEW** makes "Block 1", with one input and one output, and puts
+  a copy of it in the graph.
+- **Edit it:** double-click a copy, or press **Edit block** in its settings. The graph
+  shows the block's inside, with its name in a bar at the bottom. Add logic from LGC,
+  TM and ANL, and inputs and outputs from **SUB → IN** and **SUB → OUT**, and wire them up;
+  the groups a block can't hold are red and can't be opened. Press **‹ Graph** in the
+  bar to go back: every copy takes the change.
+- **Use it again:** in the main graph, **SUB** has a button for each block (its first
+  three letters; point at it for its name). Each press adds another copy.
+- **Each copy is separate:** it has its own state (a toggle in one copy doesn't turn
+  over another) and its own wires. On the device each copy costs as many nodes as
+  the logic inside the block.
+
+A block can hold logic, time and analog nodes, and its inputs and outputs. Buttons, sliders,
+pins, plots and other blocks stay in the main graph and are wired to the copy.
+
+### Block copy
+
+| | |
+|---|---|
+| Category | Logic, run by the device as the logic inside it |
+| Inputs | One per IN in the block, each on/off or a number |
+| Outputs | One per OUT in the block, each on/off or a number |
+| Default label | The block's name |
+
+The node shows the block's name. A wire drawn in goes to the first input of its type
+with nothing wired yet. Each wire leaving it is labelled with the output's label.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Block | 1 to 32 characters | Block N | The block's name, shared by every copy. Copies still labelled with the old name take the new one. |
+| Definition | Edit block | | Opens the block's inside. |
+| Wire from | The block's outputs | The first | With more than one output: which one the next wire you draw leaves from. |
+| One per input | A source of its type, or None | | What each input is wired from. Picking one draws its wire. |
+
+### Block input: `SUB-IN` and output: `SUB-OUT`
+
+Only inside a block. An input is a source inside the block: whatever is wired into
+that input of a copy. An output is wired from inside the block: a copy hands it on
+from that output. They are numbered in the order you add them, and a copy shows
+their labels ("In 1", "Out 1" by default).
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Type | On/off, Number | On/off; with no wire, an input takes the type of the first wire drawn from it, and an output of the first wire drawn into it | What the input or output carries. Changing it takes its wires off, inside the block and on every copy. |
+
+Taking an input or output out of a block takes it, and its wires, off every copy.
+
+Example: a block "Flip" with IN → Toggle → OUT. Two copies: a button → Flip → Flip →
+light. The first copy turns over on each press, the second on every other press.
+
+---
+
+## Loops
+
+A wire may go back up the graph, from a logic node into logic that drives it. That
+closes a loop, which goes round once every 10 ms: this is how a graph repeats
+something, and stops.
+
+- **The wire that closes a loop is a feedback wire**, drawn dashed. The node it goes
+  into reads it 10 ms late, as it was at the last scan, so the loop never runs away.
+  Delete a wire the loop needs, and the feedback wire becomes an ordinary one.
+- **A loop must go through a node that remembers**: a delay, pulse, blink, toggle,
+  latch or counter. A wire that would close a loop of only compares, ANDs, ORs, NOTs,
+  scales, mins and maxes isn't offered: such a loop would only flip on and off every
+  scan.
+- **In the browser** a loop runs the same way, so you can try it before saving.
+
+Example: blink the LED three times for each press of a button.
+
+1. Momentary button → Latch Set.
+2. Latch → Blink → onboard LED.
+3. Blink → Counter Count, with the preset at 3.
+4. Latch → NOT → Counter Reset: the count starts from 0 for each press.
+5. Counter (Done) → Latch Reset. This wire closes the loop and is drawn dashed.
+
+Pressing the button sets the latch, which runs the blink. The counter counts the
+blinks; at the third, Done resets the latch, which stops the blink and resets the
+counter, ready for the next press.
+
+The demo graph, which a new device starts from, has this loop inside a block,
+"Blink 3": a momentary button **Blink 3 times** → the block → a light in the Command
+view. The block's input, Start, sets the latch; its output, Blink, is the blink.
+Double-click the block to see the loop.
+
+Another loop: **a tick every 5 s.** NOT → Delay (on delay 5 s) → back into the NOT.
+The delay turns on 5 s after the NOT does, which turns the NOT off, which turns the
+delay off again: the delay's output is on for 10 ms every 5 s. Wire it to a Pulse
+for a longer kick, or to a Counter to count the ticks.
+
 ---
 
 ## Which node takes which
 
-| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH |
+| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT |
 |---|---|---|---|---|
 | BTN, GPI | ✓ | | | ✓ |
 | SLD, XY (X or Y), ADC, TMP | | ✓ | ✓ | |
-| CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH | ✓ | | | ✓ |
-| SCL, MIN, MAX | | ✓ | ✓ | |
+| CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
+| SCL, MIN, MAX, CNT (Count) | | ✓ | ✓ | |
+
+A block's copy takes, on each input, and gives, on each output, what the block's IN or
+OUT says: on/off like a button, or a number like a slider.
