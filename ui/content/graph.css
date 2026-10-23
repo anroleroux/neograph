@@ -88,13 +88,12 @@
     pointer-events: none;
 }
 
-/* The groups and their nodes are see-through, as the graph's nodes are: a faded
-   blue, a little brighter for the UI and hardware inputs and outputs, white for
-   the open group. The plus stays solid. */
+/* The groups are see-through, as the graph's nodes are: a faded blue, a little
+   brighter for the UI and hardware inputs and outputs; the open group has a
+   thicker border. Their nodes have no fill. The plus stays solid. */
 #graph > .buttons.add {
     --clr-menu: var(--clr-face-fade);
     --clr-menu-io: #9DBDF566;
-    --clr-menu-sel: #FFFFFF80;
 }
 
 #graph > .buttons.add > div {
@@ -121,20 +120,21 @@
     background-color: var(--clr-pane);
 }
 
-#graph > .buttons.add > [data-group="uii"],
-#graph > .buttons.add > [data-group="hwo"],
-#graph > .buttons.add > [data-group="hwi"],
-#graph > .buttons.add > [data-group="uio"] {
+#graph > .buttons.add > .group[data-group="uii"],
+#graph > .buttons.add > .group[data-group="hwo"],
+#graph > .buttons.add > .group[data-group="hwi"],
+#graph > .buttons.add > .group[data-group="uio"] {
     background-color: var(--clr-menu-io);
 }
 
-#graph > .buttons.add > .group.sel {
-    background-color: var(--clr-menu-sel);
+#graph > .buttons.add > .node {
+    background-color: transparent;
 }
 
-/* Dark on the open group's white, to be read. */
-#graph > .buttons.add > .group.sel text {
-    fill: var(--clr-pane);
+/* A thicker border, with as much less padding, so the button keeps its size. */
+#graph > .buttons.add > .group.sel {
+    border-width: 5px;
+    padding: calc(var(--step--3) - 2px);
 }
 
 #graph > .buttons.add.open > .toggle {
