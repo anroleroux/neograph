@@ -10,3 +10,21 @@
 #settings h3 {
     margin-bottom: var(--step-1);
 }
+
+/* How a node works, folded under its heading. */
+#settings .help {
+    margin-bottom: var(--step-1);
+    font-size: 0.9em;
+}
+
+#settings .help > summary {
+    cursor: pointer;
+    opacity: 0.75;
+}
+
+#settings .help > p {
+    margin: var(--step--1) 0 0;
+    line-height: 1.4;
+    max-width: 60ch;
+    opacity: 0.85;
+}

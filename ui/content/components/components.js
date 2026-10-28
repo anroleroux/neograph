@@ -27,3 +27,7 @@
 /* {{keyboard-js}} */
 
 /* {{logic-js}} */
+
+/* {{sub-js}} */
+
+/* {{help-js}} */

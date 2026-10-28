@@ -45,8 +45,9 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
     return 0;
 }
 
-/* The outputs a source of a type has: a 2D slider's X and Y, one for the others. */
-static uint8_t outputs_of(uint8_t type) { return type == MSG_UI_SLIDER_2D ? 2 : 1; }
+/* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
+   count, one for the others. */
+static uint8_t outputs_of(uint8_t type) { return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER ? 2 : 1; }
 
 /* Whether a message holds source references, which the UI writes with their outputs. */
 static bool has_refs(uint8_t type) {
@@ -60,11 +61,48 @@ static bool has_refs(uint8_t type) {
    may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
                                    MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
-                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, 0 };
+                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE,
-                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, 0 };
+                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, 0 };
+
+/* What a reference to a block's output stands for, as the device reads it
+   (resolve_ref in src/program.c): the reference in the block's table. */
+static msg_ref through_blocks(const uint8_t *p, size_t len, msg_ref src) {
+    for (int depth = 0; depth <= SUB_PORTS_MAX && src.id; depth++) {
+        config_element_iterator it;
+        config_element_iterator_init(&it, p + 3, len - 3);
+        bool block = false;
+        while (!block && it.next(&it)) block = it.type == MSG_SUB && it.id == src.id;
+        if (!block) return src;
+        if (!sub_payload_valid(it.pay, it.len, it.flags) || src.output >= it.pay[4]) {
+            fail("a source reference names an output its block does not have");
+            return (msg_ref){ 0, 0, 0 };
+        }
+        bool feedback = src.feedback;
+        src = msg_ref_at(it.pay + 5 + 3 * (it.pay[3] + src.output), it.flags);
+        src.feedback |= feedback;
+    }
+    if (src.id) fail("blocks are wired to blocks deeper than the device follows");
+    return (msg_ref){ 0, 0, 0 };
+}
+
+/* The type (SUB_TYPE_) of a block definition's input or output port k (`kind`
+   MSG_SUB_INPUT or MSG_SUB_OUTPUT), from its wrapped messages; -1 if it has none. */
+static int port_type(const uint8_t *p, size_t len, uint8_t def, uint8_t kind, uint8_t k) {
+    config_element_iterator it, in;
+    config_element_iterator_init(&it, p + 3, len - 3);
+    while (it.next(&it)) {
+        if (it.type != MSG_SUB_PART || it.id != def) continue;
+        config_element_iterator_init(&in, it.pay, it.len);
+        if (!in.next(&in) || in.type != kind) continue;
+        uint8_t r = kind == MSG_SUB_OUTPUT ? msg_ref_len(in.flags) : 0;
+        if (in.len == r + 2 && in.pay[r + 1] == k) return in.pay[r];
+    }
+    return -1;
+}
 
 static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_t *types, const char *what) {
+    src = through_blocks(p, len, src);
     if (src.id == 0) {
         if (src.output != 0) fail("an empty source reference has an output");
         return;
@@ -72,6 +110,8 @@ static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_
     uint8_t type = control_type(p, len, src.id);
     if (type == 0) { fail("a source reference names no element in the config"); return; }
     if (src.output >= outputs_of(type)) fail("a source reference names an output its source does not have");
+    /* A counter's done (0) is boolean, its count (1) floating. */
+    if (type == MSG_LOGIC_COUNTER && src.output != (types == BOOLEAN ? 0 : 1)) { fail(what); return; }
     for (; *types; types++) if (type == *types) return;
     fail(what);
 }
@@ -86,6 +126,10 @@ static void check_config(const uint8_t *p, size_t len) {
         /* The UI writes every source reference with its output. */
         uint8_t r = msg_ref_len(it.flags);
         if (has_refs(it.type) && !(it.flags & MSG_FLAG_OUTPUT)) fail("source references are written without their outputs");
+        if ((it.flags & MSG_FLAG_PART) && !program_logic(it.type)) fail("a block's part is not logic");
+        /* Only a wire into logic closes a loop: an output's reference is never a feedback one. */
+        if (has_refs(it.type) && !(it.type & MSG_LOGIC_BIT) && it.len >= r && msg_ref_at(it.pay, it.flags).feedback)
+            fail("an output's source reference is marked feedback");
         switch (it.type) {
         case MSG_DEVICE:
             device = true;
@@ -139,18 +183,52 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_LOGIC_PULSE:
         case MSG_LOGIC_BLINK:
         case MSG_LOGIC_TOGGLE:
-        case MSG_LOGIC_LATCH: {
+        case MSG_LOGIC_LATCH:
+        case MSG_LOGIC_COUNTER: {
             /* program_compile runs only logic logic_payload_valid accepts */
             if (!logic_payload_valid(it.type, it.pay, it.len, it.flags)) { fail("logic payload is not one the device runs; it would skip it"); break; }
             bool floating_in = it.type == MSG_LOGIC_COMPARE || program_logic_floating(it.type);
             uint8_t refs = it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR || it.type == MSG_LOGIC_MIN
-                || it.type == MSG_LOGIC_MAX ? it.len / r : it.type == MSG_LOGIC_LATCH ? 2 : 1;
+                || it.type == MSG_LOGIC_MAX ? it.len / r : it.type == MSG_LOGIC_LATCH || it.type == MSG_LOGIC_COUNTER ? 2 : 1;
             for (uint8_t k = 0; k < refs; k++) {
                 msg_ref src = msg_ref_at(it.pay + k * r, it.flags);
                 if (src.id == it.id) fail("logic is wired from itself");
                 if (floating_in) check_source(p, len, src, FLOATING, "a compare, scale, min or max is wired from something not floating");
                 else check_source(p, len, src, BOOLEAN, "logic is wired from something other than a button, a GPIO input or boolean logic");
             }
+            break;
+        }
+        case MSG_SUB: {
+            /* A copy of a block: its definition's ports' types decide what its wires carry. */
+            if (!sub_payload_valid(it.pay, it.len, it.flags)) { fail("block payload is malformed"); break; }
+            for (uint8_t k = 0; k < it.pay[3] + it.pay[4]; k++) {
+                bool in = k < it.pay[3];
+                int type = port_type(p, len, it.pay[0], in ? MSG_SUB_INPUT : MSG_SUB_OUTPUT, in ? k : k - it.pay[3]);
+                msg_ref src = msg_ref_at(it.pay + 5 + 3 * k, it.flags);
+                if (type < 0) fail("a block has a port its definition does not");
+                else if (src.id == it.id) fail("a block is wired from itself");
+                else check_source(p, len, src, type == SUB_TYPE_FLOAT ? FLOATING : BOOLEAN,
+                                  in ? "a block's input is wired from a source of another type"
+                                     : "a block's output stands for a source of another type");
+            }
+            break;
+        }
+        case MSG_SUB_DEF:
+            if (it.len < 1 || it.len > 32) fail("block definition's name is not 1 to 32 bytes");
+            break;
+        case MSG_SUB_PART: {
+            /* One message of a definition, whole: logic, a port, or a label, position or wire. */
+            config_element_iterator in;
+            config_element_iterator_init(&in, it.pay, it.len);
+            if (!in.next(&in) || in.pos != it.len) { fail("a block definition's message is not one whole message"); break; }
+            if (!program_logic(in.type) && in.type != MSG_SUB_INPUT && in.type != MSG_SUB_OUTPUT
+                && in.type != MSG_STRING && in.type != MSG_LAYOUT && in.type != MSG_WIRE)
+                fail("a block definition holds something other than logic, ports, labels, positions and wires");
+            bool def = false;
+            config_element_iterator d;
+            config_element_iterator_init(&d, p + 3, len - 3);
+            while (d.next(&d)) def |= d.type == MSG_SUB_DEF && d.id == it.id;
+            if (!def) fail("a block definition's message without its definition");
             break;
         }
         /* unmarshal_controls only sets up outputs with exactly these lengths */
@@ -294,7 +372,7 @@ int main(int argc, char **argv) {
         config_element_iterator it;
         config_element_iterator_init(&it, p + 3, data_length);
         while (it.next(&it))
-            if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN)) fail("a message's flags set an unknown bit");
+            if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN | MSG_FLAG_PART)) fail("a message's flags set an unknown bit");
             else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
                      && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_LAST))
                 fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");

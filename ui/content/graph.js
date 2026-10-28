@@ -15,6 +15,135 @@ let selected = null;
 let selectedEdge = null;
 let wireMode = false;
 
+// A graph's nodes and wires: the main graph's, a block's definition's (see
+// uiSubDef), or the parts of one copy of a block (see uiSub). One is in scope at a
+// time: `elements`, `gEdges` and the ID counters are its, and its nodes and wires
+// are drawn in #nodes; the others' are kept, undrawn, in their stash.
+function newScope(def = null) {
+    return { elements: {}, gEdges: [], idCounter: 1, idEdgeCounter: 1, def,
+        stash: document.createElementNS('http://www.w3.org/2000/svg', 'g') };
+}
+const mainScope = newScope();
+let scope = mainScope;
+
+// Make a scope the one in scope.
+function enterScope(s) {
+    if (s === scope) return;
+    Object.assign(scope, { elements, gEdges, idCounter, idEdgeCounter });
+    scope.stash.append(...nodes.childNodes);
+    ({ elements, gEdges, idCounter, idEdgeCounter } = s);
+    nodes.append(...s.stash.childNodes);
+    scope = s;
+}
+
+// Run fn with a scope in scope, then put back the one that was.
+function withScope(s, fn) {
+    const was = scope;
+    enterScope(s);
+    try {
+        return fn();
+    } finally {
+        enterScope(was);
+    }
+}
+
+// The main graph's nodes, whatever is in scope.
+const mainElements = () => scope === mainScope ? elements : mainScope.elements;
+
+// Take `count` IDs of the main graph's, for a block's copy's parts.
+function takeIds(count) {
+    if (scope === mainScope) return (idCounter += count) - count;
+    return (mainScope.idCounter += count) - count;
+}
+
+// The block whose definition is shown, or null for the main graph.
+let editingBlock = null;
+
+// Show a block's definition, to edit it.
+function openBlock(def) {
+    if (editingBlock === def) return;
+    closeBlock();
+    clearSelection();
+    enterScope(def.scope);
+    editingBlock = def;
+    showBlockBar();
+}
+
+// Back to the main graph from a block's definition; its copies take it as it is now.
+function closeBlock(update = true) {
+    if (!editingBlock) return;
+    const def = editingBlock;
+    clearSelection();
+    enterScope(mainScope);
+    editingBlock = null;
+    if (update) def.update();
+    showBlockBar();
+}
+
+// The bar over a block's definition, with its name and the way back, and the add
+// menu's groups: a definition holds only logic (LGC, TM, ANL) and its ports (SUB),
+// so the others are shown off.
+function showBlockBar() {
+    const bar = document.getElementById('block-bar');
+    bar.hidden = !editingBlock;
+    if (editingBlock) bar.querySelector('.name').textContent = editingBlock.name;
+    document.querySelectorAll('#add .group').forEach(g =>
+        g.classList.toggle('off', !!editingBlock && !['lgc', 'tm', 'anl', 'sub'].includes(g.dataset.group)));
+    const menu = document.getElementById('add');
+    menu.classList.remove('open');
+    showAddGroup(menu, null);
+    refreshSubMenu();
+}
+
+// The SUB group's nodes: in the main graph, a new block and a copy of each block;
+// in a definition, an input and an output.
+function refreshSubMenu() {
+    const menu = document.getElementById('add');
+    const open = menu.querySelector('.group[data-group="sub"]').classList.contains('sel');
+    menu.querySelectorAll('.node[data-group="sub"]').forEach(b => b.remove());
+    const items = editingBlock
+        ? [['IN', 'Add an input to the block', () => addNode(MSG_SUB_INPUT)],
+           ['OUT', 'Add an output to the block', () => addNode(MSG_SUB_OUTPUT)]]
+        : [['NEW', 'Make a new block', () => newBlock()],
+           ...[...subDefs.values()].map(d => [d.name.slice(0, 3).toUpperCase(), `Add a copy of ${d.name}`, () => addBlock(d)])];
+    items.forEach(([text, title, onClick], i) => {
+        const b = document.createElement('div');
+        b.className = 'node' + (open ? ' shown' : '');
+        b.dataset.group = 'sub';
+        b.style.setProperty('--col', i % 5 + 1);
+        b.style.setProperty('--row', 4 + Math.floor(i / 5));
+        b.title = title;
+        b.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0"></text></svg>`;
+        b.querySelector('text').textContent = text;
+        b.addEventListener('click', onClick);
+        menu.appendChild(b);
+    });
+}
+
+// A new block, "Block N", with an input and an output; a copy of it is added.
+function newBlock() {
+    let n = 1;
+    while ([...subDefs.values()].some(d => d.name === `Block ${n}`)) n++;
+    const def = new uiSubDef(`Block ${n}`);
+    withScope(def.scope, () => {
+        new uiSubIn(-200, 0);
+        new uiSubOut(200, 0);
+    });
+    refreshSubMenu();
+    return addBlock(def);
+}
+
+// Add a copy of a block, as addNode adds a node.
+function addBlock(def) {
+    if (editingBlock) return null;
+    const [x, y] = freeSpot();
+    const elm = new uiSub(x, y);
+    elm.setDef(def);
+    selectById(elm.id);
+    return elm;
+}
+
 const NETWORK_TYPES = [MSG_DEVICE, MSG_DEVICE_FIELD, MSG_NETWORK, MSG_NETWORK_FIELD];
 
 // The node classes a config can restore, by control message type.
@@ -43,6 +172,10 @@ const NODE_CLASSES = {
     [MSG_LOGIC_BLINK]: uiBlink,
     [MSG_LOGIC_TOGGLE]: uiToggle,
     [MSG_LOGIC_LATCH]: uiLatch,
+    [MSG_LOGIC_COUNTER]: uiCounter,
+    [MSG_SUB]: uiSub,
+    [MSG_SUB_INPUT]: uiSubIn,
+    [MSG_SUB_OUTPUT]: uiSubOut,
 };
 
 // Whether a control message type is a logic element's.
@@ -52,10 +185,14 @@ const isLogic = (type) => type >= MSG_LOGIC_COMPARE && type <= MSG_LOGIC_LAST;
 function buildCommandInterface() {
     commandInterface = document.getElementById('command');
     commandInterface.innerHTML = '';
-    Object.values(elements).forEach(elm => elm.buildUI(commandInterface));
+    Object.values(mainElements()).forEach(elm => elm.buildUI(commandInterface));
 }
 
+// A node's messages: its control message, label, position and wire shapes.
+const nodeMessages = (elm) => [...elm.marshal(), ...elm.marshalLabel(), ...elm.marshalLayout(), ...elm.marshalWire()];
+
 function saveGraph() {
+    if (editingBlock) editingBlock.update();       // its copies take the definition as it is now
     buildCommandInterface();
 
     const output = [];
@@ -66,12 +203,13 @@ function saveGraph() {
         .filter(m => NETWORK_TYPES.includes(m.type))
         .forEach(m => output.push(...m.bytes));
 
-    Object.values(elements).forEach(elm => {
-        output.push(...elm.marshal());
-        output.push(...elm.marshalLabel());
-        output.push(...elm.marshalLayout());
-        output.push(...elm.marshalWire());
-    })
+    // The blocks the graph has copies of: each definition's name, then its
+    // messages, each wrapped whole in a MSG_SUB_PART. Then the main graph's nodes,
+    // and the parts of each copy of a block, which the device runs.
+    const copies = Object.values(mainElements()).filter(e => e instanceof uiSub && e.def);
+    for (const def of new Set(copies.map(c => c.def))) output.push(...def.marshal());
+    withScope(mainScope, () => Object.values(elements).forEach(elm => output.push(...nodeMessages(elm))));
+    copies.forEach(c => output.push(...c.partMessages()));
 
     const binary = Uint8Array.from(output);
     if (PKT_HEADER_LEN + binary.length > PKT_CONFIG_MAX) {
@@ -92,7 +230,41 @@ function saveGraph() {
 
 // Replace the graph with the one saved in a config's messages (see PROTOCOL.md,
 // "The graph"). A config without control messages leaves the graph as it is.
+// Blocks' definitions come first; each copy of a block builds its parts from its
+// definition, so the parts saved for the device are skipped.
 function restoreGraph(msgs) {
+    msgs = msgs.filter(m => !(m.flags & MSG_FLAG_PART));
+    if (!msgs.some(m => NODE_CLASSES[m.type] && m.id !== 0)) return;
+    const decoder = new TextDecoder();
+    const defs = new Map();
+    for (const m of msgs) {
+        if (m.type === MSG_SUB_DEF && m.len > 0) defs.set(m.id, { name: decoder.decode(m.pay), msgs: [] });
+        else if (m.type === MSG_SUB_PART && defs.has(m.id)) defs.get(m.id).msgs.push(...configMessages(m.pay));
+    }
+
+    closeBlock(false);
+    Object.values(elements).forEach(e => e.dropParts?.());
+    nodes.innerHTML = '';
+    elements = {};
+    gEdges = [];
+    idEdgeCounter = 1;
+    selected = null;
+    selectedEdge = null;
+
+    subDefs.clear();
+    for (const [id, d] of defs) {
+        const def = new uiSubDef(d.name, id);
+        withScope(def.scope, () => buildGraph(d.msgs));
+    }
+    buildGraph(msgs);
+    // New nodes take IDs after the copies' parts too.
+    Object.values(elements).filter(e => e instanceof uiSub)
+        .forEach(c => idCounter = Math.max(idCounter, c.base + c.partCount));
+    buildCommandInterface();
+}
+
+// Build the graph in scope, which is empty, from a config's messages.
+function buildGraph(msgs) {
     // The last message for an ID wins: configs saved by older UIs repeat controls.
     const controls = new Map();
     const labels = new Map();
@@ -110,13 +282,6 @@ function restoreGraph(msgs) {
         }
     }
     if (controls.size === 0) return;
-
-    nodes.innerHTML = '';
-    elements = {};
-    gEdges = [];
-    idEdgeCounter = 1;
-    selected = null;
-    selectedEdge = null;
 
     // Nodes saved without a position are stacked: inputs left, logic in the
     // middle, outputs right.
@@ -164,8 +329,9 @@ function restoreGraph(msgs) {
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
         if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
-        // Logic with settings takes them from after its source reference (an invalid payload keeps the defaults).
-        if (isLogic(m.type) && elm.restore) elm.restore(m.pay, r, m.len);
+        // Logic with settings takes them from after its source reference (an invalid payload keeps the
+        // defaults); a block takes its definition.
+        if (elm.restore) elm.restore(m.pay, r, m.len);
         if (m.type === MSG_HW_GPI && m.len >= 2) {
             elm.setPin(m.pay[0]);
             elm.setPull(m.pay[1] & GPI_PULL_MASK);
@@ -190,10 +356,12 @@ function restoreGraph(msgs) {
     idCounter = Math.max(...controls.keys()) + 1;
 
     // Wires: each output's source references (a PWM's duty and frequency
-    // sources, an AND's or OR's several, another output's or logic's one source),
-    // shaped by their MSG_WIRE messages if there are any (otherwise drawn
-    // straight between the nodes).
-    const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
+    // sources, an AND's or OR's several, a latch's or counter's roles, another
+    // output's or logic's one source), shaped by their MSG_WIRE messages if there
+    // are any (otherwise drawn straight between the nodes). Feedback wires come
+    // last, so each closes the loop it closed when it was drawn.
+    const feedback = [];
+    const restoreWire = (ref, draw) => { if (ref.node) (ref.feedback ? feedback.push(draw) : draw()); };
     for (const [id, m] of controls) {
         const elm = elements['n' + id];
         if (!elm.inputs.length) continue;
@@ -212,13 +380,14 @@ function restoreGraph(msgs) {
                 }
             }
             elm.syncWires();
-        } else if (m.type === MSG_LOGIC_LATCH) {
-            // Its set source, then its reset source.
-            const r = refLen(m);
-            if (m.len !== 2 * r) continue;
-            ['set', 'reset'].forEach((role, k) => {
-                const { node, output } = refAt(m, k * r);
-                if (node) elm.setRole(role, node, output);
+        } else if (elm.roles) {
+            // A latch's set source, then its reset source; a counter's count, then its reset;
+            // a block's inputs, after its definition (refsAt).
+            const r = refLen(m), at = elm.refsAt ?? 0;
+            if (m.len < at + elm.roles.length * r) continue;
+            elm.roles.forEach(([role], k) => {
+                const ref = refAt(m, at + k * r);
+                restoreWire(ref, () => elm.setRole(role, ref.node, ref.output));
             });
         } else {
             // An AND, OR, min or max has a reference for each wire in; the others one.
@@ -226,12 +395,18 @@ function restoreGraph(msgs) {
             const several = [MSG_LOGIC_AND, MSG_LOGIC_OR, MSG_LOGIC_MIN, MSG_LOGIC_MAX].includes(m.type);
             const refs = several ? Math.floor(m.len / r) : 1;
             for (let k = 0; k < refs; k++) {
-                const { node, output } = refAt(m, k * r);
-                // None if the types don't match, or (in a config not saved by the UI) it would close a loop.
-                if (node) createEdge(node.name, elm.name, output);
+                const ref = refAt(m, k * r);
+                // None if the types don't match, or (in a config not saved by the UI) it would close
+                // a loop through nothing that holds a state.
+                restoreWire(ref, () => createEdge(ref.node.name, elm.name, ref.output));
             }
         }
+    }
+    feedback.forEach(draw => draw());
 
+    const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
+    for (const [id, m] of controls) {
+        const elm = elements['n' + id];
         for (const edge of elm.inConns()) {
             const wire = wires.get(id + ':' + edge.start.node.id + ':' + edge.start.output) ?? wires.get(id);
             if (!wire) continue;
@@ -241,8 +416,6 @@ function restoreGraph(msgs) {
             edge.moveEnd();
         }
     }
-
-    buildCommandInterface();
 }
 
 // The add-node menu: the plus shows the four groups of nodes, and a group shows
@@ -279,22 +452,31 @@ function toggleAddMenu() {
 // A group: show its nodes, or fold them if they are showing.
 function toggleAddGroup(group) {
     const menu = document.getElementById('add');
+    if (group === 'sub') refreshSubMenu();
     measureAddMenu(menu);
     const open = menu.querySelector(`.group[data-group="${group}"]`).classList.contains('sel');
     showAddGroup(menu, open ? null : group);
 }
 
-// Add a node of a control message type in the middle of the view, and select it.
-// A node already there pushes the new one down and to the right.
-function addNode(type) {
+// The middle of the view, or down and to the right of it past the nodes there.
+function freeSpot() {
     let x = Math.round(viewBox.x + viewBox.w / 2);
     let y = Math.round(viewBox.y + viewBox.h / 2);
     while (Object.values(elements).some(e => e.x === x && e.y === y)) {
         x += 30;
         y += 30;
     }
-    const elm = new NODE_CLASSES[type](x, y);
+    return [x, y];
+}
+
+// Add a node of a control message type in the middle of the view, and select it.
+// A block's definition takes only logic and its ports; a port goes only there.
+function addNode(type) {
+    const port = type === MSG_SUB_INPUT || type === MSG_SUB_OUTPUT;
+    if (editingBlock ? !port && !isLogic(type) : port || type === MSG_SUB) return null;
+    const elm = new NODE_CLASSES[type](...freeSpot());
     selectById(elm.id);
+    return elm;
 }
 
 function toggleConnectMode() {
@@ -352,15 +534,16 @@ function createNode(id,obj) {
 }
 
 // Wire two nodes, a source and an output whose types match; null if they don't,
-// or if the wire would close a loop. Between two logic nodes it goes from the
-// first to the second (see wireEnds).
+// or if the wire would close a loop through nothing that holds a state (see
+// statelessLoop). A wire that closes a loop is a feedback wire. Between two logic
+// nodes it goes from the first to the second (see wireEnds).
 // The wire leaves the source from `sourceOutput`, by default its active output.
 function createEdge(id1, id2, sourceOutput) {
     const ends = wireEnds(elements[id1], elements[id2]);
     if (!ends) return null;
     const [source, output] = ends;
     sourceOutput ??= source.actNum;
-    if (!output.takesType(source, sourceOutput) || closesLoop(source, output)) return null;
+    if (!output.takesType(source, sourceOutput) || statelessLoop(source, output)) return null;
 
     return new gEdge(source, output, sourceOutput);
 }
@@ -587,10 +770,44 @@ function touchEnd(e) {
 svg.addEventListener('pointerup', touchEnd, true);
 svg.addEventListener('pointercancel', touchEnd, true);
 
-// The demo graph: the button drives the onboard LED.
-new uiButton(-200, -40);
-new uiLED(100, 40);
-new uiGPO(200, 0);
-createEdge('n1', 'n2');
+// The demo graph: the button drives the onboard LED. Below, a press of the second
+// button blinks the light three times, through a copy of the block "Blink 3".
+// Inside it, a loop: its input sets the latch, which runs the blink; the counter
+// counts the blinks, and its done output, wired back to the latch's reset as a
+// feedback wire, stops them; the counter is reset while the latch is off.
+function demoGraph() {
+    new uiButton(-200, -40);                    // n1
+    new uiLED(100, 40);                         // n2
+    createEdge('n1', 'n2');
+
+    const def = new uiSubDef('Blink 3');
+    withScope(def.scope, () => {
+        new uiSubIn(-300, 0).setLabel('Start'); // n1
+        new uiLatch(-100, 0);                   // n2
+        const blink = new uiBlink(100, 0);      // n3
+        blink.setOnTime('0.25');
+        blink.setOffTime('0.25');
+        new uiSubOut(300, 0).setLabel('Blink'); // n4
+        new uiNot(-100, 160);                   // n5
+        new uiCounter(100, 160);                // n6, preset 3
+        createEdge('n1', 'n2');                 // start → latch: set
+        createEdge('n2', 'n3');                 // latch → blink
+        createEdge('n3', 'n4');                 // blink → output
+        createEdge('n3', 'n6');                 // blink → counter: count
+        createEdge('n2', 'n5');                 // latch → NOT
+        createEdge('n5', 'n6');                 // NOT → counter: reset
+        createEdge('n6', 'n2');                 // counter done → latch: reset, closing the loop
+    });
+
+    const button = new uiButton(-200, 260);     // n3
+    button.setAction('momentary');
+    button.setLabel('Blink 3 times');
+    const copy = new uiSub(0, 260);             // n4
+    new uiIndicator(200, 260);                  // n5
+    copy.setDef(def);                           // its parts: n6 to n9
+    createEdge('n3', 'n4');                     // button → block: start
+    createEdge('n4', 'n5');                     // block → light
+}
+demoGraph();
 
 toGraph();

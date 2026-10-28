@@ -26,9 +26,19 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">UIO</text>
             </svg>
         </div>
-        <div class="group" data-group="usb" style="--col: 3; --row: 2" title="USB" onclick="toggleAddGroup('usb')">
+        <div class="group" data-group="usb" style="--col: 5; --row: 2" title="USB" onclick="toggleAddGroup('usb')">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">USB</text>
+            </svg>
+        </div>
+        <div class="group" data-group="tm" style="--col: 4; --row: 2" title="Time" onclick="toggleAddGroup('tm')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">TM</text>
+            </svg>
+        </div>
+        <div class="group" data-group="anl" style="--col: 3; --row: 2" title="Analog" onclick="toggleAddGroup('anl')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">ANL</text>
             </svg>
         </div>
         <div class="group" data-group="lgc" style="--col: 3; --row: 3" title="Logic" onclick="toggleAddGroup('lgc')">
@@ -36,6 +46,12 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">LGC</text>
             </svg>
         </div>
+        <div class="group" data-group="sub" style="--col: 4; --row: 3" title="Blocks" onclick="toggleAddGroup('sub')">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">SUB</text>
+            </svg>
+        </div>
+        <!-- Blocks: refreshSubMenu adds their nodes -->
         <!-- UI inputs, under the groups -->
         <div class="node" data-group="uii" style="--col: 1; --row: 4" title="Add a button" onclick="addNode(MSG_UI_BUTTON)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -90,65 +106,72 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">GPI</text>
             </svg>
         </div>
-        <!-- Logic, under the groups -->
-        <div class="node" data-group="lgc" style="--col: 1; --row: 4" title="Add a compare" onclick="addNode(MSG_LOGIC_COMPARE)">
-            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">CMP</text>
-            </svg>
-        </div>
-        <div class="node" data-group="lgc" style="--col: 2; --row: 4" title="Add an AND" onclick="addNode(MSG_LOGIC_AND)">
-            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">AND</text>
-            </svg>
-        </div>
-        <div class="node" data-group="lgc" style="--col: 3; --row: 4" title="Add an OR" onclick="addNode(MSG_LOGIC_OR)">
-            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">OR</text>
-            </svg>
-        </div>
-        <div class="node" data-group="lgc" style="--col: 4; --row: 4" title="Add a NOT" onclick="addNode(MSG_LOGIC_NOT)">
-            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">NOT</text>
-            </svg>
-        </div>
-        <div class="node" data-group="lgc" style="--col: 5; --row: 4" title="Add a delay" onclick="addNode(MSG_LOGIC_DELAY)">
+        <!-- Time, under the groups -->
+        <div class="node" data-group="tm" style="--col: 1; --row: 4" title="Add a delay" onclick="addNode(MSG_LOGIC_DELAY)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">DLY</text>
             </svg>
         </div>
-        <div class="node" data-group="lgc" style="--col: 1; --row: 5" title="Add a scale" onclick="addNode(MSG_LOGIC_SCALE)">
-            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">SCL</text>
-            </svg>
-        </div>
-        <div class="node" data-group="lgc" style="--col: 2; --row: 5" title="Add a min" onclick="addNode(MSG_LOGIC_MIN)">
-            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">MIN</text>
-            </svg>
-        </div>
-        <div class="node" data-group="lgc" style="--col: 3; --row: 5" title="Add a max" onclick="addNode(MSG_LOGIC_MAX)">
-            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">MAX</text>
-            </svg>
-        </div>
-        <div class="node" data-group="lgc" style="--col: 4; --row: 5" title="Add a pulse" onclick="addNode(MSG_LOGIC_PULSE)">
+        <div class="node" data-group="tm" style="--col: 2; --row: 4" title="Add a pulse" onclick="addNode(MSG_LOGIC_PULSE)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">PLS</text>
             </svg>
         </div>
-        <div class="node" data-group="lgc" style="--col: 5; --row: 5" title="Add a blink" onclick="addNode(MSG_LOGIC_BLINK)">
+        <div class="node" data-group="tm" style="--col: 3; --row: 4" title="Add a blink" onclick="addNode(MSG_LOGIC_BLINK)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">BLK</text>
             </svg>
         </div>
-        <div class="node" data-group="lgc" style="--col: 1; --row: 6" title="Add a toggle" onclick="addNode(MSG_LOGIC_TOGGLE)">
+        <!-- Analog, under the groups -->
+        <div class="node" data-group="anl" style="--col: 1; --row: 4" title="Add a compare" onclick="addNode(MSG_LOGIC_COMPARE)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">CMP</text>
+            </svg>
+        </div>
+        <div class="node" data-group="anl" style="--col: 2; --row: 4" title="Add a scale" onclick="addNode(MSG_LOGIC_SCALE)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">SCL</text>
+            </svg>
+        </div>
+        <div class="node" data-group="anl" style="--col: 3; --row: 4" title="Add a min" onclick="addNode(MSG_LOGIC_MIN)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">MIN</text>
+            </svg>
+        </div>
+        <div class="node" data-group="anl" style="--col: 4; --row: 4" title="Add a max" onclick="addNode(MSG_LOGIC_MAX)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">MAX</text>
+            </svg>
+        </div>
+        <!-- Logic, under the groups -->
+        <div class="node" data-group="lgc" style="--col: 1; --row: 4" title="Add an AND" onclick="addNode(MSG_LOGIC_AND)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">AND</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 2; --row: 4" title="Add an OR" onclick="addNode(MSG_LOGIC_OR)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">OR</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 3; --row: 4" title="Add a NOT" onclick="addNode(MSG_LOGIC_NOT)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">NOT</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 4; --row: 4" title="Add a toggle" onclick="addNode(MSG_LOGIC_TOGGLE)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">TGL</text>
             </svg>
         </div>
-        <div class="node" data-group="lgc" style="--col: 2; --row: 6" title="Add a latch" onclick="addNode(MSG_LOGIC_LATCH)">
+        <div class="node" data-group="lgc" style="--col: 5; --row: 4" title="Add a latch" onclick="addNode(MSG_LOGIC_LATCH)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">LCH</text>
+            </svg>
+        </div>
+        <div class="node" data-group="lgc" style="--col: 1; --row: 5" title="Add a counter" onclick="addNode(MSG_LOGIC_COUNTER)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">CNT</text>
             </svg>
         </div>
         <!-- UI outputs, under the groups -->
@@ -162,6 +185,10 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">LGT</text>
             </svg>
         </div>
+    </div>
+    <div id="block-bar" hidden>
+        <button type="button" class="back" title="Back to the graph" onclick="closeBlock()">‹ Graph</button>
+        <span class="name"></span>
     </div>
     <div class="buttons">
         <div id="wire" class="connector" onclick="toggleConnectMode(event)">
