@@ -60,7 +60,7 @@
    nodes in a row under the groups, one group at a time:
 
      +                    row 1
-     UII HWO USB TM ANL   row 2: UI inputs, HW outputs, USB, time, analog
+     UII HWO ANL TM USB   row 2: UI inputs, HW outputs, analog, time, USB
      HWI UIO LGC SUB      row 3: HW inputs, UI outputs, logic, blocks
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM                 e.g. UII's or HWO's
