@@ -429,6 +429,22 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_STEPPER: {
+            stepper_payload sp;
+            if (!stepper_payload_read(itr.pay, itr.len, itr.flags, &sp)) break;
+            if (!(n = add_node(p, itr.type, itr.id))) break;
+            n->in_count = 1;
+            n->in[0] = ref_signal(p, sp.source);
+            memcpy(n->coil_pins, sp.pins, sizeof n->coil_pins);
+            n->pin = sp.pins[0];
+            n->options = sp.options;
+            n->steps_rev = sp.steps_rev;
+            n->turn_scale = sp.scale;
+            n->rpm = sp.rpm;
+            n->accel = sp.accel;
+            break;
+        }
+
         default:
             break;
         }
@@ -575,6 +591,17 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->in[1]);
             put(&t, " / %.4g", (double)n->in_full[1]);
             break;
+        case MSG_HW_STEPPER: {
+            static const char *const drives[] = { "wave", "full", "half" };
+            put(&t, "STEPPER n%u pins %u %u %u %u %s %u steps %s %.4g %s max %.4g rpm accel %.4g%s%s <- ", n->id,
+                n->coil_pins[0], n->coil_pins[1], n->coil_pins[2], n->coil_pins[3],
+                drives[n->options & STEPPER_DRIVE_MASK], n->steps_rev,
+                n->options & STEPPER_SPEED ? "speed" : "position", (double)n->turn_scale,
+                n->options & STEPPER_SPEED ? "rpm/unit" : "rev/unit", (double)n->rpm, (double)n->accel,
+                n->options & STEPPER_REVERSE ? " reverse" : "", n->options & STEPPER_RELEASE ? " release" : "");
+            put_signal(&t, n->in[0]);
+            break;
+        }
         default: put(&t, "? n%u", n->id); break;
         }
         put(&t, "\n");

@@ -12,7 +12,7 @@ the TMP button in the HWI group.
 | Group | Category | Nodes |
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
-| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM |
+| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP |
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
@@ -161,6 +161,45 @@ the duty cycle; the second sets the frequency.
 | Duty cycle (%) | 0–100 | 50 | With Constant: the duty cycle. |
 | Input | A number source, or None | None | With From input: the source the duty cycle follows. |
 | Duty cycle at 0 (%), at 1 (%) | 0–100 each | 0, 100 | With From input: the duty cycle at the bottom and top of the input. |
+
+### Stepper motor: `HWO-STP`
+
+| | |
+|---|---|
+| Category | Hardware output |
+| Input | Number, in its source's own unit |
+| Default label | STEPPER |
+
+A unipolar stepper motor, such as a 28BYJ-48, through a ULN2003 driver board. The
+device drives the board's IN1 to IN4 from four pins. Its input either sets **where it
+is** (in revolutions) or **how fast it turns** (in RPM). It speeds up and slows down
+smoothly, and in Position it slows down in time to stop on its target.
+
+Its input is taken in the source's own unit, not as a fraction of a full scale as a
+PWM takes it: 1.65 V from an ADC with 2 revolutions per V is 3.3 revolutions.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| IN1 pin … IN4 pin | GPIO 0–22, 26–28; four that differ, not used by another node | 10, 11, 12, 13, or the lowest four free | The pins wired to the board's IN1 to IN4. If it turns the wrong way, use Direction rather than swapping wires. |
+| Drive | Wave, Full, Half | Half | **Wave:** one coil on at a time, the least current. **Full:** two at a time, the most torque. **Half:** one then two in turn, twice the steps a revolution: the smoothest and quietest. |
+| Steps per revolution | 4–65535 | 2048 | Full steps for one turn of the shaft: 2048 for a 28BYJ-48 (32 steps × its 64:1 gearbox); 200 for a 1.8° motor. Half drive doubles them by itself. |
+| Input sets | Position, Speed | Position | **Position:** the input × Revolutions per unit is where it turns to, from where it was at power-on. **Speed:** the input × RPM per unit is how fast it turns, backwards below 0; 0 stops it. |
+| Revolutions per unit (Position), RPM per unit (Speed) | Any number; below 0 turns it around | 1 | How far, or how fast, one unit of the input turns it. "Unit" reads V, °C and so on once a source is wired in. |
+| Top speed (RPM) | Above 0, up to 300 | 15 | It never turns faster. A 28BYJ-48 manages about 15 RPM at 5 V and stalls, buzzing, past about 20. The device steps at most 2000 times a second. |
+| Acceleration (RPM/s) | 0 or more | 30 | How quickly it speeds up and slows down. 30 takes it to 15 RPM in half a second. 0 starts and stops at once, which may skip steps under load. |
+| Direction | Normal, Reversed | Normal | Which way positive values turn it. |
+| When stopped | Hold, Release | Hold | **Hold:** its coils stay on, so it keeps its place under load (a 28BYJ-48 draws about 240 mA and gets warm). **Release:** they turn off, so it runs cool but can be turned by hand, and then loses its place. |
+
+Things to know:
+
+- **It has no home sensor.** Where it is starts at 0 at power-on, wherever the shaft
+  is. Saving the graph keeps its place; a reboot doesn't.
+- **Power it from 5 V,** the board's + and − to VBUS (or VSYS) and GND, never from a
+  GPIO pin; only IN1 to IN4 go to the Pico.
+- **Examples.** A slider with Revolutions per unit 1 turns it up to one turn. A
+  counter's Count with 0.25 turns it a quarter turn a count. In Speed, a 2D slider's X
+  through a scale from 0–1 to −1–1 with RPM per unit 15 makes a joystick: centre is
+  stop, left and right turn it either way.
 
 ---
 

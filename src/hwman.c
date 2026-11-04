@@ -11,6 +11,7 @@
 #include "hwman.h"
 #include "program.h"
 #include "protocol.h"
+#include "stepper.h"
 
 // Core 1 runs the program core 0 compiled from the config (src/program.h): every
 // SCAN_MS it reads the hardware inputs into their signals, then drives each
@@ -296,6 +297,10 @@ typedef struct {
     uint16_t freq;              // PWM: the frequency its slice runs at
     uint32_t top;               // PWM: counter steps in one period
     prog_logic_state logic;     // logic: what it keeps between scans
+    float in;                   // stepper: its input at the last scan
+    stepper_motion motion;      // stepper: its steps a revolution, top speed and acceleration
+    stepper_state stepper;      // stepper: where it is, and how fast it turns
+    uint64_t stepped_us;        // stepper: when stepper_advance last ran
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -367,9 +372,60 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
     case MSG_HW_PWM:
         return claim_pin(n->pin);       // its slice starts at the first scan
 
+    case MSG_HW_STEPPER:
+        // Its four pins, or none: a stepper missing a coil can't turn.
+        for (int k = 0; k < STEPPER_PINS; k++) {
+            if (claim_pin(n->coil_pins[k])) continue;
+            while (k--) used_pins &= ~(1u << n->coil_pins[k]);
+            return false;
+        }
+        for (int k = 0; k < STEPPER_PINS; k++) {
+            gpio_init(n->coil_pins[k]);
+            gpio_set_dir(n->coil_pins[k], GPIO_OUT);
+        }
+        st->motion = stepper_motion_of(n);
+        return true;
+
     default:
         return true;
     }
+}
+
+// ── Stepper outputs ──
+// A stepper's coils, bit k for IN(k + 1), on its pins.
+static void stepper_put(const prog_node *n, uint8_t coils) {
+    for (int k = 0; k < STEPPER_PINS; k++) gpio_put(n->coil_pins[k], coils >> k & 1);
+}
+
+// Run each moving stepper's motion on to now, and step it when it is due. A stepper
+// steps faster than the scan, so core 1 runs this between scans as well; it is
+// still once it has settled, and then turns its coils off with STEPPER_RELEASE.
+static void steppers_run(void) {
+    hw_program *p = &programs[running];
+    uint64_t now = time_us_64();
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        const prog_node *n = &p->nodes[i];
+        node_state *st = &states[i];
+        if (n->type != MSG_HW_STEPPER || !st->ok || !st->stepper.moving) continue;
+        float dt = (float)(now - st->stepped_us) / 1e6f;
+        if (dt > 0.05f) dt = 0.05f;     // after a pause for a flash write: as if it had been short
+        st->stepped_us = now;
+        if (stepper_advance(n, &st->motion, &st->stepper, st->in, dt)) stepper_put(n, stepper_coils(n, st->stepper.pos));
+        if (!st->stepper.moving && (n->options & STEPPER_RELEASE)) stepper_put(n, 0);
+    }
+}
+
+// Microseconds until a moving stepper next needs steppers_run, at most `most`.
+static int64_t steppers_wait_us(int64_t most) {
+    const hw_program *p = &programs[running];
+    uint64_t now = time_us_64();
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        const node_state *st = &states[i];
+        if (p->nodes[i].type != MSG_HW_STEPPER || !st->ok || !st->stepper.moving) continue;
+        int64_t due = (int64_t)(st->stepped_us + (uint64_t)(stepper_wait(&st->stepper) * 1e6f)) - (int64_t)now;
+        if (due < most) most = due;
+    }
+    return most;
 }
 
 static float signal_value(const hw_program *p, uint8_t s) {
@@ -392,6 +448,17 @@ static void take_program(void) {
         if (was != PROG_NO_SIGNAL) s->value = old->signals[was].value;
     }
 
+    // A stepper keeps where it is, in revolutions, so a save doesn't move it: that of
+    // the stepper with its ID in the program core 1 ran.
+    float turned[PROG_NODES_MAX] = { 0 };
+    for (uint8_t j = 0; j < p->node_count; j++) {
+        if (p->nodes[j].type != MSG_HW_STEPPER) continue;
+        for (uint8_t i = 0; i < old->node_count; i++) {
+            if (old->nodes[i].type != MSG_HW_STEPPER || old->nodes[i].id != p->nodes[j].id || !states[i].ok) continue;
+            turned[j] = (float)states[i].stepper.pos / states[i].motion.steps_rev;
+        }
+    }
+
     release_pins();
     memset(states, 0, sizeof states);
     running ^= 1;
@@ -407,6 +474,8 @@ static void take_program(void) {
         // A keyboard types when its input goes on, not because it was on when set up.
         if (n->type == MSG_HW_KEYBOARD) states[i].on = signal_value(p, n->in[0]) >= 0.5f;
         if (program_logic(n->type)) program_logic_start(p, n, &states[i].logic);
+        if (n->type == MSG_HW_STEPPER && states[i].ok)
+            states[i].stepper.pos = (int32_t)lroundf(turned[i] * states[i].motion.steps_rev);
     }
     printf("hw man running a program of %u signals and %u nodes\n", p->signal_count, p->node_count);
 }
@@ -499,6 +568,22 @@ static void scan(uint32_t count) {
             break;
         }
 
+        case MSG_HW_STEPPER: {
+            // The scan gives it its input; steppers_run moves it.
+            st->in = signal_value(p, n->in[0]);
+            if (!st->driven) {
+                // Its coils hold it from the start, unless it lets them go when still.
+                if (!(n->options & STEPPER_RELEASE)) stepper_put(n, stepper_coils(n, st->stepper.pos));
+                st->driven = true;
+            }
+            if (!st->stepper.moving && !stepper_settled(n, &st->motion, &st->stepper, st->in)) {
+                stepper_put(n, stepper_coils(n, st->stepper.pos));
+                st->stepper.moving = true;
+                st->stepped_us = time_us_64();
+            }
+            break;
+        }
+
         default:
             break;
         }
@@ -536,6 +621,7 @@ void core1_worker() {
         if (park_request) core1_park();
         if (program_taken != program_sent) take_program();
 
+        steppers_run();
         if (time_reached(next_scan)) {
             scan(scans++);
             next_scan = delayed_by_ms(next_scan, SCAN_MS);
@@ -550,8 +636,9 @@ void core1_worker() {
             next_uptime_timeout = up_time_elapsed + 5;
         }
 
-        // Until the next scan, take core 0's words: each is an action word.
-        int64_t wait = absolute_time_diff_us(get_absolute_time(), next_scan);
+        // Until the next scan, or a stepper's next step if that is sooner, take core
+        // 0's words: each is an action word.
+        int64_t wait = steppers_wait_us(absolute_time_diff_us(get_absolute_time(), next_scan));
         uint32_t op;
         if (multicore_fifo_pop_timeout_us(wait > 0 ? (uint64_t)wait : 0, &op)) {
             if (fifo_op(op) == FIFO_OP_CONTROL_ACTION) command(op);

@@ -29,6 +29,12 @@ const NODE_HELP = {
         "An input is taken as a fraction of its source's full scale (1 for a slider, 3.3 V for an ADC, 100 °C for the core temperature, a counter's preset): 0 gives the \"at 0\" value and 1 the \"at 1\" value.",
         "Pins that share a PWM slice share its frequency, so only one PWM is allowed per slice.",
     ],
+    stepper: [
+        "A stepper motor on four pins, through a ULN2003 board (IN1 to IN4), such as a 28BYJ-48. Wire one number into it.",
+        "Input sets Position: the input × Revolutions per unit is where it turns to, from where it was at power-on. Speed: the input × RPM per unit is how fast it turns; below 0 it turns the other way.",
+        "It speeds up and slows down at its acceleration, and never goes past its top speed (a 28BYJ-48 manages about 15 RPM at 5 V). Steps per revolution counts full steps: 2048 for a 28BYJ-48. Half drive is smoothest; Full has the most torque; Wave uses the least current.",
+        "Hold keeps its coils on when it stops, so it holds its place; Release turns them off, so it runs cooler but can be turned by hand. Power the motor from 5 V, not from a GPIO pin.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",

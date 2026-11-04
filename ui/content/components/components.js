@@ -14,6 +14,8 @@
 
 /* {{pwm-js}} */
 
+/* {{stepper-js}} */
+
 /* {{plot-js}} */
 
 /* {{indicator-js}} */

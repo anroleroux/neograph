@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_ and SUB_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -64,6 +64,7 @@
 #define MSG_HW_GPO              0x21
 #define MSG_HW_PWM              0x22
 #define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
+#define MSG_HW_STEPPER          0x24    /* a stepper motor on four pins, through a ULN2003 */
 #define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
@@ -220,6 +221,22 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define PWM_FREQ_INPUT          0x02    /* options bit 1: 0 = constant frequency, 1 = frequency from its input, min to max */
 #define PWM_FREQ_LOG            0x04    /* options bit 2: a frequency from its input goes from min to max 0 = linearly, 1 = logarithmically */
 
+/* Stepper (MSG_HW_STEPPER) payload options and limits. Bits 0-1 of the options: how
+   its coils are driven. Wave: one coil at a time, 4 steps a cycle, the least current.
+   Full: two at a time, 4 steps a cycle, the most torque. Half: one then two in turn,
+   8 steps a cycle, twice the steps of a revolution and the smoothest. */
+#define STEPPER_DRIVE_MASK      0x03
+#define STEPPER_WAVE            0x00
+#define STEPPER_FULL            0x01
+#define STEPPER_HALF            0x02
+#define STEPPER_SPEED           0x04    /* options bit 2: 0 = its input sets where it is, in revolutions; 1 = how fast it turns, in RPM */
+#define STEPPER_REVERSE         0x08    /* options bit 3: turn the other way */
+#define STEPPER_RELEASE         0x10    /* options bit 4: 0 = hold its coils on when it stops; 1 = turn them off */
+#define STEPPER_PINS            4       /* IN1 to IN4 of the ULN2003 */
+#define STEPPER_STEPS_MIN       4       /* full steps per revolution, at least: one cycle of the coils */
+#define STEPPER_RPM_MAX         300     /* the highest top speed, revolutions per minute */
+#define STEPPER_RATE_MAX        2000    /* steps per second core 1 steps at most, whatever the top speed */
+
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
 
 /* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which
@@ -298,6 +315,50 @@ static inline int pwm_payload_read(const uint8_t *pay, uint8_t len, uint8_t flag
     out->freq_min = f[0] << 8 | f[1];
     out->freq_max = f[2] << 8 | f[3];
     return 1;
+}
+
+/* A stepper (MSG_HW_STEPPER) payload, read by stepper_payload_read. */
+typedef struct {
+    msg_ref source;
+    uint8_t pins[STEPPER_PINS];     /* IN1 to IN4 */
+    uint8_t options;                /* STEPPER_ options */
+    uint16_t steps_rev;             /* full steps per revolution */
+    float scale;                    /* revolutions (or with STEPPER_SPEED, RPM) per unit of its input */
+    float rpm;                      /* its top speed */
+    float accel;                    /* RPM gained or lost per second; 0 = at once */
+} stepper_payload;
+
+/* The payload length of a stepper message with these header flags: 21, or 22 with outputs. */
+static inline uint8_t stepper_payload_len(uint8_t flags) { return 19 + msg_ref_len(flags); }
+
+/* Read a stepper payload. Returns 0 if it is not one the device runs: its length, four
+   usable pins that differ, known options and drive, at least STEPPER_STEPS_MIN steps a
+   revolution, a finite scale, a top speed above 0 up to STEPPER_RPM_MAX, and an
+   acceleration of 0 or more. */
+static inline int stepper_payload_read(const uint8_t *pay, uint8_t len, uint8_t flags, stepper_payload *out) {
+    if (len != stepper_payload_len(flags)) return 0;
+    const uint8_t *q = pay + msg_ref_len(flags);     /* after the source */
+    float f[3];
+    memcpy(out->pins, q, STEPPER_PINS);
+    for (int i = 0; i < STEPPER_PINS; i++) {
+        if (!pin_usable(q[i])) return 0;
+        for (int j = 0; j < i; j++) if (q[i] == q[j]) return 0;
+    }
+    for (int i = 0; i < 3; i++) {
+        uint32_t u = (uint32_t)q[7 + 4 * i] << 24 | (uint32_t)q[8 + 4 * i] << 16 | (uint32_t)q[9 + 4 * i] << 8 | q[10 + 4 * i];
+        memcpy(&f[i], &u, sizeof f[i]);
+        if (f[i] - f[i] != 0) return 0;     /* not finite */
+    }
+    out->source = msg_ref_at(pay, flags);
+    out->options = q[4];
+    out->steps_rev = (uint16_t)(q[5] << 8 | q[6]);
+    out->scale = f[0];
+    out->rpm = f[1];
+    out->accel = f[2];
+    return !(out->options & ~(STEPPER_DRIVE_MASK | STEPPER_SPEED | STEPPER_REVERSE | STEPPER_RELEASE))
+        && (out->options & STEPPER_DRIVE_MASK) <= STEPPER_HALF
+        && out->steps_rev >= STEPPER_STEPS_MIN
+        && out->rpm > 0 && out->rpm <= STEPPER_RPM_MAX && out->accel >= 0;
 }
 
 /* Whether a block's (MSG_SUB) payload is well formed: written with outputs, its
