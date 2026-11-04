@@ -222,7 +222,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1482,6 +1482,104 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(numberIn === 'true,true,float,bool,float,0/1', 'a block with a number input: ' + numberIn);
     packets.push(...await sent(page));
+
+    // A stepper motor: four pins, IN1 to IN4, none another node or another of its
+    // inputs uses. A slider sets where it turns to; switched to Speed, how fast. It
+    // marshals as the stepper-config example in PROTOCOL.md, and restores from it.
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a stepper motor"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|IN1 pin:|IN2 pin:|IN3 pin:|IN4 pin:|Drive:|Steps per revolution:|Input sets:'
+        + '|Revolutions per unit:|Top speed (RPM):|Acceleration (RPM/s):|Direction:|When stopped:',
+        'a new stepper does not show its settings: ' + await keyRows());
+    const in2 = await page.evaluate(() => [...[...document.querySelectorAll('#settings .editable.select')]
+        .find(row => row.querySelector('.label').textContent === 'IN2 pin:').querySelectorAll('option')].map(o => o.value));
+    const stp = await page.evaluate(() => {
+        const s = selected;
+        const others = new Set(Object.values(elements).filter(e => e !== s).flatMap(e => e.usedPins()));
+        return { name: s.name, pins: s.pins.join(), free: s.pins.every(p => !others.has(p)),
+                 othersUsed: [...others].filter(p => pinUsable(p)).join() };
+    });
+    expect(stp.free, 'a new stepper took pins another node uses: ' + stp.pins + ' (used: ' + stp.othersUsed + ')');
+    expect(!in2.includes(stp.pins.split(',')[0]) && in2.includes(stp.pins.split(',')[1]),
+        'IN2 offers ' + in2.join() + ' with pins ' + stp.pins);
+    await choice('Input sets', 'Speed');
+    expect((await keyRows()).includes('|RPM per unit:|'), 'a stepper in Speed does not ask for RPM per unit: ' + await keyRows());
+    await choice('Input sets', 'Position');
+    await choice('Drive', 'Half');
+    const stepper = await page.evaluate((name) => {
+        const s = elements[name];
+        const rejected = [s.setPin(1, String(s.pins[0])), s.setPin(0, '23'), s.setStepsRev('3'), s.setRpm('0'), s.setRpm('301'),
+            s.setAccel('-1'), s.setScale('x'), s.setDrive(3), s.setMode('turn')].every(r => r === false);
+        [10, 11, 12, 13].forEach((pin, k) => s.setPin(k, String(pin + 4)));     // out of the way first
+        [10, 11, 12, 13].forEach((pin, k) => s.setPin(k, String(pin)));
+        const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
+        const wired = createEdge(button.name, s.name) === null && !!createEdge(slider.name, s.name);
+        const pay = s.marshal().slice(5);
+        // Its id and its source's, as in the example: stepper n2 <- slider n1.
+        pay[0] = 0; pay[1] = 1;
+        saveGraph();
+        return { rejected, wired, pay: pay.map(b => b.toString(16).padStart(2, '0')).join('') };
+    }, stp.name);
+    packets.push(...await sent(page));
+    expect(stepper.rejected, 'a stepper took settings out of range');
+    expect(stepper.wired, 'a stepper took a button, or not a slider');
+    expect(stepper.pay === '000100' + '0a0b0c0d' + '02' + '0800' + '3f800000' + '41700000' + '41f00000',
+        'the stepper marshals as ' + stepper.pay);
+    const stepperBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x12, 0, 0, 1, 1, 0,
+            0x24, 1, 0, 2, 22, 0, 1, 0, 2, 3, 4, 5, 0x1D, 0x01, 0x00,
+            0x40, 0x20, 0, 0, 0x41, 0x20, 0, 0, 0, 0, 0, 0,
+        ])));
+        const s = elements.n2;
+        return [s.pins.join(' '), s.drive, s.speedMode, s.reverse, s.release, s.stepsRev, s.scale, s.rpm, s.accel,
+            s.inConns().map(c => c.start.node.name).join()].join();
+    });
+    expect(stepperBack === '2 3 4 5,1,true,true,true,256,2.5,10,0,n1', 'a stepper restored as ' + stepperBack);
+
+    // A servo: its pin, not on a PWM's slice; a slider sets its angle. It marshals as
+    // the servo-config example in PROTOCOL.md, and restores from it.
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a servo"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|GPIO pin:|Angle at 0 (°):|Angle at 1 (°):|Pulse at 0° (µs):|Pulse at 180° (µs):|Speed limit (°/s):',
+        'a new servo does not show its settings: ' + await keyRows());
+    const servo = await page.evaluate(() => {
+        const s = selected;
+        const pwmSlices = Object.values(elements).filter(e => e instanceof uiPWM).map(e => pwmSlice(e.pin));
+        const offered = [...[...document.querySelectorAll('#settings .editable.select')]
+            .find(row => row.querySelector('.label').textContent === 'GPIO pin:').querySelectorAll('option')].map(o => Number(o.value));
+        const rejected = [s.setPin('29'), s.setAngleMax('181'), s.setPulseMin('99'), s.setPulseMax('3001'),
+            s.setSpeed('3601'), s.setAngleMin('-1')].every(r => r === false);
+        const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
+        const wired = createEdge(button.name, s.name) === null && !!createEdge(slider.name, s.name);
+        // A PWM added now isn't offered the servo's slice.
+        const pwm = addNode(MSG_HW_PWM);
+        const pwmOff = !pinsInUse(pwm).has(s.pin) ? false : USABLE_PINS.filter(p => pwmSlice(p) === pwmSlice(s.pin))
+            .every(p => pinsInUse(pwm).has(p)) && pwmSlice(pwm.pin) !== pwmSlice(s.pin);
+        pwm.remove();
+        s.setSpeed('90');
+        const pay = s.marshal().slice(5);
+        pay[0] = 0; pay[1] = 1;         // as in the example: servo n2 <- slider n1
+        pay[3] = 14;
+        saveGraph();
+        return { pin: s.pin, offPwm: pwmSlices.every(sl => !offered.some(p => pwmSlice(p) === sl)),
+                 rejected, wired, pwmOff, pay: pay.map(b => b.toString(16).padStart(2, '0')).join('') };
+    });
+    packets.push(...await sent(page));
+    expect(servo.offPwm, 'a servo was offered a pin on a PWM\'s slice');
+    expect(servo.rejected, 'a servo took settings out of range');
+    expect(servo.wired, 'a servo took a button, or not a slider');
+    expect(servo.pwmOff, 'a PWM was offered the servo\'s slice');
+    expect(servo.pay === '000100' + '0e00b4' + '01f4' + '0960' + '005a', 'the servo marshals as ' + servo.pay);
+    const servoBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x12, 0, 0, 1, 1, 0,
+            0x25, 1, 0, 2, 12, 0, 1, 0, 6, 20, 160, 0x02, 0x58, 0x09, 0x24, 0, 45,
+        ])));
+        const s = elements.n2;
+        return [s.pin, s.angleMin, s.angleMax, s.pulseMin, s.pulseMax, s.speed, s.inConns().map(c => c.start.node.name).join()].join();
+    });
+    expect(servoBack === '6,20,160,600,2340,45,n1', 'a servo restored as ' + servoBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

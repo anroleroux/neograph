@@ -3,9 +3,13 @@
  * tests/protocol_examples.h is generated from PROTOCOL.md by make/examples.awk.
  */
 
+#include <math.h>
+
 #include "unity.h"
 #include "protocol.h"
 #include "program.h"
+#include "servo.h"
+#include "stepper.h"
 #include "config/config_iterator.h"
 #include "protocol_examples.h"
 
@@ -296,7 +300,8 @@ void test_graph_messages_belong_to_controls(void)
                 pwm_payload pwm;
                 if (labels.type != MSG_WIRE)
                     found = true;
-                else if (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO)
+                else if (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO || controls.type == MSG_HW_STEPPER
+                         || controls.type == MSG_HW_SERVO)
                     found = labels.len == 4 && msg_ref_at(controls.pay, controls.flags).id != 0;
                 else if (controls.type == MSG_HW_PWM && pwm_payload_read(controls.pay, controls.len, controls.flags, &pwm)) {
                     msg_ref wired = msg_ref_at(labels.pay + 4, labels.flags);
@@ -354,7 +359,8 @@ void test_wires_join_matching_types(void)
         config_element_iterator it;
         messages(&it, ex);
         while (it.next(&it)) {
-            bool floating_in = it.type == MSG_LOGIC_COMPARE || program_logic_floating(it.type);
+            bool floating_in = it.type == MSG_LOGIC_COMPARE || it.type == MSG_HW_STEPPER || it.type == MSG_HW_SERVO
+                || program_logic_floating(it.type);
             bool boolean_in = it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD
                 || it.type == MSG_UI_INDICATOR || (program_logic(it.type) && !floating_in);
             uint8_t r = msg_ref_len(it.flags);
@@ -392,6 +398,8 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_GPO & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_KEYBOARD & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_STEPPER & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_SERVO & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -955,6 +963,282 @@ void test_program_pwm_full_scale_through_logic(void)
     TEST_ASSERT_EQUAL_FLOAT(1.0f, pwm->in_full[1]);
 }
 
+/* ── Steppers ─────────────────────────────────────────────────────────── */
+
+/* A stepper on GPIO 10-13, wired from n1: half-stepped, 2048 full steps, 1 revolution
+   per unit, 15 RPM, 30 RPM/s. `options` replaces its options. */
+static void stepper_config(uint8_t cfg[33], uint8_t options)
+{
+    const uint8_t c[33] = {
+        MSG_UI_SLIDER, 0, 0, 1, 1, 0,                                   /* slider n1 */
+        MSG_HW_STEPPER, MSG_FLAG_OUTPUT, 0, 2, 22, 0, 1, 0,             /* stepper n2 <- n1 */
+            10, 11, 12, 13, options, 0x08, 0x00,                        /*   pins, options, 2048 steps */
+            0x3F, 0x80, 0, 0,  0x41, 0x70, 0, 0,  0x41, 0xF0, 0, 0,     /*   1, 15 RPM, 30 RPM/s */
+    };
+    memcpy(cfg, c, sizeof c);
+}
+
+void test_stepper_payload_read(void)
+{
+    uint8_t cfg[33];
+    stepper_config(cfg, STEPPER_HALF);
+    const uint8_t *pay = cfg + 6 + MSG_HEADER_LEN;
+    stepper_payload sp;
+    TEST_ASSERT_TRUE(stepper_payload_read(pay, 22, MSG_FLAG_OUTPUT, &sp));
+    TEST_ASSERT_EQUAL_UINT16(1, sp.source.id);
+    TEST_ASSERT_EQUAL_UINT8(13, sp.pins[3]);
+    TEST_ASSERT_EQUAL_HEX8(STEPPER_HALF, sp.options);
+    TEST_ASSERT_EQUAL_UINT16(2048, sp.steps_rev);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, sp.scale);
+    TEST_ASSERT_EQUAL_FLOAT(15.0f, sp.rpm);
+    TEST_ASSERT_EQUAL_FLOAT(30.0f, sp.accel);
+    TEST_ASSERT_FALSE(stepper_payload_read(pay, 21, MSG_FLAG_OUTPUT, &sp));    /* too short */
+    uint8_t legacy[21] = { 0, 1 };                                              /* a 2-byte reference */
+    memcpy(legacy + 2, pay + 3, 19);
+    TEST_ASSERT_TRUE(stepper_payload_read(legacy, 21, 0, &sp));
+    TEST_ASSERT_EQUAL_UINT16(1, sp.source.id);
+    TEST_ASSERT_EQUAL_FLOAT(30.0f, sp.accel);
+
+    /* Each of these makes it one the device doesn't run: 1 or 2 bytes from `at`. */
+    static const struct { uint8_t at, n, b[2]; } bad[] = {
+        { 3, 1, { 23 } },               /* IN1 on GPIO 23, the WiFi chip's */
+        { 4, 1, { 10 } },               /* IN2 on IN1's pin */
+        { 7, 1, { 0x03 } },             /* no such drive */
+        { 7, 1, { 0x22 } },             /* an unknown option */
+        { 8, 2, { 0, 3 } },             /* 3 steps a revolution */
+        { 14, 2, { 0, 0 } },            /* top speed 0 */
+        { 14, 1, { 0xC1 } },            /* top speed below 0 */
+        { 14, 1, { 0x44 } },            /* top speed 960 RPM, over STEPPER_RPM_MAX */
+        { 18, 1, { 0xC1 } },            /* acceleration below 0 */
+        { 10, 2, { 0x7F, 0xC0 } },      /* a scale that is NaN */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        uint8_t b[22];
+        memcpy(b, pay, sizeof b);
+        memcpy(b + bad[i].at, bad[i].b, bad[i].n);
+        TEST_ASSERT_FALSE_MESSAGE(stepper_payload_read(b, 22, MSG_FLAG_OUTPUT, &sp), "a bad stepper payload was read");
+    }
+}
+
+/* The program's stepper node, from stepper_config. */
+static const prog_node *compile_stepper(hw_program *p, uint8_t options)
+{
+    uint8_t cfg[33];
+    stepper_config(cfg, options);
+    program_compile(cfg, sizeof cfg, p);
+    TEST_ASSERT_EQUAL_UINT8(1, p->node_count);
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_STEPPER, p->nodes[0].type);
+    return &p->nodes[0];
+}
+
+void test_stepper_motion_of(void)
+{
+    static hw_program p;
+    const prog_node *n = compile_stepper(&p, STEPPER_HALF);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 0), n->in[0]);
+    stepper_motion m = stepper_motion_of(n);
+    TEST_ASSERT_EQUAL_FLOAT(4096, m.steps_rev);             /* half steps: twice 2048 */
+    TEST_ASSERT_EQUAL_FLOAT(1024, m.rate_max);              /* 15 RPM × 4096 / 60 */
+    TEST_ASSERT_EQUAL_FLOAT(2048, m.accel);                 /* 30 RPM/s × 4096 / 60 */
+    TEST_ASSERT_EQUAL_INT32(1024, stepper_target(n, &m, 0.25f));
+    TEST_ASSERT_EQUAL_INT32(-4096, stepper_target(n, &m, -1));
+
+    n = compile_stepper(&p, STEPPER_FULL);
+    m = stepper_motion_of(n);
+    TEST_ASSERT_EQUAL_FLOAT(2048, m.steps_rev);
+    TEST_ASSERT_EQUAL_FLOAT(512, m.rate_max);
+
+    /* A top speed past STEPPER_RATE_MAX steps a second is held there. */
+    p.nodes[0].rpm = 300;
+    m = stepper_motion_of(&p.nodes[0]);
+    TEST_ASSERT_EQUAL_FLOAT(STEPPER_RATE_MAX, m.rate_max);
+}
+
+/* Run a stepper for up to `ms` milliseconds in steps of 0.1 ms, from where it is, with
+   its input at `in`. Returns the time it took to settle, in ms; -1 if it didn't.
+   Checks that it never steps faster than its top speed allows, never jumps more
+   than a step, and never passes its target. */
+static float run_stepper(const prog_node *n, const stepper_motion *m, stepper_state *st, float in, float ms)
+{
+    const float dt = 0.0001f;
+    int32_t target = stepper_target(n, m, in), from = st->pos;
+    st->moving = !stepper_settled(n, m, st, in);
+    float since = 1e9f;          /* seconds since its last step */
+    for (float t = 0; t < ms / 1000; t += dt) {
+        if (!st->moving) return t * 1000;
+        since += dt;
+        int32_t was = st->pos;
+        int step = stepper_advance(n, m, st, in, dt);
+        TEST_ASSERT_EQUAL_INT32(was + step, st->pos);
+        TEST_ASSERT_TRUE(fabsf(st->speed) <= m->rate_max * 1.0001f);
+        if (step) {
+            TEST_ASSERT_TRUE_MESSAGE(since >= 1 / m->rate_max - 2 * dt, "stepped faster than its top speed");
+            since = 0;
+        }
+        if (!(n->options & STEPPER_SPEED)) {
+            if (target >= from) TEST_ASSERT_TRUE_MESSAGE(st->pos <= target, "went past its target");
+            else TEST_ASSERT_TRUE_MESSAGE(st->pos >= target, "went past its target");
+        }
+    }
+    return st->moving ? -1 : ms;
+}
+
+void test_stepper_moves_to_its_target(void)
+{
+    static hw_program p;
+    const prog_node *n = compile_stepper(&p, STEPPER_HALF);
+    stepper_motion m = stepper_motion_of(n);
+    stepper_state st = { 0 };
+
+    /* Still at 0 with its input at 0. */
+    TEST_ASSERT_TRUE(stepper_settled(n, &m, &st, 0));
+    TEST_ASSERT_FALSE(stepper_settled(n, &m, &st, 0.001f));
+
+    /* A whole turn, 4096 steps: half a second up to 1024 steps a second and half a
+       second down, 512 steps, so 3584 at the top speed, 3.5 s: 4.5 s in all. */
+    float ms = run_stepper(n, &m, &st, 1, 6000);
+    TEST_ASSERT_EQUAL_INT32(4096, st.pos);
+    TEST_ASSERT_EQUAL_FLOAT(0, st.speed);
+    TEST_ASSERT_FLOAT_WITHIN(30, 4500, ms);
+
+    /* Back a quarter turn. */
+    run_stepper(n, &m, &st, 0.75f, 3000);
+    TEST_ASSERT_EQUAL_INT32(3072, st.pos);
+
+    /* Without an acceleration, at its top speed from the first step: 1024 steps in 1 s. */
+    p.nodes[0].accel = 0;
+    m = stepper_motion_of(n);
+    ms = run_stepper(n, &m, &st, 1, 3000);
+    TEST_ASSERT_EQUAL_INT32(4096, st.pos);
+    TEST_ASSERT_FLOAT_WITHIN(5, 1000, ms);
+}
+
+void test_stepper_turns_at_a_speed(void)
+{
+    static hw_program p;
+    const prog_node *n = compile_stepper(&p, STEPPER_HALF | STEPPER_SPEED);
+    p.nodes[0].turn_scale = 10;         /* 10 RPM per unit */
+    stepper_motion m = stepper_motion_of(n);
+    stepper_state st = { 0 };
+
+    /* 0.5 → 5 RPM, 341.3 steps a second; reached within 5 / 30 s. */
+    TEST_ASSERT_EQUAL_FLOAT(-1, run_stepper(n, &m, &st, 0.5f, 1000));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 5 * 4096.0f / 60, st.speed);
+    int32_t at = st.pos;
+    run_stepper(n, &m, &st, 0.5f, 1000);
+    TEST_ASSERT_INT32_WITHIN(2, 341, st.pos - at);
+
+    /* Its input past the top speed: 15 RPM. Backwards below 0. */
+    run_stepper(n, &m, &st, 3, 1000);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, m.rate_max, st.speed);
+    run_stepper(n, &m, &st, -0.5f, 2000);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, -5 * 4096.0f / 60, st.speed);
+
+    /* 0 stops it, within 5 / 30 s, and then it is settled. */
+    float ms = run_stepper(n, &m, &st, 0, 1000);
+    TEST_ASSERT_FLOAT_WITHIN(10, 1000.0f * 5 / 30, ms);
+    TEST_ASSERT_EQUAL_FLOAT(0, st.speed);
+    TEST_ASSERT_TRUE(stepper_settled(n, &m, &st, 0));
+}
+
+void test_stepper_coils(void)
+{
+    static hw_program p;
+    static const uint8_t half[8] = { 0x1, 0x3, 0x2, 0x6, 0x4, 0xC, 0x8, 0x9 };
+    static const uint8_t full[4] = { 0x3, 0x6, 0xC, 0x9 };
+    static const uint8_t wave[4] = { 0x1, 0x2, 0x4, 0x8 };
+    const prog_node *n = compile_stepper(&p, STEPPER_HALF);
+    for (int32_t pos = -16; pos < 16; pos++) TEST_ASSERT_EQUAL_HEX8(half[pos & 7], stepper_coils(n, pos));
+    n = compile_stepper(&p, STEPPER_FULL);
+    for (int32_t pos = -8; pos < 8; pos++) TEST_ASSERT_EQUAL_HEX8(full[pos & 3], stepper_coils(n, pos));
+    n = compile_stepper(&p, STEPPER_WAVE);
+    for (int32_t pos = -8; pos < 8; pos++) TEST_ASSERT_EQUAL_HEX8(wave[pos & 3], stepper_coils(n, pos));
+    /* Reversed, it runs the cycle the other way. */
+    n = compile_stepper(&p, STEPPER_FULL | STEPPER_REVERSE);
+    for (int32_t pos = -8; pos < 8; pos++) TEST_ASSERT_EQUAL_HEX8(full[-pos & 3], stepper_coils(n, pos));
+}
+
+/* ── Servos ───────────────────────────────────────────────────────────── */
+
+/* An ADC n1 driving a servo n2 on GPIO 14: 0° to 180°, 500 to 2400 µs, at most `speed` °/s. */
+static const prog_node *compile_servo(hw_program *p, uint8_t speed_hi, uint8_t speed_lo)
+{
+    const uint8_t cfg[] = {
+        MSG_HW_ADC, 0, 0, 1, 1, 0,                                      /* ADC n1 */
+        MSG_HW_SERVO, MSG_FLAG_OUTPUT, 0, 2, 12, 0, 1, 0,               /* servo n2 <- n1 */
+            14, 0, 180, 0x01, 0xF4, 0x09, 0x60, speed_hi, speed_lo,     /*   pin, angles, pulses, speed */
+    };
+    program_compile(cfg, sizeof cfg, p);
+    TEST_ASSERT_EQUAL_UINT8(2, p->node_count);
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_SERVO, p->nodes[1].type);
+    return &p->nodes[1];
+}
+
+void test_servo_payload_read(void)
+{
+    static const uint8_t pay[12] = { 0, 1, 0, 14, 0, 180, 0x01, 0xF4, 0x09, 0x60, 0, 90 };
+    servo_payload sv;
+    TEST_ASSERT_TRUE(servo_payload_read(pay, 12, MSG_FLAG_OUTPUT, &sv));
+    TEST_ASSERT_EQUAL_UINT16(1, sv.source.id);
+    TEST_ASSERT_EQUAL_UINT8(14, sv.pin);
+    TEST_ASSERT_EQUAL_UINT8(180, sv.angle_max);
+    TEST_ASSERT_EQUAL_UINT16(500, sv.pulse_min);
+    TEST_ASSERT_EQUAL_UINT16(2400, sv.pulse_max);
+    TEST_ASSERT_EQUAL_UINT16(90, sv.speed);
+    TEST_ASSERT_TRUE(servo_payload_read(pay + 1, 11, 0, &sv));      /* a 2-byte reference: ID 0x0100 */
+    TEST_ASSERT_EQUAL_UINT8(14, sv.pin);
+    TEST_ASSERT_FALSE(servo_payload_read(pay, 11, MSG_FLAG_OUTPUT, &sv));
+
+    /* Each of these makes it one the device doesn't run: 1 or 2 bytes from `at`. */
+    static const struct { uint8_t at, n, b[2]; } bad[] = {
+        { 3, 1, { 25 } },               /* GPIO 25, the WiFi chip's */
+        { 4, 1, { 181 } },              /* an angle past 180° */
+        { 5, 1, { 200 } },
+        { 6, 2, { 0, 99 } },            /* a pulse under SERVO_PULSE_MIN */
+        { 8, 2, { 0x0B, 0xB9 } },       /* a pulse over SERVO_PULSE_MAX: 3001 µs */
+        { 10, 2, { 0x0E, 0x11 } },      /* a speed over SERVO_SPEED_MAX: 3601 °/s */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        uint8_t b[12];
+        memcpy(b, pay, sizeof b);
+        memcpy(b + bad[i].at, bad[i].b, bad[i].n);
+        TEST_ASSERT_FALSE_MESSAGE(servo_payload_read(b, 12, MSG_FLAG_OUTPUT, &sv), "a bad servo payload was read");
+    }
+}
+
+void test_servo_angle_and_pulse(void)
+{
+    static hw_program p;
+    const prog_node *n = compile_servo(&p, 0, 0);
+    /* An ADC is taken as a fraction of 3.3 V, clamped. */
+    TEST_ASSERT_EQUAL_FLOAT(PROG_ADC_VOLTS, n->in_full[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0, servo_target(n, 0));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 90, servo_target(n, 1.65f));
+    TEST_ASSERT_EQUAL_FLOAT(180, servo_target(n, 5));
+    TEST_ASSERT_EQUAL_FLOAT(0, servo_target(n, -1));
+    TEST_ASSERT_EQUAL_FLOAT(500, servo_pulse_us(n, 0));
+    TEST_ASSERT_EQUAL_FLOAT(1450, servo_pulse_us(n, 90));
+    TEST_ASSERT_EQUAL_FLOAT(2400, servo_pulse_us(n, 180));
+    /* No speed limit: straight there. */
+    TEST_ASSERT_EQUAL_FLOAT(170, servo_move(n, 10, 170, 0.01f));
+
+    /* Angles may run downwards: 150° at 0, 30° at full scale. */
+    p.nodes[1].angle_min = 150;
+    p.nodes[1].angle_max = 30;
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 90, servo_target(n, 1.65f));
+    TEST_ASSERT_EQUAL_FLOAT(30, servo_target(n, 3.3f));
+
+    /* 90 °/s: 0.9° a scan, either way, and no further than the target. */
+    n = compile_servo(&p, 0, 90);
+    TEST_ASSERT_FLOAT_WITHIN(0.0001f, 10.9f, servo_move(n, 10, 170, 0.01f));
+    TEST_ASSERT_FLOAT_WITHIN(0.0001f, 9.1f, servo_move(n, 10, 0, 0.01f));
+    TEST_ASSERT_EQUAL_FLOAT(10.5f, servo_move(n, 10, 10.5f, 0.01f));
+    float angle = 0;
+    int scans = 0;
+    while (angle != 180 && scans < 1000) { angle = servo_move(n, angle, 180, 0.01f); scans++; }
+    TEST_ASSERT_INT_WITHIN(1, 200, scans);          /* 180° at 90 °/s: 2 s */
+}
+
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
 void test_counter_payload_valid(void)
 {
@@ -1196,6 +1480,13 @@ int main(void)
     RUN_TEST(test_program_logic_more);
     RUN_TEST(test_program_pwm_full_scale_through_logic);
     RUN_TEST(test_counter_payload_valid);
+    RUN_TEST(test_stepper_payload_read);
+    RUN_TEST(test_stepper_motion_of);
+    RUN_TEST(test_stepper_moves_to_its_target);
+    RUN_TEST(test_stepper_turns_at_a_speed);
+    RUN_TEST(test_stepper_coils);
+    RUN_TEST(test_servo_payload_read);
+    RUN_TEST(test_servo_angle_and_pulse);
     RUN_TEST(test_feedback_reference);
     RUN_TEST(test_program_counter);
     RUN_TEST(test_program_feedback_loop);

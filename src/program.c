@@ -429,6 +429,38 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_SERVO: {
+            servo_payload sv;
+            if (!servo_payload_read(itr.pay, itr.len, itr.flags, &sv)) break;
+            if (!(n = add_node(p, itr.type, itr.id))) break;
+            n->in_count = 1;
+            n->in[0] = ref_signal(p, sv.source);
+            n->in_full[0] = signal_full(p, n->in[0]);
+            n->pin = sv.pin;
+            n->angle_min = sv.angle_min;
+            n->angle_max = sv.angle_max;
+            n->pulse_min = sv.pulse_min;
+            n->pulse_max = sv.pulse_max;
+            n->slew = sv.speed;
+            break;
+        }
+
+        case MSG_HW_STEPPER: {
+            stepper_payload sp;
+            if (!stepper_payload_read(itr.pay, itr.len, itr.flags, &sp)) break;
+            if (!(n = add_node(p, itr.type, itr.id))) break;
+            n->in_count = 1;
+            n->in[0] = ref_signal(p, sp.source);
+            memcpy(n->coil_pins, sp.pins, sizeof n->coil_pins);
+            n->pin = sp.pins[0];
+            n->options = sp.options;
+            n->steps_rev = sp.steps_rev;
+            n->turn_scale = sp.scale;
+            n->rpm = sp.rpm;
+            n->accel = sp.accel;
+            break;
+        }
+
         default:
             break;
         }
@@ -574,6 +606,23 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put(&t, " / %.4g freq %u %u-%u <- ", (double)n->in_full[0], n->freq, n->freq_min, n->freq_max);
             put_signal(&t, n->in[1]);
             put(&t, " / %.4g", (double)n->in_full[1]);
+            break;
+        case MSG_HW_STEPPER: {
+            static const char *const drives[] = { "wave", "full", "half" };
+            put(&t, "STEPPER n%u pins %u %u %u %u %s %u steps %s %.4g %s max %.4g rpm accel %.4g%s%s <- ", n->id,
+                n->coil_pins[0], n->coil_pins[1], n->coil_pins[2], n->coil_pins[3],
+                drives[n->options & STEPPER_DRIVE_MASK], n->steps_rev,
+                n->options & STEPPER_SPEED ? "speed" : "position", (double)n->turn_scale,
+                n->options & STEPPER_SPEED ? "rpm/unit" : "rev/unit", (double)n->rpm, (double)n->accel,
+                n->options & STEPPER_REVERSE ? " reverse" : "", n->options & STEPPER_RELEASE ? " release" : "");
+            put_signal(&t, n->in[0]);
+            break;
+        }
+        case MSG_HW_SERVO:
+            put(&t, "SERVO n%u pin %u angle %u-%u pulse %u-%u us speed %u <- ", n->id, n->pin,
+                n->angle_min, n->angle_max, n->pulse_min, n->pulse_max, n->slew);
+            put_signal(&t, n->in[0]);
+            put(&t, " / %.4g", (double)n->in_full[0]);
             break;
         default: put(&t, "? n%u", n->id); break;
         }

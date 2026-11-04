@@ -19,8 +19,8 @@
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
  *     latch, counter), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
- *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard), which read
- *     one or two.
+ *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
+ *     servo), which read one or two.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
  * while it runs a program; core 0 reads them for telemetry.
@@ -43,20 +43,29 @@ typedef struct {
     uint8_t type;           // MSG_HW_ or MSG_LOGIC_
     uint16_t id;
     uint8_t pin;            // GPO, PWM, GPIO input: its GPIO; ADC: its channel
-    uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options
+    uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options;
+                            // stepper: STEPPER_ options
     uint8_t out;            // an input or logic: the signal it writes
     uint8_t out_count;      // a counter: the signal of its count, its output 1
     uint8_t in_count;       // the signals it reads
     uint8_t in[PROG_NODE_INPUTS];   // logic or an output: the signals it reads; a PWM's duty, then its
                                     // frequency; a latch's set, then its reset; a counter's count, then its reset
     uint8_t feedback;       // logic: bit k set when in[k] comes through a feedback wire
-    float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V)
+    float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V);
+                            // a servo: its input's, in_full[0]
     uint8_t duty, duty_min, duty_max;       // a PWM, percent
     uint16_t freq, freq_min, freq_max;      // a PWM, Hz
     float threshold, hysteresis;            // a compare
     float scale[4];                         // a scale: the input's from and to, the output's from and to
     uint32_t on_ms, off_ms;                 // a delay's delays; a pulse's time on; a blink's times on and off
     uint32_t preset;                        // a counter
+    uint8_t coil_pins[STEPPER_PINS];        // a stepper: the GPIO of IN1 to IN4
+    uint16_t steps_rev;                     // a stepper: full steps per revolution
+    float turn_scale, rpm, accel;           // a stepper: revolutions (or RPM) per unit of its input; its top
+                                            // speed, RPM; RPM it gains or loses a second, 0 = at once
+    uint8_t angle_min, angle_max;           // a servo: degrees at its input's 0 and full scale
+    uint16_t pulse_min, pulse_max;          // a servo: µs at 0° and at SERVO_ANGLE_MAX°
+    uint16_t slew;                          // a servo: °/s it turns at most, 0 = no limit
 } prog_node;
 
 // What a logic node keeps from one scan to the next, besides its output.

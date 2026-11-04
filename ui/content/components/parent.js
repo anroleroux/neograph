@@ -126,14 +126,17 @@ function shownSetting(node) {
 // frequency: GPIO 0, 1, 16 and 17 are slice 0, 2, 3, 18 and 19 slice 1, and so on.
 const pwmSlice = (pin) => (pin >> 1) & 7;
 
+// Whether a node runs its pin's PWM slice: a PWM, or a servo (at SERVO_FREQ).
+const usesSlice = (node) => node instanceof uiPWM || node instanceof uiServo;
+
 // The GPIO pins `node` may not take: those the graph's other nodes use (see
-// usedPins) and, for a PWM, every pin on another PWM's slice, which would run at
-// that PWM's frequency.
+// usedPins) and, for a PWM or servo, every pin on another one's slice, which would
+// run at that one's frequency.
 function pinsInUse(node) {
     const others = Object.values(elements).filter(e => e !== node);
     const used = new Set(others.flatMap(e => e.usedPins()));
-    if (node instanceof uiPWM) {
-        const slices = new Set(others.filter(e => e instanceof uiPWM).map(e => pwmSlice(e.pin)));
+    if (usesSlice(node)) {
+        const slices = new Set(others.filter(usesSlice).map(e => pwmSlice(e.pin)));
         USABLE_PINS.filter(pin => slices.has(pwmSlice(pin))).forEach(pin => used.add(pin));
     }
     return used;

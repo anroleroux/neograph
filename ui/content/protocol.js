@@ -54,6 +54,8 @@ const MSG_HW_LED             = 0x20;
 const MSG_HW_GPO             = 0x21;
 const MSG_HW_PWM             = 0x22;
 const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
+const MSG_HW_STEPPER         = 0x24;  // a stepper motor on four pins, through a ULN2003
+const MSG_HW_SERVO           = 0x25;  // a hobby servo, such as an SG90, on a PWM pin
 const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
@@ -171,6 +173,28 @@ const PWM_DUTY_MAX           = 100;   // duty cycle in percent
 const PWM_DUTY_INPUT         = 0x01;  // options bit 0: 0 = constant duty, 1 = duty from its input, min to max
 const PWM_FREQ_INPUT         = 0x02;  // options bit 1: 0 = constant frequency, 1 = frequency from its input, min to max
 const PWM_FREQ_LOG           = 0x04;  // options bit 2: a frequency from its input goes from min to max 0 = linearly, 1 = logarithmically
+
+// Stepper (MSG_HW_STEPPER) payload options and limits. Bits 0-1 of the options: how
+// its coils are driven (wave, full or half steps).
+const STEPPER_DRIVE_MASK     = 0x03;
+const STEPPER_WAVE           = 0x00;  // one coil at a time: 4 steps a cycle, the least current
+const STEPPER_FULL           = 0x01;  // two at a time: 4 steps a cycle, the most torque
+const STEPPER_HALF           = 0x02;  // one then two in turn: 8 steps a cycle, twice the steps, the smoothest
+const STEPPER_SPEED          = 0x04;  // options bit 2: 0 = its input sets where it is, in revolutions; 1 = how fast, in RPM
+const STEPPER_REVERSE        = 0x08;  // options bit 3: turn the other way
+const STEPPER_RELEASE        = 0x10;  // options bit 4: 0 = hold its coils on when it stops; 1 = turn them off
+const STEPPER_PINS           = 4;     // IN1 to IN4 of the ULN2003
+const STEPPER_STEPS_MIN      = 4;     // full steps per revolution, at least
+const STEPPER_RPM_MAX        = 300;   // the highest top speed, revolutions per minute
+const STEPPER_RATE_MAX       = 2000;  // steps per second the device steps at most
+
+// Servo (MSG_HW_SERVO) payload limits. It runs its pin's PWM slice at SERVO_FREQ, so it
+// takes the slice as a PWM does.
+const SERVO_FREQ             = 50;    // Hz: a 20 ms frame
+const SERVO_ANGLE_MAX        = 180;   // degrees
+const SERVO_PULSE_MIN        = 100;   // µs, the shortest pulse it may be set to
+const SERVO_PULSE_MAX        = 3000;  // µs, the longest
+const SERVO_SPEED_MAX        = 3600;  // °/s, the highest speed limit; 0 = none
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;

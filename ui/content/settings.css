@@ -1,10 +1,30 @@
+/* The settings fill the view below the nav, as the graph does, and scroll when a
+   node has more of them than fit. */
+.view.settings {
+    display: flex;
+    flex-direction: column;
+}
+
+.view.settings > .content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    /* the same margin at the bottom as at the sides */
+    padding: var(--step-1) 0 var(--step-0);
+}
+
 #settings {
     color: var(--clr-face);
     background: var(--clr-pane);
-    margin-top: var(--step-1);
     padding: var(--step-1);
     box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* the scroll bar in the theme's colours */
+    scrollbar-color: var(--clr-face-fade) transparent;
 }
 
 #settings h3 {
