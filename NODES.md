@@ -12,7 +12,7 @@ the TMP button in the HWI group.
 | Group | Category | Nodes |
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
-| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP |
+| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV |
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
@@ -161,6 +161,37 @@ the duty cycle; the second sets the frequency.
 | Duty cycle (%) | 0–100 | 50 | With Constant: the duty cycle. |
 | Input | A number source, or None | None | With From input: the source the duty cycle follows. |
 | Duty cycle at 0 (%), at 1 (%) | 0–100 each | 0, 100 | With From input: the duty cycle at the bottom and top of the input. |
+
+### Servo: `HWO-SRV`
+
+| | |
+|---|---|
+| Category | Hardware output |
+| Input | Number, as a fraction of its source's full scale |
+| Default label | SERVO |
+
+A hobby servo, such as an SG90, on one pin. The device sends it a pulse every 20 ms,
+and the pulse's width sets the servo's angle. As with a PWM, the input is taken as a
+fraction of its source's full scale: 1 for a slider or scale, 3.3 V for an ADC, 100 °C
+for the core temperature, a counter's preset. 0 gives Angle at 0 and 1 gives Angle
+at 1.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| GPIO pin | GPIO 0–22, 26–28; not on a PWM's or another servo's slice | 14, or a free pin on a free slice | The servo's signal wire (orange on an SG90). |
+| Angle at 0 (°), Angle at 1 (°) | 0–180 each | 0, 180 | The angle at the bottom and top of the input. Angle at 0 may be the larger, which turns the input around. 45 and 135 limit it to the middle 90°. |
+| Pulse at 0° (µs), Pulse at 180° (µs) | 100–3000 each | 500, 2400 | Calibration: the pulse that puts this servo at 0° and at 180°. An SG90 is near 500 and 2400. If it buzzes or strains at an end, it is pushing against its stop: bring that pulse in towards 1450. Swapping them turns it around. |
+| Speed limit (°/s) | 0–3600 | 0 | Turns it no faster than this, for a slow sweep; 0 lets it go as fast as it can (an SG90 does about 600 °/s). |
+
+Things to know:
+
+- **It takes its pin's PWM slice.** It runs the slice at 50 Hz, so a PWM or another
+  servo can't use the other pin on that slice.
+- **At power-on or a save** it goes straight to its angle: the device can't tell where
+  the servo was.
+- **Power it from 5 V,** red to VBUS (or VSYS) and brown to GND. A servo starting or
+  under load draws a lot, and can reset the Pico on a weak USB supply; a separate 5 V
+  supply with its ground joined to the Pico's is safer for more than one.
 
 ### Stepper motor: `HWO-STP`
 

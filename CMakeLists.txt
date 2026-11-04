@@ -19,6 +19,7 @@ add_executable(twitcher
     src/hwman.c
     src/program.c
     src/stepper.c
+    src/servo.c
     src/keyboard.c
     src/usb_descriptors.c
     src/networking/dhcpserver.c

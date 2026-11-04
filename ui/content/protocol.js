@@ -55,6 +55,7 @@ const MSG_HW_GPO             = 0x21;
 const MSG_HW_PWM             = 0x22;
 const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_STEPPER         = 0x24;  // a stepper motor on four pins, through a ULN2003
+const MSG_HW_SERVO           = 0x25;  // a hobby servo, such as an SG90, on a PWM pin
 const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
@@ -186,6 +187,14 @@ const STEPPER_PINS           = 4;     // IN1 to IN4 of the ULN2003
 const STEPPER_STEPS_MIN      = 4;     // full steps per revolution, at least
 const STEPPER_RPM_MAX        = 300;   // the highest top speed, revolutions per minute
 const STEPPER_RATE_MAX       = 2000;  // steps per second the device steps at most
+
+// Servo (MSG_HW_SERVO) payload limits. It runs its pin's PWM slice at SERVO_FREQ, so it
+// takes the slice as a PWM does.
+const SERVO_FREQ             = 50;    // Hz: a 20 ms frame
+const SERVO_ANGLE_MAX        = 180;   // degrees
+const SERVO_PULSE_MIN        = 100;   // µs, the shortest pulse it may be set to
+const SERVO_PULSE_MAX        = 3000;  // µs, the longest
+const SERVO_SPEED_MAX        = 3600;  // °/s, the highest speed limit; 0 = none
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;

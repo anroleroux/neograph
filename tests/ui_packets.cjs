@@ -222,7 +222,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1536,6 +1536,50 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             s.inConns().map(c => c.start.node.name).join()].join();
     });
     expect(stepperBack === '2 3 4 5,1,true,true,true,256,2.5,10,0,n1', 'a stepper restored as ' + stepperBack);
+
+    // A servo: its pin, not on a PWM's slice; a slider sets its angle. It marshals as
+    // the servo-config example in PROTOCOL.md, and restores from it.
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a servo"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|GPIO pin:|Angle at 0 (°):|Angle at 1 (°):|Pulse at 0° (µs):|Pulse at 180° (µs):|Speed limit (°/s):',
+        'a new servo does not show its settings: ' + await keyRows());
+    const servo = await page.evaluate(() => {
+        const s = selected;
+        const pwmSlices = Object.values(elements).filter(e => e instanceof uiPWM).map(e => pwmSlice(e.pin));
+        const offered = [...[...document.querySelectorAll('#settings .editable.select')]
+            .find(row => row.querySelector('.label').textContent === 'GPIO pin:').querySelectorAll('option')].map(o => Number(o.value));
+        const rejected = [s.setPin('29'), s.setAngleMax('181'), s.setPulseMin('99'), s.setPulseMax('3001'),
+            s.setSpeed('3601'), s.setAngleMin('-1')].every(r => r === false);
+        const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
+        const wired = createEdge(button.name, s.name) === null && !!createEdge(slider.name, s.name);
+        // A PWM added now isn't offered the servo's slice.
+        const pwm = addNode(MSG_HW_PWM);
+        const pwmOff = !pinsInUse(pwm).has(s.pin) ? false : USABLE_PINS.filter(p => pwmSlice(p) === pwmSlice(s.pin))
+            .every(p => pinsInUse(pwm).has(p)) && pwmSlice(pwm.pin) !== pwmSlice(s.pin);
+        pwm.remove();
+        s.setSpeed('90');
+        const pay = s.marshal().slice(5);
+        pay[0] = 0; pay[1] = 1;         // as in the example: servo n2 <- slider n1
+        pay[3] = 14;
+        saveGraph();
+        return { pin: s.pin, offPwm: pwmSlices.every(sl => !offered.some(p => pwmSlice(p) === sl)),
+                 rejected, wired, pwmOff, pay: pay.map(b => b.toString(16).padStart(2, '0')).join('') };
+    });
+    packets.push(...await sent(page));
+    expect(servo.offPwm, 'a servo was offered a pin on a PWM\'s slice');
+    expect(servo.rejected, 'a servo took settings out of range');
+    expect(servo.wired, 'a servo took a button, or not a slider');
+    expect(servo.pwmOff, 'a PWM was offered the servo\'s slice');
+    expect(servo.pay === '000100' + '0e00b4' + '01f4' + '0960' + '005a', 'the servo marshals as ' + servo.pay);
+    const servoBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x12, 0, 0, 1, 1, 0,
+            0x25, 1, 0, 2, 12, 0, 1, 0, 6, 20, 160, 0x02, 0x58, 0x09, 0x24, 0, 45,
+        ])));
+        const s = elements.n2;
+        return [s.pin, s.angleMin, s.angleMax, s.pulseMin, s.pulseMax, s.speed, s.inConns().map(c => c.start.node.name).join()].join();
+    });
+    expect(servoBack === '6,20,160,600,2340,45,n1', 'a servo restored as ' + servoBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

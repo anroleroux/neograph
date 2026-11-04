@@ -16,6 +16,8 @@
 
 /* {{stepper-js}} */
 
+/* {{servo-js}} */
+
 /* {{plot-js}} */
 
 /* {{indicator-js}} */

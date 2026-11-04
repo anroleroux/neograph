@@ -35,6 +35,12 @@ const NODE_HELP = {
         "It speeds up and slows down at its acceleration, and never goes past its top speed (a 28BYJ-48 manages about 15 RPM at 5 V). Steps per revolution counts full steps: 2048 for a 28BYJ-48. Half drive is smoothest; Full has the most torque; Wave uses the least current.",
         "Hold keeps its coils on when it stops, so it holds its place; Release turns them off, so it runs cooler but can be turned by hand. Power the motor from 5 V, not from a GPIO pin.",
     ],
+    servo: [
+        "A hobby servo, such as an SG90, on one pin. Wire one number into it: its input is taken as a fraction of its source's full scale (1 for a slider, 3.3 V for an ADC), and 0 gives Angle at 0, 1 gives Angle at 1.",
+        "Every 20 ms the device sends it a pulse whose width sets its angle, from Pulse at 0° to Pulse at 180°. An SG90 takes about 500 to 2400 µs; if it buzzes or strains at an end, bring that pulse in towards 1450.",
+        "Speed limit slows it to that many degrees a second; 0 lets it turn as fast as it can. Power it from 5 V, not 3.3 V; its signal wire can go straight to the pin.",
+        "A servo uses its pin's PWM slice, so a PWM or another servo can't use the other pin on that slice.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",

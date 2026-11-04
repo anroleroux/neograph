@@ -8,6 +8,7 @@
 #include "unity.h"
 #include "protocol.h"
 #include "program.h"
+#include "servo.h"
 #include "stepper.h"
 #include "config/config_iterator.h"
 #include "protocol_examples.h"
@@ -299,7 +300,8 @@ void test_graph_messages_belong_to_controls(void)
                 pwm_payload pwm;
                 if (labels.type != MSG_WIRE)
                     found = true;
-                else if (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO || controls.type == MSG_HW_STEPPER)
+                else if (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO || controls.type == MSG_HW_STEPPER
+                         || controls.type == MSG_HW_SERVO)
                     found = labels.len == 4 && msg_ref_at(controls.pay, controls.flags).id != 0;
                 else if (controls.type == MSG_HW_PWM && pwm_payload_read(controls.pay, controls.len, controls.flags, &pwm)) {
                     msg_ref wired = msg_ref_at(labels.pay + 4, labels.flags);
@@ -357,7 +359,8 @@ void test_wires_join_matching_types(void)
         config_element_iterator it;
         messages(&it, ex);
         while (it.next(&it)) {
-            bool floating_in = it.type == MSG_LOGIC_COMPARE || it.type == MSG_HW_STEPPER || program_logic_floating(it.type);
+            bool floating_in = it.type == MSG_LOGIC_COMPARE || it.type == MSG_HW_STEPPER || it.type == MSG_HW_SERVO
+                || program_logic_floating(it.type);
             bool boolean_in = it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD
                 || it.type == MSG_UI_INDICATOR || (program_logic(it.type) && !floating_in);
             uint8_t r = msg_ref_len(it.flags);
@@ -396,6 +399,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_PWM & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_KEYBOARD & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_STEPPER & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_SERVO & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -1154,6 +1158,87 @@ void test_stepper_coils(void)
     for (int32_t pos = -8; pos < 8; pos++) TEST_ASSERT_EQUAL_HEX8(full[-pos & 3], stepper_coils(n, pos));
 }
 
+/* ── Servos ───────────────────────────────────────────────────────────── */
+
+/* An ADC n1 driving a servo n2 on GPIO 14: 0° to 180°, 500 to 2400 µs, at most `speed` °/s. */
+static const prog_node *compile_servo(hw_program *p, uint8_t speed_hi, uint8_t speed_lo)
+{
+    const uint8_t cfg[] = {
+        MSG_HW_ADC, 0, 0, 1, 1, 0,                                      /* ADC n1 */
+        MSG_HW_SERVO, MSG_FLAG_OUTPUT, 0, 2, 12, 0, 1, 0,               /* servo n2 <- n1 */
+            14, 0, 180, 0x01, 0xF4, 0x09, 0x60, speed_hi, speed_lo,     /*   pin, angles, pulses, speed */
+    };
+    program_compile(cfg, sizeof cfg, p);
+    TEST_ASSERT_EQUAL_UINT8(2, p->node_count);
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_SERVO, p->nodes[1].type);
+    return &p->nodes[1];
+}
+
+void test_servo_payload_read(void)
+{
+    static const uint8_t pay[12] = { 0, 1, 0, 14, 0, 180, 0x01, 0xF4, 0x09, 0x60, 0, 90 };
+    servo_payload sv;
+    TEST_ASSERT_TRUE(servo_payload_read(pay, 12, MSG_FLAG_OUTPUT, &sv));
+    TEST_ASSERT_EQUAL_UINT16(1, sv.source.id);
+    TEST_ASSERT_EQUAL_UINT8(14, sv.pin);
+    TEST_ASSERT_EQUAL_UINT8(180, sv.angle_max);
+    TEST_ASSERT_EQUAL_UINT16(500, sv.pulse_min);
+    TEST_ASSERT_EQUAL_UINT16(2400, sv.pulse_max);
+    TEST_ASSERT_EQUAL_UINT16(90, sv.speed);
+    TEST_ASSERT_TRUE(servo_payload_read(pay + 1, 11, 0, &sv));      /* a 2-byte reference: ID 0x0100 */
+    TEST_ASSERT_EQUAL_UINT8(14, sv.pin);
+    TEST_ASSERT_FALSE(servo_payload_read(pay, 11, MSG_FLAG_OUTPUT, &sv));
+
+    /* Each of these makes it one the device doesn't run: 1 or 2 bytes from `at`. */
+    static const struct { uint8_t at, n, b[2]; } bad[] = {
+        { 3, 1, { 25 } },               /* GPIO 25, the WiFi chip's */
+        { 4, 1, { 181 } },              /* an angle past 180° */
+        { 5, 1, { 200 } },
+        { 6, 2, { 0, 99 } },            /* a pulse under SERVO_PULSE_MIN */
+        { 8, 2, { 0x0B, 0xB9 } },       /* a pulse over SERVO_PULSE_MAX: 3001 µs */
+        { 10, 2, { 0x0E, 0x11 } },      /* a speed over SERVO_SPEED_MAX: 3601 °/s */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        uint8_t b[12];
+        memcpy(b, pay, sizeof b);
+        memcpy(b + bad[i].at, bad[i].b, bad[i].n);
+        TEST_ASSERT_FALSE_MESSAGE(servo_payload_read(b, 12, MSG_FLAG_OUTPUT, &sv), "a bad servo payload was read");
+    }
+}
+
+void test_servo_angle_and_pulse(void)
+{
+    static hw_program p;
+    const prog_node *n = compile_servo(&p, 0, 0);
+    /* An ADC is taken as a fraction of 3.3 V, clamped. */
+    TEST_ASSERT_EQUAL_FLOAT(PROG_ADC_VOLTS, n->in_full[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0, servo_target(n, 0));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 90, servo_target(n, 1.65f));
+    TEST_ASSERT_EQUAL_FLOAT(180, servo_target(n, 5));
+    TEST_ASSERT_EQUAL_FLOAT(0, servo_target(n, -1));
+    TEST_ASSERT_EQUAL_FLOAT(500, servo_pulse_us(n, 0));
+    TEST_ASSERT_EQUAL_FLOAT(1450, servo_pulse_us(n, 90));
+    TEST_ASSERT_EQUAL_FLOAT(2400, servo_pulse_us(n, 180));
+    /* No speed limit: straight there. */
+    TEST_ASSERT_EQUAL_FLOAT(170, servo_move(n, 10, 170, 0.01f));
+
+    /* Angles may run downwards: 150° at 0, 30° at full scale. */
+    p.nodes[1].angle_min = 150;
+    p.nodes[1].angle_max = 30;
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 90, servo_target(n, 1.65f));
+    TEST_ASSERT_EQUAL_FLOAT(30, servo_target(n, 3.3f));
+
+    /* 90 °/s: 0.9° a scan, either way, and no further than the target. */
+    n = compile_servo(&p, 0, 90);
+    TEST_ASSERT_FLOAT_WITHIN(0.0001f, 10.9f, servo_move(n, 10, 170, 0.01f));
+    TEST_ASSERT_FLOAT_WITHIN(0.0001f, 9.1f, servo_move(n, 10, 0, 0.01f));
+    TEST_ASSERT_EQUAL_FLOAT(10.5f, servo_move(n, 10, 10.5f, 0.01f));
+    float angle = 0;
+    int scans = 0;
+    while (angle != 180 && scans < 1000) { angle = servo_move(n, angle, 180, 0.01f); scans++; }
+    TEST_ASSERT_INT_WITHIN(1, 200, scans);          /* 180° at 90 °/s: 2 s */
+}
+
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
 void test_counter_payload_valid(void)
 {
@@ -1400,6 +1485,8 @@ int main(void)
     RUN_TEST(test_stepper_moves_to_its_target);
     RUN_TEST(test_stepper_turns_at_a_speed);
     RUN_TEST(test_stepper_coils);
+    RUN_TEST(test_servo_payload_read);
+    RUN_TEST(test_servo_angle_and_pulse);
     RUN_TEST(test_feedback_reference);
     RUN_TEST(test_program_counter);
     RUN_TEST(test_program_feedback_loop);

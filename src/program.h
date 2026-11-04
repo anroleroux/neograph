@@ -19,8 +19,8 @@
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
  *     latch, counter), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
- *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper),
- *     which read one or two.
+ *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
+ *     servo), which read one or two.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
  * while it runs a program; core 0 reads them for telemetry.
@@ -51,7 +51,8 @@ typedef struct {
     uint8_t in[PROG_NODE_INPUTS];   // logic or an output: the signals it reads; a PWM's duty, then its
                                     // frequency; a latch's set, then its reset; a counter's count, then its reset
     uint8_t feedback;       // logic: bit k set when in[k] comes through a feedback wire
-    float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V)
+    float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V);
+                            // a servo: its input's, in_full[0]
     uint8_t duty, duty_min, duty_max;       // a PWM, percent
     uint16_t freq, freq_min, freq_max;      // a PWM, Hz
     float threshold, hysteresis;            // a compare
@@ -62,6 +63,9 @@ typedef struct {
     uint16_t steps_rev;                     // a stepper: full steps per revolution
     float turn_scale, rpm, accel;           // a stepper: revolutions (or RPM) per unit of its input; its top
                                             // speed, RPM; RPM it gains or loses a second, 0 = at once
+    uint8_t angle_min, angle_max;           // a servo: degrees at its input's 0 and full scale
+    uint16_t pulse_min, pulse_max;          // a servo: µs at 0° and at SERVO_ANGLE_MAX°
+    uint16_t slew;                          // a servo: °/s it turns at most, 0 = no limit
 } prog_node;
 
 // What a logic node keeps from one scan to the next, besides its output.

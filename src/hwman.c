@@ -11,6 +11,7 @@
 #include "hwman.h"
 #include "program.h"
 #include "protocol.h"
+#include "servo.h"
 #include "stepper.h"
 
 // Core 1 runs the program core 0 compiled from the config (src/program.h): every
@@ -297,6 +298,7 @@ typedef struct {
     uint16_t freq;              // PWM: the frequency its slice runs at
     uint32_t top;               // PWM: counter steps in one period
     prog_logic_state logic;     // logic: what it keeps between scans
+    float angle;                // servo: the angle it is at, degrees
     float in;                   // stepper: its input at the last scan
     stepper_motion motion;      // stepper: its steps a revolution, top speed and acceleration
     stepper_state stepper;      // stepper: where it is, and how fast it turns
@@ -370,6 +372,7 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
         return true;
 
     case MSG_HW_PWM:
+    case MSG_HW_SERVO:
         return claim_pin(n->pin);       // its slice starts at the first scan
 
     case MSG_HW_STEPPER:
@@ -564,6 +567,24 @@ static void scan(uint32_t count) {
             }
             pwm_set_gpio_level(n->pin, (uint16_t)(st->top * duty / PWM_DUTY_MAX + 0.5f));
             st->duty = duty;
+            st->driven = true;
+            break;
+        }
+
+        case MSG_HW_SERVO: {
+            // Its slice runs at SERVO_FREQ; the pulse is the level, as a share of the
+            // frame. At its first scan it goes straight to its angle: where it was is
+            // not known.
+            float target = servo_target(n, signal_value(p, n->in[0]));
+            float angle = st->driven ? servo_move(n, st->angle, target, SCAN_MS / 1000.0f) : target;
+            if (st->driven && angle == st->angle) break;
+            if (!st->driven) {
+                printf("servo on GPIO %u\n", n->pin);
+                st->top = pwm_set_freq(n->pin, SERVO_FREQ);
+            }
+            float level = st->top * servo_pulse_us(n, angle) * SERVO_FREQ / 1e6f + 0.5f;
+            pwm_set_gpio_level(n->pin, (uint16_t)(level > st->top ? st->top : level));
+            st->angle = angle;
             st->driven = true;
             break;
         }

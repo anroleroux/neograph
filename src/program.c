@@ -429,6 +429,22 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_SERVO: {
+            servo_payload sv;
+            if (!servo_payload_read(itr.pay, itr.len, itr.flags, &sv)) break;
+            if (!(n = add_node(p, itr.type, itr.id))) break;
+            n->in_count = 1;
+            n->in[0] = ref_signal(p, sv.source);
+            n->in_full[0] = signal_full(p, n->in[0]);
+            n->pin = sv.pin;
+            n->angle_min = sv.angle_min;
+            n->angle_max = sv.angle_max;
+            n->pulse_min = sv.pulse_min;
+            n->pulse_max = sv.pulse_max;
+            n->slew = sv.speed;
+            break;
+        }
+
         case MSG_HW_STEPPER: {
             stepper_payload sp;
             if (!stepper_payload_read(itr.pay, itr.len, itr.flags, &sp)) break;
@@ -602,6 +618,12 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->in[0]);
             break;
         }
+        case MSG_HW_SERVO:
+            put(&t, "SERVO n%u pin %u angle %u-%u pulse %u-%u us speed %u <- ", n->id, n->pin,
+                n->angle_min, n->angle_max, n->pulse_min, n->pulse_max, n->slew);
+            put_signal(&t, n->in[0]);
+            put(&t, " / %.4g", (double)n->in_full[0]);
+            break;
         default: put(&t, "? n%u", n->id); break;
         }
         put(&t, "\n");

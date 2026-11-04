@@ -352,6 +352,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `22` | `MSG_HW_PWM` | HW output: PWM pin | Implemented |
 | `23` | `MSG_HW_KEYBOARD` | HW output: a keystroke typed to the PC over USB | Implemented |
 | `24` | `MSG_HW_STEPPER` | HW output: a stepper motor on four pins, through a ULN2003 | Implemented |
+| `25` | `MSG_HW_SERVO` | HW output: a hobby servo on a PWM pin | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
@@ -413,33 +414,36 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `A3` Block definition | 1–32 | Its name, UTF-8. Keyed by the definition's ID |
 | `A4` Block definition message | 5–255 | One message of the definition, header and all. Keyed by the definition's ID |
 | `24` Stepper | 22 | Bytes 0–2: source reference (0 = not connected) · bytes 3–6: the GPIO pins of IN1 to IN4 · byte 7: options · bytes 8–9: full steps per revolution · bytes 10–21: three floats, the scale, the top speed and the acceleration. See [Stepper motors](#stepper-motors). |
+| `25` Servo | 12 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin · bytes 4–5: angles at input 0 and 1 · bytes 6–9: pulses at 0° and 180° · bytes 10–11: speed limit. See [Servos](#servos). |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
 shorter, and so is everything after it: an LED is 2 bytes, a GPO 3, a PWM 15, a
-stepper 21, a plot 3–19 and a keyboard 5 or 4–67. `pwm_payload_read`,
-`stepper_payload_read` and `keyboard_payload_valid` in `src/protocol.h` read either.
+stepper 21, a servo 11, a plot 3–19 and a keyboard 5 or 4–67. `pwm_payload_read`,
+`stepper_payload_read`, `servo_payload_read` and `keyboard_payload_valid` in
+`src/protocol.h` read either.
 
 #### GPIO pins
 
-A GPO, PWM or stepper may use **GPIO 0–22 and 26–28**, the pins on the Pico 2 W's header
+A GPO, PWM, stepper or servo may use **GPIO 0–22 and 26–28**, the pins on the Pico 2 W's header
 (`PIN_USABLE_MASK`, bit n for GPIO n). GPIO 23, 24, 25 and 29 drive the WiFi chip:
 changing them cuts the device off the network.
 
 - The UI offers only the usable pins, and keeps the default pin when a config names
   another one.
-- **One node per pin.** A GPO, PWM, stepper or GPIO input is offered only the pins no
+- **One node per pin.** A GPO, PWM, stepper, servo or GPIO input is offered only the pins no
   other node uses, and an ADC only the channels whose pin (GPIO 26–28) no other node
   uses. A new node takes its default pin (GPO 1, PWM 2, GPIO input 3) if it is free,
-  otherwise the lowest free one; a new ADC the first free channel, and a new stepper
+  otherwise the lowest free one (a servo's default is 14); a new ADC the first free channel, and a new stepper
   GPIO 10–13 if all four are free, otherwise the lowest four free pins. A stepper's
   four pins differ.
 - **One PWM per slice.** The pins of a PWM slice share its counter, so its frequency:
   GPIO *n* is on slice (*n* >> 1) & 7, so GPIO 0, 1, 16 and 17 are slice 0, GPIO 2, 3,
   18 and 19 slice 1, and so on. A PWM is not offered any pin on another PWM's slice,
-  and a new one takes a free pin on a free slice. A GPO or GPIO input may still use
-  them: it doesn't use the slice.
-- Core 1 doesn't set up a GPO, PWM or stepper on another pin, and logs that it skipped
+  and a new one takes a free pin on a free slice. A servo runs its slice at 50 Hz, so
+  it counts as a PWM here: no PWM or servo is offered a pin on another one's slice. A
+  GPO, stepper or GPIO input may still use them: it doesn't use the slice.
+- Core 1 doesn't set up a GPO, PWM, stepper or servo on another pin, and logs that it skipped
   it. A stepper missing one of its pins is skipped whole.
 
 A PWM has two parameters, its **duty cycle** and its **frequency**. Each is constant, or
@@ -496,7 +500,7 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button, `31` GPIO input, `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C; a count, 0 to its preset |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C; a count, 0 to its preset |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -1117,6 +1121,50 @@ across the slider, at up to 15 RPM and 30 RPM a second:
                 3F 80 00 00  41 70 00 00  41 F0 00 00   #   1 revolution a unit, 15 RPM, 30 RPM/s
 ```
 
+### Servos
+
+A servo node (`25`) turns a hobby servo, such as an SG90, to an angle: every 20 ms
+(`SERVO_FREQ`, 50 Hz) its pin sends a pulse whose width sets the angle. Its input is
+floating, and taken as a PWM takes it: as a fraction of its source's full scale (1 for
+a slider or a scale, 3.3 V for an ADC, 100 °C for the core temperature, a counter's
+preset), clamped to 0–1.
+
+| Bytes | Field | Range (UI default) |
+|---|---|---|
+| 0–2 | Source reference, 0 = none | |
+| 3 | GPIO pin | A [usable](#gpio-pins) one, on no other PWM's or servo's slice (14) |
+| 4 | Angle at input 0, degrees | 0–`SERVO_ANGLE_MAX` (180) (0) |
+| 5 | Angle at input 1 (full scale), degrees | 0–180 (180) |
+| 6–7 | Pulse at 0°, µs | `SERVO_PULSE_MIN` (100)–`SERVO_PULSE_MAX` (3000) (500) |
+| 8–9 | Pulse at 180°, µs | 100–3000 (2400) |
+| 10–11 | Speed limit, degrees a second; 0 = none | 0–`SERVO_SPEED_MAX` (3600) (0) |
+
+- **Its angle** is angle at 0 + (angle at 1 − angle at 0) × the fraction; angle at 0
+  may be the larger, which turns the input around. Nothing wired in reads 0, so it
+  goes to its angle at 0.
+- **Its pulse** is pulse at 0° + (pulse at 180° − pulse at 0°) × angle ÷ 180. The
+  pulse at 0° may be the longer, which turns the servo around. An SG90 turns about
+  180° over 500–2400 µs (its datasheet says 1000–2000 µs for 90°); one that buzzes or
+  strains at an end is past its stop, and wants that end's pulse brought in.
+- **The speed limit** moves its angle towards the one it wants by at most that many
+  degrees a second (core 1 moves it each 10 ms scan), for a slow, smooth sweep. A servo
+  turns no faster than it can anyway: an SG90 about 600 °/s.
+- **At setup** it goes straight to its angle: the device can't tell where it was.
+- **It takes its pin's PWM slice,** at 50 Hz, so no PWM or other servo may be on that
+  slice (see [GPIO pins](#gpio-pins)).
+- **Power.** Power the servo from 5 V (VBUS or VSYS), not 3.3 V, and join its ground
+  to the Pico's; its signal wire goes straight to the pin. A servo starting or under
+  load draws hundreds of mA, which can brown out a Pico on a weak USB supply.
+
+A slider `n1` turning an SG90 on GPIO 14 across its 180°, at up to 90° a second:
+
+```hex example=servo-config
+0A 00 17                                        # Config, 23 bytes
+12 00 00 01 01  00                              # slider n1, horizontal
+25 01 00 02 0C  00 01 00 0E 00 B4               # servo n2 ← n1, GPIO 14, 0° at 0, 180° at 1
+                01 F4 09 60 00 5A               #   500 µs at 0°, 2400 µs at 180°, 90 °/s
+```
+
 ### Labels, positions and wires
 
 A node's label, position and incoming wire are each a message whose element ID is
@@ -1307,6 +1355,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `22` PWM | 2 signals: duty, frequency | its pin | See [PWM outputs](#pwm-outputs) |
 | `23` USB keyboard | 1 signal | a keystroke, through core 0 | Types when its signal goes from below 0.5 to 0.5 or up |
 | `24` stepper | 1 signal | its four pins | See [Stepper outputs](#stepper-outputs) |
+| `25` servo | 1 signal | its pin, a 50 Hz pulse | See [Servos](#servos) |
 
 - **An output reads the signals its source references name.** A reference to an
   element that isn't in the program, or to nothing (ID 0), reads 0. A reference to
@@ -1323,7 +1372,8 @@ of the config; then the **logic**, each after the logic it reads; then the
   that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
   of its range, a scale whose ranges aren't finite numbers or whose input range is
   empty, a counter preset out of its range, a stepper `stepper_payload_read` refuses
-  (see [Stepper motors](#stepper-motors)), and anything over the limits:
+  (see [Stepper motors](#stepper-motors)) or servo `servo_payload_read` refuses
+  (see [Servos](#servos)), and anything over the limits:
   `PROG_SIGNALS_MAX` (96) signals and `PROG_NODES_MAX` (64) nodes.
 - **A repeated element ID**, as in configs from older UIs, keeps one signal, whose
   last message wins.
@@ -1400,6 +1450,14 @@ for those options:
 ```program example=stepper-config
 s0 n1.0 slider = 0
 STEPPER n2 pins 10 11 12 13 half 2048 steps position 1 rev/unit max 15 rpm accel 30 <- s0
+```
+
+For the [servo-config example](#servos): its pin, angles, pulses and speed limit, and
+`/ F` the value of its signal that gives its angle at 1, as a PWM's:
+
+```program example=servo-config
+s0 n1.0 slider = 0
+SERVO n2 pin 14 angle 0-180 pulse 500-2400 us speed 90 <- s0 / 1
 ```
 
 For the [logic-config example](#logic): the compare reads the temperature and writes
@@ -1529,7 +1587,8 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
      channel);
    - a GPIO input takes its pin, sets its pull, and reads it for its signal;
    - a GPO takes its pin as an output; a PWM takes its pin, and starts its slice at
-     the first scan; a stepper takes its four pins as outputs, and holds its coils
+     the first scan; a servo takes its pin, and starts its slice at 50 Hz at the
+     first scan; a stepper takes its four pins as outputs, and holds its coils
      from the first scan (unless it releases them);
    - an LED, keyboard, core temperature or logic takes no pin.
 
@@ -1557,6 +1616,10 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
      core 0 a keyboard tag (below). A program starts it with its signal as it is, so a
      button left on across a save doesn't type.
    - **PWM:** see below.
+   - **Servo:** its angle moves towards the one its signal asks for, by at most its
+     speed limit × 10 ms, and its pulse follows (see [Servos](#servos)). The pulse is
+     set as the slice's level: its counter runs 20 ms a period, so the level is
+     about 0.3 µs a step.
    - **Stepper:** takes its signal as its target or speed; it moves between scans
      (below).
 

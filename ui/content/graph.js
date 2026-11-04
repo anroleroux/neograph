@@ -155,6 +155,7 @@ const NODE_CLASSES = {
     [MSG_HW_GPO]: uiGPO,
     [MSG_HW_PWM]: uiPWM,
     [MSG_HW_STEPPER]: uiStepper,
+    [MSG_HW_SERVO]: uiServo,
     [MSG_UI_GRAPH]: uiPlot,
     [MSG_UI_INDICATOR]: uiIndicator,
     [MSG_HW_CORE]: uiCore,

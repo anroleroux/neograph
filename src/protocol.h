@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_ and SUB_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -65,6 +65,7 @@
 #define MSG_HW_PWM              0x22
 #define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
 #define MSG_HW_STEPPER          0x24    /* a stepper motor on four pins, through a ULN2003 */
+#define MSG_HW_SERVO            0x25    /* a hobby servo, such as an SG90, on a PWM pin */
 #define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
@@ -237,6 +238,15 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define STEPPER_RPM_MAX         300     /* the highest top speed, revolutions per minute */
 #define STEPPER_RATE_MAX        2000    /* steps per second core 1 steps at most, whatever the top speed */
 
+/* Servo (MSG_HW_SERVO) payload limits. It runs its pin's PWM slice at SERVO_FREQ, so it
+   takes the slice as a PWM does; its pulse goes from its pulse at 0° to its pulse at
+   SERVO_ANGLE_MAX°. */
+#define SERVO_FREQ              50      /* Hz: a 20 ms frame */
+#define SERVO_ANGLE_MAX         180     /* degrees */
+#define SERVO_PULSE_MIN         100     /* µs, the shortest pulse it may be set to */
+#define SERVO_PULSE_MAX         3000    /* µs, the longest */
+#define SERVO_SPEED_MAX         3600    /* °/s, the highest speed limit; 0 = none */
+
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
 
 /* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which
@@ -359,6 +369,38 @@ static inline int stepper_payload_read(const uint8_t *pay, uint8_t len, uint8_t 
         && (out->options & STEPPER_DRIVE_MASK) <= STEPPER_HALF
         && out->steps_rev >= STEPPER_STEPS_MIN
         && out->rpm > 0 && out->rpm <= STEPPER_RPM_MAX && out->accel >= 0;
+}
+
+/* A servo (MSG_HW_SERVO) payload, read by servo_payload_read. */
+typedef struct {
+    msg_ref source;
+    uint8_t pin;
+    uint8_t angle_min, angle_max;   /* degrees at its input's 0 and full scale */
+    uint16_t pulse_min, pulse_max;  /* µs at 0° and at SERVO_ANGLE_MAX° */
+    uint16_t speed;                 /* °/s it turns at most; 0 = as fast as it can */
+} servo_payload;
+
+/* The payload length of a servo message with these header flags: 11, or 12 with outputs. */
+static inline uint8_t servo_payload_len(uint8_t flags) { return 9 + msg_ref_len(flags); }
+
+/* Read a servo payload. Returns 0 if it is not one the device runs: its length, a
+   usable pin, angles up to SERVO_ANGLE_MAX, pulses from SERVO_PULSE_MIN to
+   SERVO_PULSE_MAX (the one at 0° may be the longer, which turns it around), and a
+   speed up to SERVO_SPEED_MAX. */
+static inline int servo_payload_read(const uint8_t *pay, uint8_t len, uint8_t flags, servo_payload *out) {
+    if (len != servo_payload_len(flags)) return 0;
+    const uint8_t *q = pay + msg_ref_len(flags);     /* after the source */
+    out->source = msg_ref_at(pay, flags);
+    out->pin = q[0];
+    out->angle_min = q[1];
+    out->angle_max = q[2];
+    out->pulse_min = (uint16_t)(q[3] << 8 | q[4]);
+    out->pulse_max = (uint16_t)(q[5] << 8 | q[6]);
+    out->speed = (uint16_t)(q[7] << 8 | q[8]);
+    return pin_usable(out->pin) && out->angle_min <= SERVO_ANGLE_MAX && out->angle_max <= SERVO_ANGLE_MAX
+        && out->pulse_min >= SERVO_PULSE_MIN && out->pulse_min <= SERVO_PULSE_MAX
+        && out->pulse_max >= SERVO_PULSE_MIN && out->pulse_max <= SERVO_PULSE_MAX
+        && out->speed <= SERVO_SPEED_MAX;
 }
 
 /* Whether a block's (MSG_SUB) payload is well formed: written with outputs, its
