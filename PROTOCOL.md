@@ -235,7 +235,8 @@ Core 0 sends the most recently connected client WebSocket text frames:
   all within a second.
 - **In the UI.** A `sig` frame goes to the node `nI`. A hardware input or logic
   element hands the value to the nodes wired to it: a [core temperature](#core-temperature)
-  in °C, an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
+  in °C, a [DS18B20](#ds18b20-temperature-sensors) its temperature in °C (output 0) and
+  whether it answers (output 1), an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
   [logic](#logic) on from 0.5. Other nodes, such as a button or slider, ignore theirs,
   and so does an element the page doesn't have. The UI ignores `uptime N`.
 
@@ -245,6 +246,8 @@ sig 10 0 1.65               # ADC n10: 1.65 V
 sig 19 0 1                  # GPIO input n19: on
 sig 6 1 0.502               # 2D slider n6, Y: 0.502
 sig 4 1 2                   # counter n4, its count: 2
+sig 7 0 22.44               # DS18B20 n7: 22.44 °C (4 significant digits)
+sig 7 1 1                   # DS18B20 n7: found
 ```
 
 ### Limits
@@ -357,6 +360,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
+| `33` | `MSG_HW_DS18B20` | HW input: a DS18B20 temperature sensor on a 1-Wire pin; two outputs | Implemented |
 | `40` | `MSG_LOGIC_COMPARE` | Logic: a floating input above or below a threshold | Implemented |
 | `41` | `MSG_LOGIC_AND` | Logic: on while every input is on | Implemented |
 | `42` | `MSG_LOGIC_OR` | Logic: on while any input is on | Implemented |
@@ -394,6 +398,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `02` Plot | 4–20 | Bytes 0–2: source reference (0 = not connected) · byte 3: time window, 1–255 s (UI default 10) · bytes 4…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None: the chip has one sensor. See [Core temperature](#core-temperature). |
 | `31` GPIO input | 2 | Byte 0: the GPIO pin, a [usable](#gpio-pins) one (UI default 3). Byte 1: options; bits 0–1 (`GPI_PULL_MASK`) the pin's pull, `GPI_PULL_NONE` (0), `GPI_PULL_UP` (1) or `GPI_PULL_DOWN` (2, UI default); bit 2 (`GPI_INVERT`): 0 = on while the pin is high (UI default), 1 = on while it is low. Other bits are 0. See [GPIO inputs](#gpio-inputs). |
+| `33` DS18B20 | 2 | Byte 0: the GPIO pin of its data line (DQ), a [usable](#gpio-pins) one (UI default 15). Byte 1: options; bits 0–1 (`DS18B20_RES_MASK`) its resolution, `DS18B20_RES_9` (0) to `DS18B20_RES_12` (3, UI default); bit 2 (`DS18B20_PULLUP`): the pin's internal pull-up on (UI default off: a 4.7 kΩ resistor). Other bits are 0. See [DS18B20 temperature sensors](#ds18b20-temperature-sensors). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -501,8 +506,8 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C; a count, 0 to its preset |
+| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -510,6 +515,7 @@ ADC or core temperature drives a PWM on the device and a plot in the browser, an
 GPIO input an LED, GPO or USB keyboard on the device and a light in the browser. A PWM
 maps a floating value onto its range as a fraction of the source's full scale: 1 for
 a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature,
+`DS18B20_FULL` (100) °C for a DS18B20,
 for a min or max that of its first wired input, and for a counter's count its preset.
 The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
@@ -575,7 +581,8 @@ When a config arrives, the UI rebuilds the graph from it:
   as a green bar along its top row.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, the logic `40`–`4C`
+  `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `30` core temperature, `31` GPIO input,
+  `32` ADC, `33` DS18B20, the logic `40`–`4C`
   and a block's copy `60`) becomes a node with the message's ID. Messages marked
   `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
   definition, which is restored first from its `A3` and `A4` messages (see
@@ -583,7 +590,7 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
@@ -649,7 +656,7 @@ s0 n1.0 button = 0
 
 ### Hardware input tiles
 
-A hardware input (core temperature, GPIO input, ADC) or a [logic](#logic) element shows
+A hardware input (core temperature, GPIO input, ADC, DS18B20) or a [logic](#logic) element shows
 a tile in the Command view only if its settings say so: "Command view: Show | Hide", Hide by default. A light or
 plot wired to it shows its values either way. The choice is saved as `MSG_FLAG_SHOWN`
 in its message's flags; a message without it, such as one saved before the choice
@@ -757,6 +764,76 @@ An ADC on ADC1 (GPIO 27) driving a PWM's duty cycle, and drawn on a plot:
 22 01 00 02 11  00 01 00 02 03 E8 01            # PWM n2: duty ← n1, pin 2, 1000 Hz, duty from input
                 32 00 64  00 00 00 00 64 27 10  #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
 02 01 00 03 04  00 01 00 0A                     # plot n3 ← n1, 10 s
+```
+
+### DS18B20 temperature sensors
+
+A DS18B20 node (`33`) reads a DS18B20 digital temperature sensor on one pin, its 1-Wire
+data line. It is a source with two outputs: **its temperature** in °C (output 0,
+floating, unit °C), and **found** (output 1, boolean): on while the sensor answers. The
+Command view can show it on a tile (see [Hardware input tiles](#hardware-input-tiles)):
+its temperature, `No sensor` while found is off, `–` until the device says.
+
+**Wiring.** VDD (red) to 3.3 V, GND (black) to GND, DQ (yellow) to the pin, and a
+4.7 kΩ resistor from DQ to 3.3 V. `DS18B20_PULLUP` turns on the pin's internal pull-up
+(50–80 kΩ) instead: enough for one sensor on a short wire, not for long ones. One sensor
+a pin: core 1 talks to it without its address (Skip ROM, `CC`). Parasite power, with
+VDD tied to GND, is not supported: it needs a strong pull-up while it converts.
+
+**Resolution.**
+
+| `DS18B20_RES_` | Bits | Steps | A reading every |
+|---|---|---|---|
+| `_9` (0) | 9 | 0.5 °C | 94 ms (`ds18b20_conversion_ms`), plus the reading |
+| `_10` (1) | 10 | 0.25 °C | 188 ms |
+| `_11` (2) | 11 | 0.125 °C | 375 ms |
+| `_12` (3, UI default) | 12 | 0.0625 °C | 750 ms |
+
+The sensor reads −55 to +125 °C, to ±0.5 °C from −10 to +85 °C.
+
+**On the device.** Core 1 drives the line open-drain: the pin's output level is 0,
+and it is switched to an output to pull the line low and back to an input to let it
+go. Each bit's time slot (70 µs; a reset 960 µs) is timed with interrupts off. The line
+may idle between slots, so a sensor's work is spread over scans, about 2 ms a scan at
+most, and the scan stays on time:
+
+1. **Configure** (after it is found, or found again): reset (the sensor answers with a
+   presence pulse), `CC`, Write Scratchpad (`4E`), TH `4B`, TL `46` (its alarm bytes,
+   unused: their defaults) and its configuration register, the resolution in bits 5–6
+   (`ds18b20_config`: `1F`, `3F`, `5F` or `7F`). The register isn't copied to its
+   EEPROM, so the sensor is configured again whenever it is found.
+2. **Convert:** reset, `CC`, Convert T (`44`).
+3. **Wait** its conversion time, in scans.
+4. **Read:** reset, `CC`, Read Scratchpad (`BE`); then its 9 bytes, 3 a scan.
+5. **Check** (`ds18b20_celsius`): the Dallas CRC-8 (x⁸ + x⁵ + x⁴ + 1) of the 9 bytes is
+   0, and they are not all `00` (the line held low) nor all `FF` (nothing answering).
+   The temperature is bytes 0–1, little endian, two's complement, in 1/16 °C, with the
+   bits below its resolution, which are undefined, cleared. Then back to 2.
+
+- **Its signals.** A good reading sets its temperature and turns found on. 85 °C is
+  what the sensor holds from power-on until it converts: an 85 °C reading is dropped
+  once, unless the last reading was within 10 °C of it (`ds18b20_take`); the next 85 °C
+  in a row is taken.
+- **Lost.** No presence pulse, or a reading that fails its check, counts as a failure;
+  after 3 in a row (`DS18B20_FAILS_LOST`) found goes off, its temperature keeps its last
+  reading, and the sensor is looked for again every second. Core 1 logs when it finds
+  and loses one.
+- **A PWM, servo or NeoPixels** wired to its temperature take it as a fraction of
+  `DS18B20_FULL` (100) °C, as they take the core temperature.
+- **In the browser.** Core 0 sends both signals as `sig` [telemetry](#telemetry-text-frames);
+  the node hands its temperature and found to the nodes wired to them.
+- **After a save** it keeps its reading until the next, and is configured again.
+
+A DS18B20 `n1` on GPIO 15 at 12 bits, its tile shown: a compare turns GPO `n3` (a fan)
+on above 30 °C, back off below 29 °C, and the onboard LED shows that it is found:
+
+```hex example=ds18b20-config
+0A 00 29                                        # Config, 41 bytes
+33 02 00 01 02  0F 03                           # DS18B20 n1, tile shown: GPIO 15, 12 bits
+40 01 00 02 0C  00 01 00 00                     # compare n2 ← n1's temperature, above
+                41 F0 00 00  3F 80 00 00        #   30 °C, hysteresis 1 °C
+21 01 00 03 04  00 02 00 01                     # GPO n3 ← n2, GPIO 1
+20 01 00 04 03  00 01 01                        # LED n4 ← n1's found (output 1)
 ```
 
 ### 2D sliders
@@ -1492,14 +1569,15 @@ Every source in the config has its signals, wired or not:
 | `40`–`4C` [logic](#logic) | 1; a counter 2: done (output 0), its count (output 1) | 0 off, 1 on; a scale, min or max its value; a counter's count | 0, then its state at the first scan |
 | `31` GPIO input | 1 | 0 off, 1 on | the pin when it is set up |
 | `32` ADC | 1 | volts, 0 to 3.3 | 0, then its first reading |
+| `33` DS18B20 | 2: its temperature (output 0), found (output 1) | °C; 0 or 1 | 0, then its first reading; as in the program core 1 ran |
 
 - **The browser sets a UI source's** (button, slider, 2D slider) with a
   [command](#01-command): each byte becomes byte ÷ 255.
 - **Core 1 sets a hardware input's** from the hardware, and a logic element's from
   its inputs, each scan.
-- **A new program keeps the UI sources' values:** a signal of the same element and
-  output in the program core 1 ran takes its value, so saving the graph doesn't move
-  a slider's outputs. A source new to the graph starts as in the table.
+- **A new program keeps the UI sources' values,** and a DS18B20's: a signal of the
+  same element and output in the program core 1 ran takes its value, so saving the
+  graph doesn't move a slider's outputs, or drop a reading until the next. A source new to the graph starts as in the table.
 - **Core 0 reads every signal** for telemetry (see
   [Telemetry text frames](#telemetry-text-frames)).
 
@@ -1514,6 +1592,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `32` ADC | its channel | its signal | See [ADC inputs](#adc-inputs) |
 | `31` GPIO input | its pin | its signal | See [GPIO inputs](#gpio-inputs) |
 | `30` core temperature | the chip's sensor | its signal | See [Core temperature](#core-temperature) |
+| `33` DS18B20 | its pin, 1-Wire | its two signals: its temperature, found | See [DS18B20 temperature sensors](#ds18b20-temperature-sensors) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
 | `41` AND, `42` OR | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `43` NOT, `44` delay, `48` pulse, `49` blink, `4A` toggle | 1 signal | its signal | See [Logic](#logic) |
@@ -1540,7 +1619,8 @@ of the config; then the **logic**, each after the logic it reads; then the
   others' signals as the last scan left them.
 - **Left out:** the elements core 1 doesn't run (plots, lights, labels, positions,
   wires, networking), messages of the wrong length (the [payloads](#control-payloads)
-  give the lengths), an ADC channel over 2, a compare with a threshold or hysteresis
+  give the lengths), an ADC channel over 2, a DS18B20 on a pin that isn't usable or
+  with an unknown option, a compare with a threshold or hysteresis
   that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
   of its range, a scale whose ranges aren't finite numbers or whose input range is
   empty, a counter preset out of its range, a stepper `stepper_payload_read` refuses
@@ -1595,6 +1675,20 @@ while low; the light is left out:
 s0 n1.0 gpi = 0
 GPI n1 pin 3 options 05 -> s0
 LED n2 <- s0
+```
+
+For the [ds18b20-config example](#ds18b20-temperature-sensors): its pin and
+resolution (and ` pull-up` with `DS18B20_PULLUP`), its temperature's signal, and
+`found` its found's:
+
+```program example=ds18b20-config
+s0 n1.0 ds18b20 = 0
+s1 n1.1 ds18b20 = 0
+s2 n2.0 compare = 0
+DS18B20 n1 pin 15 12-bit -> s0 found s1
+COMPARE n2 above 30 hysteresis 1 <- s0 -> s2
+GPO n3 pin 1 <- s2
+LED n4 <- s1
 ```
 
 For the [slider-2d-config example](#2d-sliders): X and Y start at the slider's home,
@@ -1781,6 +1875,8 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - an ADC takes its channel's pin, GPIO 26 + channel (several ADC nodes may share a
      channel);
    - a GPIO input takes its pin, sets its pull, and reads it for its signal;
+   - a DS18B20 takes its pin as an input with its output level 0, its pull-up on or
+     off, and is configured at its first scan;
    - a GPO takes its pin as an output; a PWM takes its pin, and starts its slice at
      the first scan; a servo takes its pin, and starts its slice at 50 Hz at the
      first scan; a stepper takes its four pins as outputs, and holds its coils
@@ -1802,6 +1898,9 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - **Core temperature:** every 10th scan (100 ms) the sensor is read and smoothed
      (see [Core temperature](#core-temperature)); each core temperature signal is the
      temperature once it has moved 0.1 °C from it.
+   - **DS18B20:** one step of reading it, about 2 ms at most: a command, a wait, or 3
+     bytes of its scratchpad; a reading checked good becomes its signals (see
+     [DS18B20 temperature sensors](#ds18b20-temperature-sensors)).
 3. **The logic**, in program order, writes its signals from the signals it reads
    (see [Logic](#logic)).
 4. **The outputs**, in program order, each from the signals it reads, when the state

@@ -10,6 +10,7 @@
 #include "hardware/dma.h"
 #include "hardware/pio.h"
 
+#include "ds18b20.h"
 #include "hwman.h"
 #include "neopixel.h"
 #include "program.h"
@@ -314,6 +315,16 @@ typedef struct {
     uint sm, offset;
     int dma;                    // NeoPixels: the DMA channel that feeds it
     uint64_t ready_us;          // NeoPixels: when the last send has gone out and latched
+    struct {
+        uint8_t step;           // what its next scan does (OW_)
+        int32_t wait_ms;        // until its conversion is done, or it tries again
+        uint8_t got;            // scratchpad bytes read
+        uint8_t pad[DS18B20_PAD_LEN];
+        uint8_t fails;          // reads in a row that failed
+        bool found;             // it answers: its output 1
+        bool configured;        // its resolution is written
+        bool doubted;           // an 85 °C reading was dropped (ds18b20_take)
+    } ds;                       // DS18B20
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -428,6 +439,145 @@ static uint32_t neopixels_release(const hw_program *p, const hw_program *next) {
     return pins;
 }
 
+// ── DS18B20 temperature sensors ──
+// One sensor on a pin, on the 1-Wire bus: the line idles high through its pull-up, and
+// the Pico or the sensor pulls it low. Core 1 drives it open-drain: the pin's output
+// level stays 0, and is switched on (low) or off (let go). Each time slot is timed with
+// interrupts off; between slots the line may idle as long as it likes, so a sensor is
+// read a few bytes a scan, a scan taking at most about 2 ms for it.
+#define OW_BYTES_A_SCAN     3       // scratchpad bytes read in one scan: ~1.7 ms
+#define OW_RETRY_MS         1000    // a sensor that doesn't answer: look again after this
+
+enum {
+    OW_CONFIG,          // reset, skip ROM, write its resolution
+    OW_CONVERT,         // reset, skip ROM, start a conversion
+    OW_WAIT,            // until the conversion is done
+    OW_READ_CMD,        // reset, skip ROM, read the scratchpad
+    OW_READ,            // OW_BYTES_A_SCAN bytes of it a scan
+    OW_IDLE,            // nothing answered: wait, then start again
+};
+
+// A reset pulse: low 480 µs, then the sensor's presence pulse. Whether one answered.
+static bool ow_reset(uint pin) {
+    uint32_t ints = save_and_disable_interrupts();
+    gpio_set_dir(pin, GPIO_OUT);
+    busy_wait_us_32(480);
+    gpio_set_dir(pin, GPIO_IN);
+    busy_wait_us_32(70);
+    bool present = !gpio_get(pin);
+    restore_interrupts(ints);
+    busy_wait_us_32(410);
+    return present;
+}
+
+// A write slot: low 6 µs for a 1, 60 µs for a 0, in a 70 µs slot.
+static void ow_write_bit(uint pin, bool bit) {
+    uint32_t ints = save_and_disable_interrupts();
+    gpio_set_dir(pin, GPIO_OUT);
+    busy_wait_us_32(bit ? 6 : 60);
+    gpio_set_dir(pin, GPIO_IN);
+    restore_interrupts(ints);
+    busy_wait_us_32(bit ? 64 : 10);
+}
+
+// A read slot: low 3 µs, then the sensor holds the line low for a 0; sampled at 12 µs.
+static bool ow_read_bit(uint pin) {
+    uint32_t ints = save_and_disable_interrupts();
+    gpio_set_dir(pin, GPIO_OUT);
+    busy_wait_us_32(3);
+    gpio_set_dir(pin, GPIO_IN);
+    busy_wait_us_32(9);
+    bool bit = gpio_get(pin);
+    restore_interrupts(ints);
+    busy_wait_us_32(55);
+    return bit;
+}
+
+// Bytes go least significant bit first.
+static void ow_write(uint pin, uint8_t byte) {
+    for (int k = 0; k < 8; k++) ow_write_bit(pin, byte >> k & 1);
+}
+
+static uint8_t ow_read(uint pin) {
+    uint8_t byte = 0;
+    for (int k = 0; k < 8; k++) byte |= (uint8_t)(ow_read_bit(pin) << k);
+    return byte;
+}
+
+// A read that failed, or no answer: after DS18B20_FAILS_LOST in a row it is lost, its
+// found output goes off (its temperature keeps its last reading), and it is looked for
+// again every OW_RETRY_MS.
+static void ds18b20_failed(hw_program *p, const prog_node *n, node_state *st) {
+    if (++st->ds.fails < DS18B20_FAILS_LOST) {
+        st->ds.step = OW_CONVERT;
+        return;
+    }
+    if (st->ds.found) printf("DS18B20 on GPIO %u lost\n", n->pin);
+    st->ds.found = false;
+    st->ds.configured = false;
+    p->signals[n->out_count].value = 0;
+    st->ds.step = OW_IDLE;
+    st->ds.wait_ms = OW_RETRY_MS;
+}
+
+// One scan's part of reading a sensor: convert, wait, read the scratchpad, and again.
+static void ds18b20_step(hw_program *p, const prog_node *n, node_state *st) {
+    uint8_t res = n->options & DS18B20_RES_MASK;
+    switch (st->ds.step) {
+    case OW_IDLE:
+        if ((st->ds.wait_ms -= SCAN_MS) <= 0) st->ds.step = OW_CONFIG;
+        break;
+
+    case OW_CONFIG:
+        if (!ow_reset(n->pin)) { ds18b20_failed(p, n, st); break; }
+        ow_write(n->pin, DS18B20_SKIP_ROM);
+        ow_write(n->pin, DS18B20_WRITE_PAD);
+        ow_write(n->pin, 0x4B);                 // TH and TL, the alarms: unused, its defaults
+        ow_write(n->pin, 0x46);
+        ow_write(n->pin, ds18b20_config(res));
+        st->ds.configured = true;
+        st->ds.step = OW_CONVERT;
+        break;
+
+    case OW_CONVERT:
+        if (!st->ds.configured) { st->ds.step = OW_CONFIG; break; }
+        if (!ow_reset(n->pin)) { ds18b20_failed(p, n, st); break; }
+        ow_write(n->pin, DS18B20_SKIP_ROM);
+        ow_write(n->pin, DS18B20_CONVERT);
+        st->ds.wait_ms = ds18b20_conversion_ms(res);
+        st->ds.step = OW_WAIT;
+        break;
+
+    case OW_WAIT:
+        if ((st->ds.wait_ms -= SCAN_MS) <= 0) st->ds.step = OW_READ_CMD;
+        break;
+
+    case OW_READ_CMD:
+        if (!ow_reset(n->pin)) { ds18b20_failed(p, n, st); break; }
+        ow_write(n->pin, DS18B20_SKIP_ROM);
+        ow_write(n->pin, DS18B20_READ_PAD);
+        st->ds.got = 0;
+        st->ds.step = OW_READ;
+        break;
+
+    case OW_READ: {
+        for (int k = 0; k < OW_BYTES_A_SCAN && st->ds.got < DS18B20_PAD_LEN; k++)
+            st->ds.pad[st->ds.got++] = ow_read(n->pin);
+        if (st->ds.got < DS18B20_PAD_LEN) break;
+        float celsius;
+        if (!ds18b20_celsius(st->ds.pad, res, &celsius)) { ds18b20_failed(p, n, st); break; }
+        st->ds.fails = 0;
+        st->ds.step = OW_CONVERT;
+        if (!ds18b20_take(celsius, st->ds.found, p->signals[n->out].value, &st->ds.doubted)) break;
+        if (!st->ds.found) printf("DS18B20 on GPIO %u: %.2f C\n", n->pin, (double)celsius);
+        p->signals[n->out].value = celsius;
+        p->signals[n->out_count].value = 1;
+        st->ds.found = true;
+        break;
+    }
+    }
+}
+
 // Set up a node's hardware. Inputs come before outputs in a program, so an
 // input wins a pin an output also names; otherwise the first node on a pin wins.
 static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
@@ -457,6 +607,17 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
 
     case MSG_HW_CORE:
         if (core_temp.sampled) p->signals[n->out].value = core_temp.value;
+        return true;
+
+    case MSG_HW_DS18B20:
+        // The line idles high: through the 4.7 kΩ resistor, or the pin's own pull-up.
+        // The output level stays low, for ow_ to pull the line down with.
+        if (!claim_pin(n->pin)) return false;
+        gpio_init(n->pin);
+        gpio_put(n->pin, 0);
+        gpio_set_dir(n->pin, GPIO_IN);
+        if (n->options & DS18B20_PULLUP) gpio_pull_up(n->pin);
+        else gpio_disable_pulls(n->pin);
         return true;
 
     case MSG_HW_GPO:
@@ -541,9 +702,11 @@ static void take_program(void) {
     const hw_program *old = &programs[running];
     hw_program *p = &programs[running ^ 1];
 
+    // A UI source's signals keep their values, and so do a DS18B20's until it is read
+    // again, so a save neither moves a slider nor drops a reading.
     for (uint8_t i = 0; i < p->signal_count; i++) {
         prog_signal *s = &p->signals[i];
-        if (!program_ui_source(s->type)) continue;
+        if (!program_ui_source(s->type) && s->type != MSG_HW_DS18B20) continue;
         uint8_t was = program_signal(old, s->id, s->output);
         if (was != PROG_NO_SIGNAL) s->value = old->signals[was].value;
     }
@@ -621,6 +784,10 @@ static void scan(uint32_t count) {
 
         case MSG_HW_CORE:
             if (core_temp.sampled) p->signals[n->out].value = core_temp.value;
+            break;
+
+        case MSG_HW_DS18B20:
+            ds18b20_step(p, n, st);
             break;
 
 

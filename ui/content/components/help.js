@@ -50,6 +50,12 @@ const NODE_HELP = {
         "Patch lights a fixed area from its start to its end: a rectangle on an array (start and end are opposite corners), an arc on a doughnut, a sector on a circle. The number doesn't move it; with Colour From input it sets its colour.",
         "Colour: Fixed, or From input, which blends from Colour at 0 to Colour at 1 as the input rises. Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
     ],
+    ds18b20: [
+        "A DS18B20 digital temperature sensor on one pin, read by the device about every 0.1 to 0.75 s. It has two outputs: °C, the temperature (a number), and Found (on/off), on while the sensor answers. Pick the one the next wire leaves from in Wire from.",
+        "Wire it: red (VDD) to 3.3 V, black (GND) to GND, yellow (DQ, data) to the pin, and a 4.7 kΩ resistor from DQ to 3.3 V. For a short wire and one sensor, Internal uses the pin's own weak pull-up in place of the resistor; if it reads No sensor, fit the resistor. One sensor per pin; parasite power (two wires) is not supported.",
+        "Resolution: 9 bits gives 0.5 °C steps, a reading every 94 ms; 12 bits 0.0625 °C every 750 ms. Its temperature is good from −55 to +125 °C. Wired into a PWM or servo, it counts as a fraction of 100 °C.",
+        "If the sensor stops answering, Found goes off after three failed reads, and the temperature keeps its last reading.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",

@@ -161,6 +161,7 @@ const NODE_CLASSES = {
     [MSG_UI_INDICATOR]: uiIndicator,
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
+    [MSG_HW_DS18B20]: uiDS18B20,
     [MSG_HW_GPI]: uiGPI,
     [MSG_HW_KEYBOARD]: uiKeyboard,
     [MSG_LOGIC_COMPARE]: uiCompare,
@@ -331,7 +332,7 @@ function buildGraph(msgs) {
             elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
-        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
+        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI, MSG_HW_DS18B20].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
         // Logic with settings takes them from after its source reference (an invalid payload keeps the
         // defaults); a block takes its definition.
         if (elm.restore) elm.restore(m.pay, r, m.len);

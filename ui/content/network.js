@@ -224,14 +224,19 @@ function toggleWebSocket(n,d) {
             networks[0].devices[0].did = data.slice(9,17);
             gfig = data.slice(3);
             unmarshalConfigs(gfig);
-            // and signals, as telemetry: a chip temperature drifting around 30 °C,
-            // and on each ADC channel a slow wave, in volts.
+            // and signals, as telemetry: a chip temperature drifting around 30 °C, a
+            // DS18B20 around 22 °C, and on each ADC channel a slow wave, in volts.
             let tick = 0;
             offlineTelemetry = setInterval(() => {
                 const t = performance.now() / 1000;
                 for (const e of Object.values(mainElements())) {
                     if (e instanceof uiCore && tick % 5 === 0) {
                         receiveTelemetry(`sig ${e.id} 0 ${(30 + 4 * Math.sin(t / 20) + Math.random() - 0.5).toFixed(2)}`);
+                    } else if (e instanceof uiDS18B20 && tick % 4 === 0) {
+                        // A room drifting around 22 °C, in 1/16 °C steps.
+                        const c = Math.round((22 + 1.5 * Math.sin(t / 30) + 0.1 * (Math.random() - 0.5)) * 16) / 16;
+                        receiveTelemetry(`sig ${e.id} 0 ${c}`);
+                        receiveTelemetry(`sig ${e.id} 1 1`);
                     } else if (e instanceof uiADC) {
                         const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * e.channel)) + 0.01 * (Math.random() - 0.5);
                         receiveTelemetry(`sig ${e.id} 0 ${(level * ADC_VREF).toFixed(3)}`);

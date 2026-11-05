@@ -30,6 +30,8 @@
 
 /* {{gpi-js}} */
 
+/* {{ds18b20-js}} */
+
 /* {{keyboard-js}} */
 
 /* {{logic-js}} */

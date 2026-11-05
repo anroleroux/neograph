@@ -194,6 +194,7 @@ static float signal_full(const hw_program *p, uint8_t s) {
     switch (p->signals[s].type) {
     case MSG_HW_ADC: return PROG_ADC_VOLTS;
     case MSG_HW_CORE: return CORE_TEMP_FULL;
+    case MSG_HW_DS18B20: return p->signals[s].output == 0 ? DS18B20_FULL : 1;  // °C, or found: 0 or 1
     case MSG_LOGIC_COUNTER:
         for (uint8_t i = 0; i < p->node_count; i++) {
             if (p->nodes[i].out_count == s) return (float)p->nodes[i].preset;
@@ -326,6 +327,21 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
                 n->pin = itr.pay[0];
             }
             break;
+
+        case MSG_HW_DS18B20: {
+            // Two signals: its temperature, and whether the sensor answers.
+            if (itr.len != 2 || !pin_usable(itr.pay[0]) || (itr.pay[1] & ~(DS18B20_RES_MASK | DS18B20_PULLUP))) break;
+            uint8_t found;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((found = add_signal(p, itr.id, 1, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->out = s;
+                n->out_count = found;
+                n->pin = itr.pay[0];
+                n->options = itr.pay[1];
+            }
+            break;
+        }
 
         default:
             // A logic element's signal, for the elements that read it; its node
@@ -490,6 +506,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_CORE: return "core";
     case MSG_HW_GPI: return "gpi";
     case MSG_HW_ADC: return "adc";
+    case MSG_HW_DS18B20: return "ds18b20";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
     case MSG_LOGIC_OR: return "or";
@@ -549,6 +566,13 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         case MSG_HW_CORE: put(&t, "CORE n%u -> ", n->id); put_signal(&t, n->out); break;
         case MSG_HW_ADC: put(&t, "ADC n%u channel %u -> ", n->id, n->pin); put_signal(&t, n->out); break;
         case MSG_HW_GPI: put(&t, "GPI n%u pin %u options %02X -> ", n->id, n->pin, n->options); put_signal(&t, n->out); break;
+        case MSG_HW_DS18B20:
+            put(&t, "DS18B20 n%u pin %u %u-bit%s -> ", n->id, n->pin, 9 + (n->options & DS18B20_RES_MASK),
+                n->options & DS18B20_PULLUP ? " pull-up" : "");
+            put_signal(&t, n->out);
+            put(&t, " found ");
+            put_signal(&t, n->out_count);
+            break;
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);

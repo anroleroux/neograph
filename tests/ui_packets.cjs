@@ -224,7 +224,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1706,6 +1706,57 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             s.colourInput, s.colourHex(), s.colourHex(true), s.valueConn()?.start.node.name, s.enableConn()?.start.node.name].join();
     });
     expect(neoBack === '7,2,12,99,1,0:3,0:9,true,true,#ff8000,#0000ff,n1,n3', 'NeoPixels restored as ' + neoBack);
+
+    // A DS18B20: its pin, resolution and pull-up; its temperature wires into a number
+    // input, its Found into an on/off; its tile shows the device's readings. It
+    // marshals as the ds18b20-config example in PROTOCOL.md, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a DS18B20 temperature sensor"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|GPIO pin:|Resolution:|Pull-up:|Wire from:|Command view:',
+        'a new DS18B20 does not show its settings: ' + await keyRows());
+    expect(await page.locator('#settings .setting-note').textContent() === '12 bits: 0.0625 °C steps, a reading every 750 ms',
+        'a DS18B20 at 12 bits says ' + await page.locator('#settings .setting-note').textContent());
+    await choice('Resolution', '10');
+    expect(await page.locator('#settings .setting-note').textContent() === '10 bits: 0.25 °C steps, a reading every 188 ms',
+        'a DS18B20 at 10 bits says ' + await page.locator('#settings .setting-note').textContent());
+    const ds = await page.evaluate(() => {
+        const s = selected;
+        const rejected = [s.setPin('29'), s.setResolution(4), s.setWireOutput(2)].every(r => r === false);
+        const cmp = addNode(MSG_LOGIC_COMPARE), led = addNode(MSG_HW_LED);
+        s.setWireOutput(0);
+        const wired = !!createEdge(s.name, cmp.name) && createEdge(s.name, led.name) === null
+            && (s.setWireOutput(1), !!createEdge(s.name, led.name)) && createEdge(s.name, cmp.name) === null;
+        s.shown = true;
+        buildCommandInterface();
+        const tile = () => s.tileState.textContent;
+        const tiles = [tile()];
+        receiveTelemetry(`sig ${s.id} 0 23.4375`);
+        receiveTelemetry(`sig ${s.id} 1 1`);
+        tiles.push(tile(), String(s.outputValue(0)), String(s.outputValue(1)));
+        receiveTelemetry(`sig ${s.id} 1 0`);
+        tiles.push(tile());
+        const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join('');
+        s.pullup = true;
+        const pullup = s.marshal()[6];
+        saveGraph();
+        return { rejected, wired, tiles: tiles.join('|'), pay, pullup, pin: s.pin };
+    });
+    packets.push(...await sent(page));
+    expect(ds.rejected, 'a DS18B20 took settings out of range');
+    expect(ds.wired, 'a DS18B20\'s outputs did not wire by type');
+    expect(ds.tiles === '–|23.4 °C|23.4375|1|No sensor', 'a DS18B20\'s tile showed ' + ds.tiles);
+    expect(ds.pay === ds.pin.toString(16).padStart(2, '0') + '01', 'a DS18B20 marshals as ' + ds.pay);
+    expect(ds.pullup === (0x04 | 1), 'a DS18B20 with its own pull-up marshals options ' + ds.pullup);
+    const dsBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x33, MSG_FLAG_SHOWN, 0, 1, 2, 22, DS18B20_RES_11 | DS18B20_PULLUP,
+            0x20, 1, 0, 2, 3, 0, 1, 1,
+        ])));
+        const s = elements.n1, led = elements.n2;
+        return [s.pin, s.resolution, s.pullup, s.shown, led.inConns().map(c => c.start.node.name + ':' + c.start.output).join()].join();
+    });
+    expect(dsBack === '22,2,true,true,n1:1', 'a DS18B20 restored as ' + dsBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

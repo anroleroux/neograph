@@ -70,3 +70,10 @@
     width: 100%;
     max-height: 16em;
 }
+
+/* A note under a setting, such as a sensor's steps and reading rate. */
+#settings .setting-note {
+    margin: calc(-1 * var(--step--3)) 0 var(--step--2);
+    font-size: 0.85em;
+    opacity: 0.75;
+}

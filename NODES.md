@@ -13,7 +13,7 @@ the TMP button in the HWI group.
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
-| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
+| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
 | **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
@@ -369,6 +369,46 @@ Drive the pin with 3.3 V at most. Not simulated in the offline demo.
 | Pull | None, Up, Down | Down | The pin's internal pull resistor. Down suits a switch to 3.3 V; Up suits a switch to ground. |
 | On when | High, Low | High | Whether it is on while the pin is high or while it is low. Use Low with Pull Up and a switch to ground. |
 | Command view | Show, Hide | Hide | A tile showing On or Off. |
+
+### DS18B20 temperature sensor: `HWI-DS`
+
+| | |
+|---|---|
+| Category | Hardware input |
+| Outputs | **°C**: number, the temperature; **Found**: on/off, on while the sensor answers |
+| Default label | DS18B20 |
+
+A DS18B20 digital temperature sensor (the common waterproof probe, or the TO-92
+part) on one pin. The device reads it over and over: at 12 bits a new reading every
+0.75 s, in 0.0625 °C steps, good to ±0.5 °C from −10 to +85 °C. It reads −55 to
++125 °C. The offline demo simulates a room around 22 °C.
+
+It has two outputs. Pick the one the next wire leaves from in **Wire from**, and each
+wire is labelled with it:
+
+- **°C** goes to anything that takes a number: a compare (a thermostat: on above
+  30 °C), a plot, a scale, or a PWM, servo or NeoPixels, which take it as a fraction of
+  100 °C.
+- **Found** goes to anything that takes on/off: an LED, a light, or logic that
+  sounds an alarm when the sensor is unplugged or its wire breaks.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| GPIO pin | GPIO 0–22, 26–28, not used by another node | 15, or the lowest free pin | The pin its data wire (DQ, yellow) is on. |
+| Resolution | 9, 10, 11, 12 bits | 12 | 9: 0.5 °C steps, a reading every 94 ms; 10: 0.25 °C, 188 ms; 11: 0.125 °C, 375 ms; 12: 0.0625 °C, 750 ms. The settings say which under the choice. |
+| Pull-up | 4.7 kΩ resistor, Internal | 4.7 kΩ resistor | The data line needs a pull-up to 3.3 V. Internal uses the pin's own, weaker one: enough for one sensor on a short wire. |
+| Wire from | °C, Found | °C | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile with the temperature, or "No sensor". |
+
+Things to know:
+
+- **Wiring:** red (VDD) to 3.3 V, black (GND) to GND, yellow (DQ) to the pin, and a
+  4.7 kΩ resistor between DQ and 3.3 V. Parasite power (two wires, VDD to GND) is not
+  supported.
+- **One sensor per pin.** For two sensors, use two pins and two nodes.
+- **If it stops answering,** Found goes off after three failed reads (a second or two),
+  the temperature keeps its last reading, and the device keeps looking for it.
+- **After a save** it keeps its reading until the next one.
 
 ---
 

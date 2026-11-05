@@ -15,7 +15,8 @@
  *     value, a 2D slider's X and Y, an ADC, a GPIO input, the core temperature,
  *     a logic element), as a float in the source's own unit;
  *   - nodes: the elements core 1 runs, in the order it runs them: the hardware
- *     inputs (ADC, GPIO input, core temperature), which write a signal; then the
+ *     inputs (ADC, GPIO input, core temperature, DS18B20), which write a signal (a
+ *     DS18B20 two); then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
  *     latch, counter), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
@@ -42,11 +43,11 @@ typedef struct {
 typedef struct {
     uint8_t type;           // MSG_HW_ or MSG_LOGIC_
     uint16_t id;
-    uint8_t pin;            // GPO, PWM, GPIO input: its GPIO; ADC: its channel
+    uint8_t pin;            // GPO, PWM, GPIO input, DS18B20: its GPIO; ADC: its channel
     uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options;
                             // stepper: STEPPER_ options
     uint8_t out;            // an input or logic: the signal it writes
-    uint8_t out_count;      // a counter: the signal of its count, its output 1
+    uint8_t out_count;      // a counter: the signal of its count, its output 1; a DS18B20: of found, its output 1
     uint8_t in_count;       // the signals it reads
     uint8_t in[PROG_NODE_INPUTS];   // logic or an output: the signals it reads; a PWM's duty, then its
                                     // frequency; a latch's set, then its reset; a counter's count, then its reset

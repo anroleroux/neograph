@@ -8,6 +8,7 @@
 #include "unity.h"
 #include "protocol.h"
 #include "program.h"
+#include "ds18b20.h"
 #include "neopixel.h"
 #include "servo.h"
 #include "stepper.h"
@@ -352,8 +353,8 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
     if (src.id == 0) return;
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
-                             || type == MSG_HW_CORE || program_logic_floating(type), ex->name);
-    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);
+                             || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || program_logic_floating(type), ex->name);
+    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);   /* a DS18B20's temperature */
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
@@ -380,9 +381,10 @@ void test_wires_join_matching_types(void)
                 for (uint8_t k = 0; k < refs; k++) {
                     msg_ref src = through_block(ex, msg_ref_at(it.pay + k * r, it.flags));
                     uint8_t type = element_type(ex, src.id);
-                    if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI
+                    if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI || type == MSG_HW_DS18B20
                                                          || (program_logic(type) && !program_logic_floating(type)), ex->name);
-                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, src.output, ex->name);
+                    /* A DS18B20's found is its output 1; the others' only boolean output is 0. */
+                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 ? 1 : 0, src.output, ex->name);
                 }
             } else if (floating_in) {
                 for (uint8_t k = 0; k < refs; k++) assert_floating_hw(ex, msg_ref_at(it.pay + k * r, it.flags));
@@ -420,6 +422,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_NEOPIXEL & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_DS18B20 & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
@@ -1711,6 +1714,98 @@ void test_neopixel_colour_input_and_switch(void)
     TEST_ASSERT_TRUE(neopixel_enabled(n, 0));
 }
 
+/* ── DS18B20 temperature sensors ──────────────────────────────────────── */
+
+/* A scratchpad holding a temperature (its LSB and MSB), with its CRC. */
+static void ds18b20_pad(uint8_t pad[DS18B20_PAD_LEN], uint8_t lsb, uint8_t msb)
+{
+    const uint8_t head[] = { lsb, msb, 0x4B, 0x46, 0x7F, 0xFF, 0x0C, 0x10 };
+    memcpy(pad, head, sizeof head);
+    pad[8] = ds18b20_crc8(pad, 8);
+}
+
+void test_ds18b20_scratchpad(void)
+{
+    /* The CRC of Maxim's application note 27 example: a ROM of 02 1C B8 01 00 00 00 has CRC A2. */
+    static const uint8_t rom[] = { 0x02, 0x1C, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xA2 };
+    TEST_ASSERT_EQUAL_HEX8(0xA2, ds18b20_crc8(rom, 7));
+    TEST_ASSERT_EQUAL_HEX8(0, ds18b20_crc8(rom, 8));
+
+    uint8_t pad[DS18B20_PAD_LEN];
+    float c = 0;
+    ds18b20_pad(pad, 0x91, 0x01);                       /* +25.0625 °C (the datasheet's table) */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(25.0625f, c);
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_11, &c));
+    TEST_ASSERT_EQUAL_FLOAT(25.0f, c);                  /* the low bit is undefined at 11 bits */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_9, &c));
+    TEST_ASSERT_EQUAL_FLOAT(25.0f, c);
+    ds18b20_pad(pad, 0x5E, 0xFF);                       /* −10.125 °C */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(-10.125f, c);
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_9, &c));
+    TEST_ASSERT_EQUAL_FLOAT(-10.5f, c);
+    ds18b20_pad(pad, 0x90, 0xFC);                       /* −55 °C, its lowest */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(-55.0f, c);
+    ds18b20_pad(pad, 0xD0, 0x07);                       /* +125 °C, its highest */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(125.0f, c);
+
+    /* A bit wrong anywhere fails the CRC; a line held low, or left high, is no sensor. */
+    c = 1;
+    pad[4] ^= 0x01;
+    TEST_ASSERT_FALSE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(1, c);
+    memset(pad, 0, sizeof pad);
+    TEST_ASSERT_FALSE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    memset(pad, 0xFF, sizeof pad);
+    TEST_ASSERT_FALSE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+
+    TEST_ASSERT_EQUAL_UINT16(94, ds18b20_conversion_ms(DS18B20_RES_9));
+    TEST_ASSERT_EQUAL_UINT16(750, ds18b20_conversion_ms(DS18B20_RES_12));
+    TEST_ASSERT_EQUAL_HEX8(0x1F, ds18b20_config(DS18B20_RES_9));
+    TEST_ASSERT_EQUAL_HEX8(0x7F, ds18b20_config(DS18B20_RES_12));
+
+    /* 85 °C, its power-on value: dropped once, unless the last reading was near it. */
+    bool doubted = false;
+    TEST_ASSERT_TRUE(ds18b20_take(25, true, 24, &doubted));
+    TEST_ASSERT_FALSE(ds18b20_take(85, true, 25, &doubted));
+    TEST_ASSERT_TRUE(doubted);
+    TEST_ASSERT_TRUE(ds18b20_take(85, true, 25, &doubted));     /* again in a row: it is 85 °C */
+    TEST_ASSERT_FALSE(doubted);
+    TEST_ASSERT_FALSE(ds18b20_take(85, false, 0, &doubted));    /* a first reading */
+    TEST_ASSERT_TRUE(ds18b20_take(24, false, 0, &doubted));
+    TEST_ASSERT_TRUE(ds18b20_take(85, true, 84.5f, &doubted));  /* rising through it */
+}
+
+void test_ds18b20_program(void)
+{
+    static hw_program p;
+    const uint8_t cfg[] = {
+        MSG_HW_DS18B20, 0, 0, 1, 2, 15, DS18B20_RES_10 | DS18B20_PULLUP,     /* DS18B20 n1, GPIO 15 */
+        MSG_HW_PWM, MSG_FLAG_OUTPUT, 0, 2, 17, 0, 1, 0, 2, 0x03, 0xE8, PWM_DUTY_INPUT, 50, 0, 100, 0, 0, 0, 0, 100, 0x27, 0x10,
+        MSG_HW_GPO, MSG_FLAG_OUTPUT, 0, 3, 4, 0, 1, 1, 5,                   /* GPO n3 on GPIO 5 <- n1's found */
+        MSG_HW_DS18B20, 0, 0, 4, 2, 25, 0,                                   /* GPIO 25: not usable */
+        MSG_HW_DS18B20, 0, 0, 5, 2, 16, 0x08,                                /* an unknown option */
+        MSG_HW_DS18B20, 0, 0, 6, 1, 16,                                      /* no options */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(2, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(3, p.node_count);
+    const prog_node *ds = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_DS18B20, ds->type);
+    TEST_ASSERT_EQUAL_UINT8(15, ds->pin);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 0), ds->out);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 1), ds->out_count);
+    /* A PWM takes its temperature as a fraction of DS18B20_FULL; a GPO reads its found. */
+    TEST_ASSERT_EQUAL_FLOAT(DS18B20_FULL, p.nodes[1].in_full[0]);
+    TEST_ASSERT_EQUAL_UINT8(ds->out_count, p.nodes[2].in[0]);
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "DS18B20 n1 pin 15 10-bit pull-up -> s0 found s1\n"));
+}
+
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
 void test_counter_payload_valid(void)
 {
@@ -1959,6 +2054,8 @@ int main(void)
     RUN_TEST(test_stepper_coils);
     RUN_TEST(test_servo_payload_read);
     RUN_TEST(test_servo_angle_and_pulse);
+    RUN_TEST(test_ds18b20_scratchpad);
+    RUN_TEST(test_ds18b20_program);
     RUN_TEST(test_neopixel_payload_read);
     RUN_TEST(test_neopixel_bar);
     RUN_TEST(test_neopixel_point);
