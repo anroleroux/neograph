@@ -1,23 +1,28 @@
 // NeoPixels: a chain of WS2812 LEDs on one pin, laid out as an array (rows of
-// columns), a circle (rings, one inside the other) or a doughnut (one ring). Its one
-// floating input is taken as a fraction of its source's full scale, as a servo takes
-// it, and its graphic draws that on the LEDs: for now a bar level indicator. The
-// device drives them; the browser only shows a preview in the settings.
+// columns), a circle (rings, one inside the other) or a doughnut (one ring). It takes
+// two wires: a number, taken as a fraction of its source's full scale as a servo takes
+// it, which its graphic draws on the LEDs (a bar level indicator, or a point moving
+// from a start to an end); and an on/off, which turns every LED off while it is off
+// (not wired, it is always on). The device drives them; the browser only shows a
+// preview in the settings.
 class uiNeoPixel extends uiComponents {
     constructor(x = 0, y = 0) {
         super("neopixel", x, y);
 
         this.tc = MSG_HW_NEOPIXEL;
 
+        // One wire of each type: a number, and an on/off. A new one replaces the wire
+        // of its type (see addEdge), so the input never drops the other's.
         this.inputs.push(
             {
                 type: "float",
                 conns: [],
-                max: 1
+                max: 3
             }
         );
         this.actDir = "inputs";
         this.actNum = 0;
+        this.wireRefs = 2;                 // restoreGraph: its value's source, then its on/off's
 
         this.pin = freePin(this, 16);      // 16, unless another node uses it
         this.layout = NEOPIXEL_ARRAY;
@@ -29,9 +34,13 @@ class uiNeoPixel extends uiComponents {
         this.brightness = 40;              // 0-255: NeoPixels are bright, and draw up to 60 mA each
         this.graphic = NEOPIXEL_GFX_BAR;
         this.along = NEOPIXEL_BAR_ROW;     // a bar: along a row or column; around a ring or across the rings
-        this.position = 0;                 // which row, column or ring; a doughnut's first LED. From 0
+        this.position = 0;                 // a bar: which row, column or ring; a doughnut's first LED. From 0
+        this.from = [0, 0];                // a point: its start and end: an array's row and column; a
+        this.to = [7, 7];                  //   circle's ring and LED; a doughnut's 0 and LED. From 0
         this.reverse = false;
+        this.colourInput = false;          // its colour goes from `colour` at 0 to `colourAt1` at 1
         this.colour = [0, 255, 0];
+        this.colourAt1 = [255, 0, 0];
         this.preview = 0.6;                // the level the settings preview shows; not saved
 
         this.buildGraphElement();
@@ -55,6 +64,35 @@ class uiNeoPixel extends uiComponents {
         this.gElmHighlight = g.children[3];
     }
 
+    // ── Its two wires ──
+
+    // The type of what a wire brings: "float" for its value, "bool" for on/off.
+    static wireType(conn) {
+        return conn.start.node.outputs[conn.start.output].type;
+    }
+
+    // A number or an on/off, from a source whose values reach the device. Not a
+    // block's port that takes its type from its first wire: which input it would be
+    // is not known.
+    takesType(source, output = source.actNum) {
+        const out = source.outputs[output];
+        return !!out && !out.browserOnly && !source.typeFromWire?.() && (out.type === 'float' || out.type === 'bool');
+    }
+
+    // A wire in replaces the one of its type.
+    addEdge(e) {
+        if (e.end.node === this) {
+            const type = uiNeoPixel.wireType(e);
+            this.inConns().filter(c => uiNeoPixel.wireType(c) === type).forEach(c => c.remove());
+        }
+        super.addEdge(e);
+    }
+
+    valueConn() { return this.inConns().find(c => uiNeoPixel.wireType(c) === 'float'); }
+    enableConn() { return this.inConns().find(c => uiNeoPixel.wireType(c) === 'bool'); }
+
+    // ── Its layout ──
+
     // Its size as saved (see NEOPIXEL_ layouts): an array's rows and columns, a
     // circle's rings, a doughnut's LEDs.
     size() {
@@ -74,11 +112,21 @@ class uiNeoPixel extends uiComponents {
         return this.ringLeds;
     }
 
-    // After a change of layout, size or direction: a bar position it doesn't have
-    // goes back to the first.
+    // Whether a point's place [a, b] is on its LEDs: an array's row and column, a
+    // circle's ring and an LED of it, a doughnut's 0 and an LED.
+    placeValid([a, b]) {
+        if (this.layout === NEOPIXEL_ARRAY) return a < this.rows && b < this.cols;
+        if (this.layout === NEOPIXEL_CIRCLE) return a < this.rings.length && b < this.rings[a];
+        return a === 0 && b < this.ringLeds;
+    }
+
+    // After a change of layout, size or direction: a bar position or point place it
+    // doesn't have goes back to its default.
     keepPosition() {
         if (this.layout === NEOPIXEL_DOUGHNUT) this.along = NEOPIXEL_BAR_ROW;
         if (this.position >= this.positions()) this.position = 0;
+        if (!this.placeValid(this.from)) this.from = [0, 0];
+        if (!this.placeValid(this.to)) this.to = this.layout === NEOPIXEL_ARRAY ? [this.rows - 1, this.cols - 1] : [0, 0];
     }
 
     // Each setter returns false, and keeps what it had, for a value out of its range.
@@ -133,7 +181,7 @@ class uiNeoPixel extends uiComponents {
     }
 
     setGraphic(g) {
-        if (g !== NEOPIXEL_GFX_BAR) return false;
+        if (g !== NEOPIXEL_GFX_BAR && g !== NEOPIXEL_GFX_POINT) return false;
         this.graphic = g;
     }
 
@@ -144,22 +192,36 @@ class uiNeoPixel extends uiComponents {
         this.keepPosition();
     }
 
-    // A position as shown, from 1.
+    // A bar's position as shown, from 1.
     setPosition(v) {
         v = uiPWM.parse(v, 1, this.positions());
         if (v === null) return false;
         this.position = v - 1;
     }
 
-    // A colour as #rrggbb.
-    setColour(hex) {
-        const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex).trim());
-        if (!m) return false;
-        this.colour = m.slice(1).map(h => parseInt(h, 16));
+    // One part of a point's start or end (`end` 'from' or 'to'), as shown, from 1: k 0
+    // its row or ring, k 1 its column or LED. A ring keeps the LED if the ring has it,
+    // otherwise goes to its LED 1.
+    setPlace(end, k, v) {
+        const place = [...this[end]];
+        const max = this.layout === NEOPIXEL_ARRAY ? (k === 0 ? this.rows : this.cols)
+            : this.layout === NEOPIXEL_CIRCLE ? (k === 0 ? this.rings.length : this.rings[place[0]]) : this.ringLeds;
+        v = uiPWM.parse(v, 1, max);
+        if (v === null || (this.layout === NEOPIXEL_DOUGHNUT && k === 0)) return false;
+        place[k] = v - 1;
+        if (!this.placeValid(place)) place[1] = 0;
+        this[end] = place;
     }
 
-    colourHex() {
-        return '#' + this.colour.map(c => c.toString(16).padStart(2, '0')).join('');
+    // A colour as #rrggbb: its colour (at 0), or with `at1` its colour at 1.
+    setColour(hex, at1 = false) {
+        const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex).trim());
+        if (!m) return false;
+        this[at1 ? 'colourAt1' : 'colour'] = m.slice(1).map(h => parseInt(h, 16));
+    }
+
+    colourHex(at1 = false) {
+        return '#' + this[at1 ? 'colourAt1' : 'colour'].map(c => c.toString(16).padStart(2, '0')).join('');
     }
 
     usedPins() {
@@ -205,13 +267,48 @@ class uiNeoPixel extends uiComponents {
         return around(0, this.ringLeds, this.position);
     }
 
-    // Each LED's colour, [r, g, b], for its input at `fraction` of full scale.
-    render(fraction) {
+    // The LED its point is on at `fraction`: on an array straight from its start to its
+    // end; on a circle or doughnut from its start ring to its end ring, and around from
+    // its start angle to its end angle (once round from an LED to itself).
+    pointLed(fraction) {
+        if (this.layout === NEOPIXEL_ARRAY) {
+            const at = (k) => Math.floor(this.from[k] + (this.to[k] - this.from[k]) * fraction + 0.5);
+            return this.arrayLed(at(0), at(1));
+        }
+        const rings = this.layout === NEOPIXEL_CIRCLE ? this.rings : [this.ringLeds];
+        const outwards = this.layout === NEOPIXEL_CIRCLE ? this.ringsOutwards() : [0];
+        const rank = (p) => outwards.indexOf(p[0]), turn = (p) => p[1] / rings[p[0]];
+        const [rank0, rank1, turn0, turn1] = [rank(this.from), rank(this.to), turn(this.from), turn(this.to)];
+        let sweep = this.reverse ? turn0 - turn1 : turn1 - turn0;
+        if (sweep < 0) sweep += 1;
+        if (sweep === 0 && this.from[0] === this.to[0] && this.from[1] === this.to[1]) sweep = 1;
+        let t = turn0 + (this.reverse ? -sweep : sweep) * fraction;
+        t -= Math.trunc(t);
+        if (t < 0) t += 1;
+        const ring = outwards[Math.floor(rank0 + (rank1 - rank0) * fraction + 0.5)], n = rings[ring];
+        const first = this.layout === NEOPIXEL_CIRCLE ? this.ringFirst(ring) : 0;
+        return first + Math.floor(t * n + 0.5) % n;
+    }
+
+    // Its colour at `fraction`, [r, g, b], scaled by an amount and its brightness.
+    colourAt(fraction, amount) {
+        const t = this.colourInput ? fraction : 0, k = amount * this.brightness / 255;
+        return this.colour.map((c, i) => Math.floor((c + (this.colourAt1[i] - c) * t) * k + 0.5));
+    }
+
+    // Each LED's colour, [r, g, b], for its input at `fraction` of full scale; all off
+    // when not `on`.
+    render(fraction, on = true) {
         const out = Array.from({length: this.leds()}, () => [0, 0, 0]);
-        const steps = this.barSteps(), lit = Math.max(0, Math.min(1, fraction)) * steps;
+        if (!on) return out;
+        fraction = Math.max(0, Math.min(1, fraction));
+        if (this.graphic === NEOPIXEL_GFX_POINT) {
+            out[this.pointLed(fraction)] = this.colourAt(fraction, 1);
+            return out;
+        }
+        const steps = this.barSteps(), lit = fraction * steps;
         for (let e = 0; e < steps && lit > e; e++) {
-            const k = Math.min(1, lit - e) * this.brightness / 255;
-            const c = this.colour.map(v => Math.floor(v * k + 0.5));
+            const c = this.colourAt(fraction, Math.min(1, lit - e));
             this.barLeds(e).forEach(i => out[i] = c);
         }
         return out;
@@ -257,6 +354,8 @@ class uiNeoPixel extends uiComponents {
         return `<svg class="neopixel-preview" viewBox="${x0.toFixed(2)} ${y0.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)}" role="img" aria-label="Preview of the LEDs">${dots}</svg>`;
     }
 
+    // ── Settings ──
+
     createSettings() {
         super.createSettings();
         const settings = document.getElementById('settings');
@@ -281,51 +380,86 @@ class uiNeoPixel extends uiComponents {
         settings.appendChild(editableSetting('Brightness (0-255)', () => this.brightness, (v) => this.setBrightness(v),
             {type: 'number', min: 0, max: 255, step: 1}));
 
-        settings.appendChild(selectSetting('Graphic', [[NEOPIXEL_GFX_BAR, 'Bar level']],
+        settings.appendChild(selectSetting('Graphic', [[NEOPIXEL_GFX_BAR, 'Bar level'], [NEOPIXEL_GFX_POINT, 'Point']],
             () => this.graphic, (v) => { this.setGraphic(Number(v)); again(); }));
-        this.barSettings(settings, again);
+        if (this.graphic === NEOPIXEL_GFX_POINT) this.pointSettings(settings, again);
+        else this.barSettings(settings, again);
+        this.colourSettings(settings, again);
         settings.appendChild(this.previewSetting());
     }
 
-    // A bar's settings: what it runs along and where, which way, and its colour.
+    direction(settings, again, forward, back) {
+        settings.appendChild(choiceSetting('Direction', {forward, back},
+            () => this.reverse ? 'back' : 'forward', (v) => { this.reverse = v === 'back'; again(); }));
+    }
+
+    // A bar's settings: what it runs along and where, and which way.
     barSettings(settings, again) {
         const along = (options) => settings.appendChild(choiceSetting('Along', options,
             () => String(this.along), (v) => { this.setAlong(Number(v)); again(); }));
         const position = (label) => settings.appendChild(editableSetting(label, () => this.position + 1,
             (v) => this.setPosition(v) ?? again(), {type: 'number', min: 1, max: this.positions(), step: 1}));
-        const direction = (forward, back) => settings.appendChild(choiceSetting('Direction', {forward, back},
-            () => this.reverse ? 'back' : 'forward', (v) => { this.reverse = v === 'back'; again(); }));
 
         if (this.layout === NEOPIXEL_ARRAY) {
             along({[NEOPIXEL_BAR_ROW]: 'Row', [NEOPIXEL_BAR_COLUMN]: 'Column'});
             const row = this.along === NEOPIXEL_BAR_ROW;
             position(row ? 'Row' : 'Column');
-            direction(row ? 'Left to right' : 'Bottom up', row ? 'Right to left' : 'Top down');
+            this.direction(settings, again, row ? 'Left to right' : 'Bottom up', row ? 'Right to left' : 'Top down');
         } else if (this.layout === NEOPIXEL_CIRCLE) {
             along({[NEOPIXEL_BAR_ROW]: 'Around a ring', [NEOPIXEL_BAR_COLUMN]: 'Centre out'});
             if (this.along === NEOPIXEL_BAR_ROW) {
                 position('Ring');
-                direction('As wired', 'Reversed');
+                this.direction(settings, again, 'As wired', 'Reversed');
             } else {
-                direction('Centre out', 'Outside in');
+                this.direction(settings, again, 'Centre out', 'Outside in');
             }
         } else {
             position('Starts at LED');
-            direction('As wired', 'Reversed');
+            this.direction(settings, again, 'As wired', 'Reversed');
         }
-        settings.appendChild(this.colourSetting());
     }
 
-    colourSetting() {
+    // A point's settings: where it starts and ends, and on a ring which way round.
+    pointSettings(settings, again) {
+        const place = (end, k, label, max) => settings.appendChild(editableSetting(label, () => this[end][k] + 1,
+            (v) => this.setPlace(end, k, v) ?? again(), {type: 'number', min: 1, max, step: 1}));
+        for (const [end, name] of [['from', 'Start'], ['to', 'End']]) {
+            if (this.layout === NEOPIXEL_ARRAY) {
+                place(end, 0, `${name} row`, this.rows);
+                place(end, 1, `${name} column`, this.cols);
+            } else if (this.layout === NEOPIXEL_CIRCLE) {
+                place(end, 0, `${name} ring`, this.rings.length);
+                place(end, 1, `${name} LED`, this.rings[this[end][0]]);
+            } else {
+                place(end, 1, `${name} LED`, this.ringLeds);
+            }
+        }
+        if (this.layout !== NEOPIXEL_ARRAY) this.direction(settings, again, 'As wired', 'Reversed');
+    }
+
+    // Its colour: one, or from a colour at 0 to a colour at 1 with its input.
+    colourSettings(settings, again) {
+        settings.appendChild(choiceSetting('Colour', {fixed: 'Fixed', input: 'From input'},
+            () => this.colourInput ? 'input' : 'fixed', (v) => { this.colourInput = v === 'input'; again(); }));
+        if (this.colourInput) {
+            settings.appendChild(this.colourPicker('Colour at 0', false));
+            settings.appendChild(this.colourPicker('Colour at 1', true));
+        } else {
+            settings.appendChild(this.colourPicker('Fixed colour', false));
+        }
+    }
+
+    colourPicker(text, at1) {
         const row = document.createElement('div');
         row.className = 'editable colour';
         const label = document.createElement('span');
         label.className = 'label';
-        label.textContent = 'Colour:';
+        label.textContent = text + ':';
         const input = document.createElement('input');
         input.type = 'color';
-        input.value = this.colourHex();
-        input.addEventListener('input', () => { this.setColour(input.value); this.drawPreview(); });
+        input.value = this.colourHex(at1);
+        input.setAttribute('aria-label', text);
+        input.addEventListener('input', () => { this.setColour(input.value, at1); this.drawPreview(); });
         row.append(label, input);
         return row;
     }
@@ -361,49 +495,80 @@ class uiNeoPixel extends uiComponents {
 
     buildUI(commandInterface) {}
 
+    // ── Saving ──
+
+    // Its graphic's settings, as saved: a bar's or a point's, then its options and
+    // colour, and with NEOPIXEL_GFX_COLOUR_INPUT its colour at 1.
+    graphicBytes() {
+        const options = (this.reverse ? NEOPIXEL_GFX_REVERSE : 0) | (this.colourInput ? NEOPIXEL_GFX_COLOUR_INPUT : 0);
+        const head = this.graphic === NEOPIXEL_GFX_POINT ? [...this.from, ...this.to] : [this.along, this.position];
+        return [...head, options, ...this.colour, ...(this.colourInput ? this.colourAt1 : [])];
+    }
+
     marshal() {
-        const size = this.size();
-        const bar = [this.along, this.position, this.reverse ? NEOPIXEL_BAR_REVERSE : 0, ...this.colour];
-        const pay = [...this.sourceRef(), this.pin, this.layout, this.zigzag ? NEOPIXEL_ZIGZAG : 0, this.brightness,
-            size.length, ...size, this.graphic, bar.length, ...bar];
+        const size = this.size(), gfx = this.graphicBytes();
+        const pay = [...connRef(this.valueConn()), ...connRef(this.enableConn()),
+            this.pin, this.layout, this.zigzag ? NEOPIXEL_ZIGZAG : 0, this.brightness,
+            size.length, ...size, this.graphic, gfx.length, ...gfx];
         return [this.tc, MSG_FLAG_OUTPUT, (this.id >> 8) & 0xFF, this.id & 0xFF, pay.length, ...pay];
     }
 
-    // Its settings, after its source reference. One the device wouldn't run keeps the
-    // defaults (see neopixel_payload_read); so does a pin another node has.
+    // Its settings, after its two source references (r is one's length). One the
+    // device wouldn't run keeps the defaults (see neopixel_payload_read); so does a pin
+    // another node has.
     restore(pay, r, len) {
-        const q = (i) => pay[r + i];
-        if (len < r + 5) return;
+        const at = 2 * r, q = (i) => pay[at + i];
+        if (len < at + 5) return;
         const k = q(4);
-        if (k < 1 || k > NEOPIXEL_RINGS_MAX || len < r + 7 + k || len !== r + 7 + k + q(6 + k)) return;
+        if (k < 1 || k > NEOPIXEL_RINGS_MAX || len < at + 7 + k || len !== at + 7 + k + q(6 + k)) return;
         const [pin, layout, options, brightness] = [0, 1, 2, 3].map(q);
         const size = [...Array(k).keys()].map(i => q(5 + i));
-        const g = (i) => q(5 + k + i);
-        if (options & ~NEOPIXEL_ZIGZAG || size.includes(0) || g(0) !== NEOPIXEL_GFX_BAR || g(1) !== NEOPIXEL_BAR_LEN) return;
-        const [along, position, barOptions] = [g(2), g(3), g(4)];
-        if (barOptions & ~NEOPIXEL_BAR_REVERSE || along > NEOPIXEL_BAR_COLUMN) return;
+        const graphic = q(5 + k), g = (i) => q(7 + k + i);
+        if (options & ~NEOPIXEL_ZIGZAG || size.includes(0)) return;
         const leds = layout === NEOPIXEL_ARRAY ? size[0] * size[1] : size.reduce((a, b) => a + b, 0);
-        if (leds > NEOPIXEL_LEDS_MAX) return;
-        if (layout === NEOPIXEL_ARRAY) {
-            if (k !== 2 || position >= size[along === NEOPIXEL_BAR_ROW ? 0 : 1]) return;
-            [this.rows, this.cols] = size;
-        } else if (layout === NEOPIXEL_CIRCLE) {
-            if (along === NEOPIXEL_BAR_COLUMN ? position !== 0 : position >= k) return;
-            this.rings = size;
-        } else if (layout === NEOPIXEL_DOUGHNUT) {
-            if (k !== 1 || along !== NEOPIXEL_BAR_ROW || position >= size[0]) return;
-            this.ringLeds = size[0];
+        if (leds > NEOPIXEL_LEDS_MAX || ![NEOPIXEL_ARRAY, NEOPIXEL_CIRCLE, NEOPIXEL_DOUGHNUT].includes(layout)
+            || (layout === NEOPIXEL_ARRAY && k !== 2) || (layout === NEOPIXEL_DOUGHNUT && k !== 1)) return;
+        const base = graphic === NEOPIXEL_GFX_BAR ? NEOPIXEL_BAR_LEN : graphic === NEOPIXEL_GFX_POINT ? NEOPIXEL_POINT_LEN : 0;
+        if (!base) return;
+        const gfxOptions = g(base - NEOPIXEL_COLOUR_LEN - 1);
+        const colourInput = !!(gfxOptions & NEOPIXEL_GFX_COLOUR_INPUT);
+        if (gfxOptions & ~(NEOPIXEL_GFX_REVERSE | NEOPIXEL_GFX_COLOUR_INPUT)
+            || q(6 + k) !== base + (colourInput ? NEOPIXEL_COLOUR_LEN : 0)) return;
+
+        // Its layout first, which the graphic's settings are checked against.
+        const was = {layout: this.layout, rows: this.rows, cols: this.cols, rings: this.rings, ringLeds: this.ringLeds};
+        this.layout = layout;
+        if (layout === NEOPIXEL_ARRAY) [this.rows, this.cols] = size;
+        else if (layout === NEOPIXEL_CIRCLE) this.rings = size;
+        else this.ringLeds = size[0];
+        let ok;
+        if (graphic === NEOPIXEL_GFX_POINT) {
+            ok = this.placeValid([g(0), g(1)]) && this.placeValid([g(2), g(3)]);
         } else {
+            const [along, position] = [g(0), g(1)];
+            ok = along <= NEOPIXEL_BAR_COLUMN && (layout === NEOPIXEL_ARRAY ? position < size[along === NEOPIXEL_BAR_ROW ? 0 : 1]
+                : layout === NEOPIXEL_CIRCLE ? (along === NEOPIXEL_BAR_COLUMN ? position === 0 : position < k)
+                : along === NEOPIXEL_BAR_ROW && position < size[0]);
+        }
+        if (!ok) {
+            Object.assign(this, was);
             return;
         }
+        if (graphic === NEOPIXEL_GFX_POINT) {
+            this.from = [g(0), g(1)];
+            this.to = [g(2), g(3)];
+        } else {
+            this.along = g(0);
+            this.position = g(1);
+        }
         if (pinUsable(pin) && !pinsInUse(this).has(pin)) this.pin = pin;
-        this.layout = layout;
         this.zigzag = !!(options & NEOPIXEL_ZIGZAG);
         this.brightness = brightness;
-        this.graphic = g(0);
-        this.along = along;
-        this.position = position;
-        this.reverse = !!(barOptions & NEOPIXEL_BAR_REVERSE);
-        this.colour = [g(5), g(6), g(7)];
+        this.graphic = graphic;
+        this.reverse = !!(gfxOptions & NEOPIXEL_GFX_REVERSE);
+        this.colourInput = colourInput;
+        this.colour = [base - 3, base - 2, base - 1].map(g);
+        if (colourInput) this.colourAt1 = [base, base + 1, base + 2].map(g);
+        this.keepPosition();
     }
 }

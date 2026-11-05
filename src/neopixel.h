@@ -14,11 +14,17 @@
 // takes it. Not a finite number reads 0.
 float neopixel_fraction(const prog_node *n, float in);
 
+// Whether its on/off input lets it show: on from 0.5, or not wired.
+bool neopixel_enabled(const prog_node *n, float enable);
+
 // Each of its LEDs' colours, in the order they are wired, for its input at `fraction`
 // of full scale: out[i] for LED i, of px->leds. A colour is as a WS2812 takes it, and
 // as the PIO shifts it out, from bit 31: green in bits 31-24, red 23-16, blue 15-8.
-// Its brightness scales each colour.
-void neopixel_render(const neopixel_payload *px, float fraction, uint32_t *out);
+// Its brightness scales each colour. Not `on`, every LED is off.
+void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32_t *out);
+
+// The LED a point is on, for its input at `fraction` of full scale.
+uint16_t neopixel_point_led(const neopixel_payload *px, float fraction);
 
 // The LED an array's row and column (from 0, at the top left) is wired to.
 uint16_t neopixel_array_led(const neopixel_payload *px, uint8_t row, uint8_t col);

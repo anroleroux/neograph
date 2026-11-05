@@ -198,7 +198,8 @@ const SERVO_PULSE_MAX        = 3000;  // µs, the longest
 const SERVO_SPEED_MAX        = 3600;  // °/s, the highest speed limit; 0 = none
 
 // NeoPixel (MSG_HW_NEOPIXEL) payload: a chain of WS2812 LEDs on one pin, laid out as an
-// array, a circle or a doughnut, showing a graphic of its input.
+// array, a circle or a doughnut, showing a graphic of its input while its on/off input
+// is on (or not wired).
 const NEOPIXEL_ARRAY         = 0x00;  // layout: rows × columns; LED 0 at the top left, along the top row
 const NEOPIXEL_CIRCLE        = 0x01;  // layout: 1 to NEOPIXEL_RINGS_MAX rings, in the order they are wired
 const NEOPIXEL_DOUGHNUT      = 0x02;  // layout: one ring of LEDs
@@ -206,10 +207,14 @@ const NEOPIXEL_ZIGZAG        = 0x01;  // options bit 0, an array: every other ro
 const NEOPIXEL_RINGS_MAX     = 8;     // a circle's rings
 const NEOPIXEL_LEDS_MAX      = 256;   // LEDs on one node
 const NEOPIXEL_GFX_BAR       = 0x00;  // graphic: a bar level indicator
-const NEOPIXEL_BAR_LEN       = 6;     // a bar's settings: along, position, options, red, green, blue
+const NEOPIXEL_GFX_POINT     = 0x01;  // graphic: one LED, moving from a start to an end as its input goes 0 to 1
+const NEOPIXEL_GFX_REVERSE   = 0x01;  // graphic options bit 0: it runs the other way
+const NEOPIXEL_GFX_COLOUR_INPUT = 0x02;  // graphic options bit 1: its colour goes from a colour at 0 to one at 1
+const NEOPIXEL_BAR_LEN       = 6;     // a bar's settings: along, position, options, then its colour
+const NEOPIXEL_POINT_LEN     = 8;     // a point's settings: its start and end, options, then its colour
+const NEOPIXEL_COLOUR_LEN    = 3;     // red, green, blue; a second colour with NEOPIXEL_GFX_COLOUR_INPUT
 const NEOPIXEL_BAR_ROW       = 0x00;  // a bar along an array's row; around a circle's ring; around a doughnut
 const NEOPIXEL_BAR_COLUMN    = 0x01;  // a bar up an array's column; across a circle's rings, from the centre out
-const NEOPIXEL_BAR_REVERSE   = 0x01;  // bar options bit 0: it runs the other way
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;

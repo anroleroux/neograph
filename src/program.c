@@ -449,8 +449,9 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             neopixel_payload px;
             if (!neopixel_payload_read(itr.pay, itr.len, itr.flags, &px)) break;
             if (!(n = add_node(p, itr.type, itr.id))) break;
-            n->in_count = 1;
+            n->in_count = 2;
             n->in[0] = ref_signal(p, px.source);
+            n->in[1] = ref_signal(p, px.enable);
             n->in_full[0] = signal_full(p, n->in[0]);
             n->pin = px.pin;
             n->px = px;
@@ -647,14 +648,23 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             } else {
                 put(&t, "doughnut %u", px->size[0]);
             }
-            put(&t, " brightness %u bar ", px->brightness);
-            if (px->layout == NEOPIXEL_ARRAY) put(&t, "%s %u", px->along == NEOPIXEL_BAR_ROW ? "row" : "column", px->position);
-            else if (px->layout == NEOPIXEL_CIRCLE && px->along == NEOPIXEL_BAR_COLUMN) put(&t, "outwards");
-            else put(&t, "%s %u", px->layout == NEOPIXEL_CIRCLE ? "ring" : "from", px->position);
-            put(&t, "%s colour %02X%02X%02X <- ", px->bar_options & NEOPIXEL_BAR_REVERSE ? " reverse" : "",
-                px->red, px->green, px->blue);
+            put(&t, " brightness %u ", px->brightness);
+            if (px->graphic == NEOPIXEL_GFX_POINT) {
+                put(&t, "point %u,%u-%u,%u", px->from[0], px->from[1], px->to[0], px->to[1]);
+            } else {
+                put(&t, "bar ");
+                if (px->layout == NEOPIXEL_ARRAY) put(&t, "%s %u", px->along == NEOPIXEL_BAR_ROW ? "row" : "column", px->position);
+                else if (px->layout == NEOPIXEL_CIRCLE && px->along == NEOPIXEL_BAR_COLUMN) put(&t, "outwards");
+                else put(&t, "%s %u", px->layout == NEOPIXEL_CIRCLE ? "ring" : "from", px->position);
+            }
+            put(&t, "%s colour %02X%02X%02X", px->gfx_options & NEOPIXEL_GFX_REVERSE ? " reverse" : "",
+                px->colour[0][0], px->colour[0][1], px->colour[0][2]);
+            if (px->gfx_options & NEOPIXEL_GFX_COLOUR_INPUT)
+                put(&t, "-%02X%02X%02X", px->colour[1][0], px->colour[1][1], px->colour[1][2]);
+            put(&t, " <- ");
             put_signal(&t, n->in[0]);
-            put(&t, " / %.4g", (double)n->in_full[0]);
+            put(&t, " / %.4g on <- ", (double)n->in_full[0]);
+            put_signal(&t, n->in[1]);
             break;
         }
         default: put(&t, "? n%u", n->id); break;

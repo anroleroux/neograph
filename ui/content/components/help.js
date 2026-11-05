@@ -42,10 +42,12 @@ const NODE_HELP = {
         "A servo uses its pin's PWM slice, so a PWM or another servo can't use the other pin on that slice.",
     ],
     neopixel: [
-        "NeoPixels (WS2812 LEDs) on one pin, showing a graphic of the number wired in. The input is taken as a fraction of its source's full scale (1 for a slider, 3.3 V for an ADC), as a servo takes it.",
+        "NeoPixels (WS2812 LEDs) on one pin, showing a graphic of the number wired in. The number is taken as a fraction of its source's full scale (1 for a slider, 3.3 V for an ADC), as a servo takes it.",
+        "It also takes an on/off wire (a button, GPIO input or logic): while it is off, every LED is off. Not wired, it is always on. A new wire replaces the one of its type.",
         "Layout: an Array is rows of columns, LED 1 at the top left along the top row (Zigzag: every other row runs back). A Circle is rings one inside another, listed in the order they are wired. A Doughnut is one ring.",
-        "Bar level lights a bar in its colour, as far as the input reaches; the LED it ends in is lit part way. On an array it runs along a row or up a column; on a circle around one ring, or across the rings from the centre out; on a doughnut around from the LED it starts at.",
-        "Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, not the Pico's 3.3 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
+        "Bar level lights a bar as far as the input reaches; the LED it ends in is lit part way. On an array it runs along a row or up a column; on a circle around one ring, or across the rings from the centre out; on a doughnut around from the LED it starts at.",
+        "Point lights one LED, moving from its start at 0 to its end at 1: on an array in a straight line, any way across; on a circle or doughnut around (and from ring to ring), the way Direction says. The same LED at both ends goes once round.",
+        "Colour: Fixed, or From input, which blends from Colour at 0 to Colour at 1 as the input rises. Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
     ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",

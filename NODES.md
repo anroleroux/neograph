@@ -198,12 +198,17 @@ Things to know:
 | | |
 |---|---|
 | Category | Hardware output |
-| Input | Number, as a fraction of its source's full scale |
+| Inputs | A number, as a fraction of its source's full scale; and an on/off |
 | Default label | NEOPIXEL |
 
 A chain of NeoPixels (WS2812 LEDs) on one pin, showing a graphic of its input. As with
-a servo, the input is taken as a fraction of its source's full scale: 1 for a slider or
+a servo, the number is taken as a fraction of its source's full scale: 1 for a slider or
 scale, 3.3 V for an ADC, 100 °C for the core temperature, a counter's preset.
+
+It takes two wires, told apart by their type: a **number**, which the graphic shows,
+and an **on/off** (a button, a GPIO input or logic). While the on/off is off every LED
+is off; with none wired it is always on. A new wire of either type replaces the old one
+of that type.
 
 The node's settings say how the LEDs are laid out, and which graphic they show:
 
@@ -216,7 +221,8 @@ The node's settings say how the LEDs are laid out, and which graphic they show:
 | Rings (LEDs, as wired) | 1–8 rings, at most 256 LEDs | 24, 16, 12, 8, 1 | A circle: each ring's LEDs, in the order they are wired. |
 | LEDs | 1–255 | 24 | A doughnut's size. |
 | Brightness (0-255) | 0–255 | 40 | Scales every colour. |
-| Graphic | Bar level | Bar level | What it shows. |
+| Graphic | Bar level, Point | Bar level | What it shows. |
+| Colour | Fixed, From input | Fixed | **Fixed:** one colour, picked with the colour picker. **From input:** a Colour at 0 and a Colour at 1, and in between a blend of the two as the input goes from 0 to 1 (green to red is yellow half way). |
 
 The **Bar level** graphic lights a bar in its colour as far as the input reaches; the
 LED it ends in is lit part way, so it moves smoothly. Its settings depend on the layout:
@@ -227,7 +233,15 @@ LED it ends in is lit part way, so it moves smoothly. Its settings depend on the
 | Circle | Around a ring, or Centre out | Around a ring: which ring, from 1 in wiring order. Centre out lights whole rings, the smallest first. | Around a ring: As wired, or Reversed. Centre out, or Outside in. |
 | Doughnut | Around | Starts at LED, from 1 | As wired, or Reversed. |
 
-Each has a **Colour**, picked with the colour picker. Under the settings a **preview**
+The **Point** graphic lights one LED, which moves from its start at 0 to its end at 1:
+
+| Layout | Start and end | Direction |
+|---|---|---|
+| Array | A row and a column each, from 1. It goes in a straight line between them: along a row, up or down a column, or on a slant | (none) |
+| Circle | A ring (in wiring order) and an LED of that ring each, from 1. It moves from ring to ring, and around from the start's angle to the end's | As wired, or Reversed: which way round it goes |
+| Doughnut | An LED each, from 1. The same LED at both ends goes once all the way round | As wired, or Reversed |
+
+Under the settings a **preview**
 draws the LEDs with the graphic at the level of its slider, at full brightness, so a
 dim setting still shows; point at an LED for its number.
 
@@ -238,6 +252,8 @@ Things to know:
   down: at 40 a white LED draws about 10 mA.
 - **The data line** goes straight to the pin. Most WS2812Bs take 3.3 V on it; if yours
   flicker or show the wrong colours, a level shifter to 5 V fixes it.
+- **The on/off** is read on the device: a button in the Command view, a GPIO input or
+  logic turns the LEDs on and off within one 10 ms scan.
 - **Up to 256 LEDs a node, and 1024 in all.** Each node takes one of the chip's PIO
   state machines and a DMA channel; a node that finds none free is skipped.
 - **On a save** the LEDs keep what they show until the device draws them again; taken

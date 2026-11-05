@@ -274,7 +274,10 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_HW_NEOPIXEL: {
             neopixel_payload px;
             if (!neopixel_payload_read(it.pay, it.len, it.flags, &px)) fail("NeoPixel payload is not one the device runs; it would skip it");
-            else check_source(p, len, px.source, FLOATING, "NeoPixels are wired from something not floating");
+            else {
+                check_source(p, len, px.source, FLOATING, "NeoPixels are wired from something not floating");
+                check_source(p, len, px.enable, BOOLEAN, "NeoPixels' on/off is wired from something not on/off");
+            }
             break;
         }
         case MSG_HW_STEPPER: {

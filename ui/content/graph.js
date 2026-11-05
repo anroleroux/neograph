@@ -359,7 +359,7 @@ function buildGraph(msgs) {
     idCounter = Math.max(...controls.keys()) + 1;
 
     // Wires: each output's source references (a PWM's duty and frequency
-    // sources, an AND's or OR's several, a latch's or counter's roles, another
+    // sources, NeoPixels' value and on/off, an AND's or OR's several, a latch's or counter's roles, another
     // output's or logic's one source), shaped by their MSG_WIRE messages if there
     // are any (otherwise drawn straight between the nodes). Feedback wires come
     // last, so each closes the loop it closed when it was drawn.
@@ -396,7 +396,8 @@ function buildGraph(msgs) {
             // An AND, OR, min or max has a reference for each wire in; the others one.
             const r = refLen(m);
             const several = [MSG_LOGIC_AND, MSG_LOGIC_OR, MSG_LOGIC_MIN, MSG_LOGIC_MAX].includes(m.type);
-            const refs = several ? Math.floor(m.len / r) : 1;
+            // NeoPixels have two: their value's, then their on/off's (wireRefs).
+            const refs = several ? Math.floor(m.len / r) : elm.wireRefs ?? 1;
             for (let k = 0; k < refs; k++) {
                 const ref = refAt(m, k * r);
                 // None if the types don't match, or (in a config not saved by the UI) it would close

@@ -296,7 +296,8 @@ const hw_program *program_running(uint32_t *generation) {
 typedef struct {
     bool ok;                    // set up: its pin was usable and free
     bool driven;                // driven since the program was taken
-    bool on;                    // LED, GPO, GPIO input: its state; keyboard: whether its input is on
+    bool on;                    // LED, GPO, GPIO input: its state; keyboard: whether its input is on;
+                                // NeoPixels: whether their on/off input lets them show
     uint8_t differ;             // GPIO input: reads in a row that differ from its state
     float duty;                 // PWM: the duty cycle it runs at, percent
     uint16_t freq;              // PWM: the frequency its slice runs at
@@ -691,13 +692,15 @@ static void scan(uint32_t count) {
             // Sent again when what they show changes, once the last send is out; if it
             // isn't yet, at a later scan.
             float f = neopixel_fraction(n, signal_value(p, n->in[0]));
-            if (st->driven && f == st->fraction) break;
+            bool on = neopixel_enabled(n, signal_value(p, n->in[1]));
+            if (st->driven && f == st->fraction && on == st->on) break;
             uint64_t now = time_us_64();
             if (now < st->ready_us || dma_channel_is_busy((uint)st->dma)) break;
-            neopixel_render(&n->px, f, st->leds);
+            neopixel_render(&n->px, f, on, st->leds);
             dma_channel_transfer_from_buffer_now((uint)st->dma, st->leds, n->px.leds);
             st->ready_us = now + (uint64_t)n->px.leds * NEOPIXEL_LED_US + NEOPIXEL_RESET_US;
             st->fraction = f;
+            st->on = on;
             st->driven = true;
             break;
         }

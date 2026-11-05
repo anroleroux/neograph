@@ -9,6 +9,10 @@ float neopixel_fraction(const prog_node *n, float in) {
     return f < 0 ? 0 : f > 1 ? 1 : f;
 }
 
+bool neopixel_enabled(const prog_node *n, float enable) {
+    return n->in[1] == PROG_NO_SIGNAL || enable >= 0.5f;
+}
+
 uint16_t neopixel_array_led(const neopixel_payload *px, uint8_t row, uint8_t col) {
     uint8_t cols = px->size[1];
     if ((px->options & NEOPIXEL_ZIGZAG) && (row & 1)) col = (uint8_t)(cols - 1 - col);
@@ -44,16 +48,23 @@ static uint16_t bar_steps(const neopixel_payload *px) {
     }
 }
 
-// Scale a colour by an amount, 0 to 1, and the node's brightness; as a WS2812 takes it.
-static uint32_t colour(const neopixel_payload *px, float amount) {
+// Its colour for its input at `fraction`: the one colour, or with
+// NEOPIXEL_GFX_COLOUR_INPUT from its colour at 0 to its colour at 1. Scaled by an
+// amount, 0 to 1, and the node's brightness; as a WS2812 takes it.
+static uint32_t colour(const neopixel_payload *px, float fraction, float amount) {
+    float t = px->gfx_options & NEOPIXEL_GFX_COLOUR_INPUT ? fraction : 0;
     float k = amount * px->brightness / 255.0f;
-    uint32_t r = (uint32_t)(px->red * k + 0.5f), g = (uint32_t)(px->green * k + 0.5f), b = (uint32_t)(px->blue * k + 0.5f);
-    return g << 24 | r << 16 | b << 8;
+    uint32_t c[3];
+    for (int i = 0; i < 3; i++) {
+        float v = px->colour[0][i] + ((float)px->colour[1][i] - px->colour[0][i]) * t;
+        c[i] = (uint32_t)(v * k + 0.5f);
+    }
+    return c[1] << 24 | c[0] << 16 | c[2] << 8;
 }
 
 // Light step `e` of a bar, from the start of the bar.
 static void bar_light(const neopixel_payload *px, uint16_t e, uint32_t c, uint32_t *out) {
-    bool reverse = px->bar_options & NEOPIXEL_BAR_REVERSE;
+    bool reverse = px->gfx_options & NEOPIXEL_GFX_REVERSE;
     uint16_t steps = bar_steps(px);
     uint16_t s = reverse ? (uint16_t)(steps - 1 - e) : e;
     switch (px->layout) {
@@ -84,15 +95,55 @@ static void bar_light(const neopixel_payload *px, uint16_t e, uint32_t c, uint32
     }
 }
 
-void neopixel_render(const neopixel_payload *px, float fraction, uint32_t *out) {
+// A circle's (or doughnut's) place: its rank from the centre out, and its angle, in
+// turns from the ring's LED 0, in wiring order.
+static void ring_place(const neopixel_payload *px, const uint8_t at[2], const uint8_t outwards[NEOPIXEL_RINGS_MAX],
+                       float *rank, float *turn) {
+    uint8_t k = px->layout == NEOPIXEL_CIRCLE ? px->size_len : 1;
+    for (uint8_t j = 0; j < k; j++) if (outwards[j] == at[0]) *rank = j;
+    *turn = (float)at[1] / px->size[at[0]];
+}
+
+uint16_t neopixel_point_led(const neopixel_payload *px, float fraction) {
+    if (px->layout == NEOPIXEL_ARRAY) {
+        // Straight from its start to its end: across, up or down, or on a slant.
+        float row = px->from[0] + ((float)px->to[0] - px->from[0]) * fraction;
+        float col = px->from[1] + ((float)px->to[1] - px->from[1]) * fraction;
+        return neopixel_array_led(px, (uint8_t)(row + 0.5f), (uint8_t)(col + 0.5f));
+    }
+    // A circle or doughnut: from its start ring to its end ring, and around from its
+    // start angle to its end angle, in wiring order (reversed, the other way). The same
+    // LED at both ends goes once all the way round.
+    uint8_t outwards[NEOPIXEL_RINGS_MAX] = { 0 };
+    if (px->layout == NEOPIXEL_CIRCLE) rings_outwards(px, outwards);
+    float rank0 = 0, rank1 = 0, turn0, turn1;
+    ring_place(px, px->from, outwards, &rank0, &turn0);
+    ring_place(px, px->to, outwards, &rank1, &turn1);
+    bool reverse = px->gfx_options & NEOPIXEL_GFX_REVERSE;
+    float sweep = reverse ? turn0 - turn1 : turn1 - turn0;
+    if (sweep < 0) sweep += 1;
+    if (sweep == 0 && px->from[0] == px->to[0] && px->from[1] == px->to[1]) sweep = 1;
+    float turn = turn0 + (reverse ? -sweep : sweep) * fraction;
+    turn -= (float)(int)turn;
+    if (turn < 0) turn += 1;
+    uint8_t ring = outwards[(uint8_t)(rank0 + (rank1 - rank0) * fraction + 0.5f)];
+    uint16_t n = px->size[ring];
+    return (uint16_t)(ring_first(px, ring) + (uint16_t)(turn * n + 0.5f) % n);
+}
+
+void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32_t *out) {
     memset(out, 0, px->leds * sizeof out[0]);
-    if (px->graphic != NEOPIXEL_GFX_BAR) return;
+    if (!on) return;
+    if (px->graphic == NEOPIXEL_GFX_POINT) {
+        out[neopixel_point_led(px, fraction)] = colour(px, fraction, 1);
+        return;
+    }
     // A bar: its steps up to fraction × its length lit, and the step it ends in lit as
     // much as it is reached, so it moves smoothly.
     uint16_t steps = bar_steps(px);
     float lit = fraction * steps;
     for (uint16_t e = 0; e < steps && lit > e; e++) {
         float amount = lit - e;
-        bar_light(px, e, colour(px, amount > 1 ? 1 : amount), out);
+        bar_light(px, e, colour(px, fraction, amount > 1 ? 1 : amount), out);
     }
 }
