@@ -130,7 +130,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const packets = [];
 
     // ── The demo graph: the button drives the LED; below, a second button starts a
-    // copy of the block "Blink 3", whose loop blinks the light three times ──
+    // copy of the block "Blink 3", whose loop blinks the light three times; at the
+    // bottom a slider drives a 4 × 4 NeoPixel array ──
     let { page, errors } = await open(browser, true);
     const demo = await page.evaluate(async () => {
         const wires = gEdges.map(e => e.start.node.name + '>' + e.end.node.name + (e.feedback ? '~' : '')).join(' ');
@@ -148,7 +149,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             after: [copy.outs[0], elements.n5.on, ...parts.filter(n => n instanceof uiLatch || n instanceof uiCounter)
                 .map(n => n instanceof uiCounter ? n.count : n.value)].join() };
     });
-    expect(demo.wires === 'n1>n2 n3>n4 n4>n5' && demo.types === 'button,led,button,block,light' && demo.def === 'Blink 3'
+    expect(demo.wires === 'n1>n2 n3>n4 n4>n5 n10>n11' && demo.types === 'button,led,button,block,light,slider,neopixel'
+        && demo.def === 'Blink 3'
         && demo.inside === 'Start>Latch,Latch>Blink,Blink>Blink,Blink>Counter,Latch>NOT,NOT>Counter,Counter>Latch~'
         && demo.parts === '6,4', 'the demo graph is not as expected: ' + JSON.stringify(demo));
     expect(demo.blinks === 3 && demo.after === '0,false,false,0', 'the demo loop did not blink three times: ' + JSON.stringify(demo));
@@ -1591,7 +1593,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const neoTail = 'Colour:|Fixed colour:|Preview at:';
     const arrayRows = 'Label:|GPIO pin:|Layout:|Rows:|Columns:|Wiring:|Brightness (0-255):|Graphic:|Along:|Row:|Direction:|' + neoTail;
     expect(await keyRows() === arrayRows, 'new NeoPixels do not show an array\'s settings: ' + await keyRows());
-    expect(await page.locator('#settings .neopixel-preview circle').count() === 64, 'the preview does not draw 64 LEDs');
+    expect(await page.locator('#settings .neopixel-preview circle').count() === 16, 'the preview does not draw a 4 × 4 array');
     await choice('Along', 'Column');
     expect(await keyRows() === arrayRows.replace('Row:', 'Column:'), 'a bar up a column shows ' + await keyRows());
     await choice('Colour', 'From input');

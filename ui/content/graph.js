@@ -778,7 +778,8 @@ svg.addEventListener('pointercancel', touchEnd, true);
 // button blinks the light three times, through a copy of the block "Blink 3".
 // Inside it, a loop: its input sets the latch, which runs the blink; the counter
 // counts the blinks, and its done output, wired back to the latch's reset as a
-// feedback wire, stops them; the counter is reset while the latch is off.
+// feedback wire, stops them; the counter is reset while the latch is off. At the
+// bottom, a slider shows as a bar on a 4 × 4 NeoPixel array.
 function demoGraph() {
     new uiButton(-200, -40);                    // n1
     new uiLED(100, 40);                         // n2
@@ -811,6 +812,10 @@ function demoGraph() {
     copy.setDef(def);                           // its parts: n6 to n9
     createEdge('n3', 'n4');                     // button → block: start
     createEdge('n4', 'n5');                     // block → light
+
+    new uiSlider(-200, 420).setLabel('Level');  // n10
+    new uiNeoPixel(100, 420);                   // n11: a 4 × 4 array on GPIO 16, a bar along its top row
+    createEdge('n10', 'n11');                   // slider → NeoPixels
 }
 demoGraph();
 

@@ -570,7 +570,9 @@ When a config arrives, the UI rebuilds the graph from it:
   driving the onboard LED `n2`, and a momentary button `n3` driving a light `n5`
   through a copy `n4` of the [block](#blocks) "Blink 3" (its parts `n6` to `n9`).
   Inside the block is the [blink-three-times loop](#loops) of `logic-loop-config`:
-  its input sets the latch, and its output is the blink.
+  its input sets the latch, and its output is the blink. Below them, a slider `n10`
+  ("Level") drives [NeoPixels](#neopixels) `n11`: a 4 × 4 array on GPIO 16 showing it
+  as a green bar along its top row.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
   `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, the logic `40`–`4C`
@@ -1185,7 +1187,7 @@ on and off: while it is off (below 0.5) every LED is off. Not wired, it is alway
 | 8 | Options | Bit 0, `NEOPIXEL_ZIGZAG`: an array's every other row runs back (0) |
 | 9 | Brightness | 0–255: each colour is scaled by it ÷ 255 (40) |
 | 10 | *k*, the bytes of its size | An array 2; a circle 1–`NEOPIXEL_RINGS_MAX` (8); a doughnut 1 |
-| 11 … 10 + *k* | Size | An array: its rows, then its columns (8, 8). A circle: each ring's LEDs, in the order they are wired (24, 16, 12, 8, 1). A doughnut: its LEDs (24). Each 1 or more, and at most `NEOPIXEL_LEDS_MAX` (256) LEDs in all |
+| 11 … 10 + *k* | Size | An array: its rows, then its columns (4, 4). A circle: each ring's LEDs, in the order they are wired (24, 16, 12, 8, 1). A doughnut: its LEDs (24). Each 1 or more, and at most `NEOPIXEL_LEDS_MAX` (256) LEDs in all |
 | 11 + *k* | Graphic | `NEOPIXEL_GFX_BAR` (0), a bar level indicator; `NEOPIXEL_GFX_POINT` (1), a moving point; `NEOPIXEL_GFX_PATCH` (2), a patch (bar) |
 | 12 + *k* | *g*, the bytes of its settings | A bar `NEOPIXEL_BAR_LEN` (6), a point `NEOPIXEL_POINT_LEN` (8), a patch `NEOPIXEL_PATCH_LEN` (8); 3 more with `NEOPIXEL_GFX_COLOUR_INPUT` |
 | 13 + *k* … | Its settings | See below |
@@ -1237,7 +1239,7 @@ it is near it, and on one LED that one alone. Its settings:
 | Byte | Field | Values (UI default) |
 |---|---|---|
 | 0–1 | Its start | An array: a row and a column. A circle: a ring (in wiring order) and an LED of it, from 0 in wiring order. A doughnut: 0 and an LED (0, 0) |
-| 2–3 | Its end | The same (an array's last row and column) |
+| 2–3 | Its end | The same (an array's last row and column: 3, 3) |
 | 4 | Options | `NEOPIXEL_GFX_REVERSE`, `NEOPIXEL_GFX_COLOUR_INPUT` (0) |
 | 5–7 | Colour; at 0 with `NEOPIXEL_GFX_COLOUR_INPUT` | (0, 255, 0) |
 | 8–10 | With `NEOPIXEL_GFX_COLOUR_INPUT`: the colour at 1 | (255, 0, 0) |

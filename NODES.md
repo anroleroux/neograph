@@ -216,7 +216,7 @@ The node's settings say how the LEDs are laid out, and which graphic they show:
 |---|---|---|---|
 | GPIO pin | GPIO 0–22, 26–28, not used by another node | 16, or the lowest free pin | The LEDs' data in (DIN). |
 | Layout | Array, Circle, Doughnut | Array | **Array:** rows of columns, LED 1 at the top left, along the top row. **Circle:** rings one inside another, as on a NeoPixel disc. **Doughnut:** one ring. |
-| Rows, Columns | 1–255 each, at most 256 LEDs | 8, 8 | An array's size. One row is a strip. |
+| Rows, Columns | 1–255 each, at most 256 LEDs | 4, 4 | An array's size. One row is a strip. |
 | Wiring | Row by row, Zigzag | Row by row | An array: Zigzag when every other row runs back, right to left, as on many panels. |
 | Rings (LEDs, as wired) | 1–8 rings, at most 256 LEDs | 24, 16, 12, 8, 1 | A circle: each ring's LEDs, in the order they are wired. |
 | LEDs | 1–255 | 24 | A doughnut's size. |
@@ -787,7 +787,9 @@ counter, ready for the next press.
 The demo graph, which a new device starts from, has this loop inside a block,
 "Blink 3": a momentary button **Blink 3 times** → the block → a light in the Command
 view. The block's input, Start, sets the latch; its output, Blink, is the blink.
-Double-click the block to see the loop.
+Double-click the block to see the loop. Below it, a slider **Level** drives a
+NeoPixel node: a 4 × 4 array on GPIO 16 showing the slider as a green bar along its
+top row.
 
 Another loop: **a tick every 5 s.** NOT → Delay (on delay 5 s) → back into the NOT.
 The delay turns on 5 s after the NOT does, which turns the NOT off, which turns the

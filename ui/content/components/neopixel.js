@@ -26,8 +26,8 @@ class uiNeoPixel extends uiComponents {
 
         this.pin = freePin(this, 16);      // 16, unless another node uses it
         this.layout = NEOPIXEL_ARRAY;
-        this.rows = 8;                     // an array
-        this.cols = 8;
+        this.rows = 4;                     // an array
+        this.cols = 4;
         this.zigzag = false;               // an array: every other row runs back
         this.rings = [24, 16, 12, 8, 1];   // a circle: each ring's LEDs, in wiring order
         this.ringLeds = 24;                // a doughnut
@@ -36,7 +36,7 @@ class uiNeoPixel extends uiComponents {
         this.along = NEOPIXEL_BAR_ROW;     // a bar: along a row or column; around a ring or across the rings
         this.position = 0;                 // a bar: which row, column or ring; a doughnut's first LED. From 0
         this.from = [0, 0];                // a point: its start and end: an array's row and column; a
-        this.to = [7, 7];                  //   circle's ring and LED; a doughnut's 0 and LED. From 0
+        this.to = [3, 3];                  //   circle's ring and LED; a doughnut's 0 and LED. From 0
         this.reverse = false;
         this.colourInput = false;          // its colour goes from `colour` at 0 to `colourAt1` at 1
         this.colour = [0, 255, 0];
