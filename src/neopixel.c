@@ -104,6 +104,16 @@ static void ring_place(const neopixel_payload *px, const uint8_t at[2], const ui
     *turn = (float)at[1] / px->size[at[0]];
 }
 
+// How far round a point on a circle or doughnut goes, in turns: from its start angle
+// to its end angle in wiring order, or reversed the other way; once round from an LED
+// to itself.
+static float point_sweep(const neopixel_payload *px, float turn0, float turn1) {
+    float sweep = px->gfx_options & NEOPIXEL_GFX_REVERSE ? turn0 - turn1 : turn1 - turn0;
+    if (sweep < 0) sweep += 1;
+    if (sweep == 0 && px->from[0] == px->to[0] && px->from[1] == px->to[1]) sweep = 1;
+    return sweep;
+}
+
 uint16_t neopixel_point_led(const neopixel_payload *px, float fraction) {
     if (px->layout == NEOPIXEL_ARRAY) {
         // Straight from its start to its end: across, up or down, or on a slant.
@@ -120,9 +130,7 @@ uint16_t neopixel_point_led(const neopixel_payload *px, float fraction) {
     ring_place(px, px->from, outwards, &rank0, &turn0);
     ring_place(px, px->to, outwards, &rank1, &turn1);
     bool reverse = px->gfx_options & NEOPIXEL_GFX_REVERSE;
-    float sweep = reverse ? turn0 - turn1 : turn1 - turn0;
-    if (sweep < 0) sweep += 1;
-    if (sweep == 0 && px->from[0] == px->to[0] && px->from[1] == px->to[1]) sweep = 1;
+    float sweep = point_sweep(px, turn0, turn1);
     float turn = turn0 + (reverse ? -sweep : sweep) * fraction;
     turn -= (float)(int)turn;
     if (turn < 0) turn += 1;
@@ -131,11 +139,55 @@ uint16_t neopixel_point_led(const neopixel_payload *px, float fraction) {
     return (uint16_t)(ring_first(px, ring) + (uint16_t)(turn * n + 0.5f) % n);
 }
 
+uint16_t neopixel_point_steps(const neopixel_payload *px) {
+    if (px->layout == NEOPIXEL_ARRAY) {
+        // Steps of one row or column at a time, whichever it moves more of.
+        int rows = px->to[0] - px->from[0], cols = px->to[1] - px->from[1];
+        rows = rows < 0 ? -rows : rows;
+        cols = cols < 0 ? -cols : cols;
+        return (uint16_t)(rows > cols ? rows : cols);
+    }
+    // The rings it crosses, or the LEDs it goes around on the bigger of its two rings,
+    // whichever is more.
+    uint8_t outwards[NEOPIXEL_RINGS_MAX] = { 0 };
+    if (px->layout == NEOPIXEL_CIRCLE) rings_outwards(px, outwards);
+    float rank0 = 0, rank1 = 0, turn0, turn1;
+    ring_place(px, px->from, outwards, &rank0, &turn0);
+    ring_place(px, px->to, outwards, &rank1, &turn1);
+    float sweep = point_sweep(px, turn0, turn1);
+    uint8_t n = px->size[px->from[0]] > px->size[px->to[0]] ? px->size[px->from[0]] : px->size[px->to[0]];
+    uint16_t around = (uint16_t)(sweep * n + 0.5f);
+    uint16_t across = (uint16_t)(rank1 > rank0 ? rank1 - rank0 : rank0 - rank1);
+    return around > across ? around : across;
+}
+
+// A point: the two LEDs on its path either side of where it is, each lit as much as it
+// is near it; on one of them, that one. Its path is neopixel_point_steps steps, each
+// from one LED (neopixel_point_led) to the next.
+static void point_light(const neopixel_payload *px, float fraction, uint32_t *out) {
+    uint16_t steps = neopixel_point_steps(px);
+    if (steps == 0) {
+        out[neopixel_point_led(px, fraction)] = colour(px, fraction, 1);
+        return;
+    }
+    float at = fraction * steps;
+    uint16_t i = (uint16_t)at;
+    if (i >= steps) i = steps - 1;
+    float near = at - i;                    // 0 on LED a, 1 on LED b
+    uint16_t a = neopixel_point_led(px, (float)i / steps), b = neopixel_point_led(px, (float)(i + 1) / steps);
+    if (a == b) {
+        out[a] = colour(px, fraction, 1);
+        return;
+    }
+    out[a] = colour(px, fraction, 1 - near);
+    out[b] = colour(px, fraction, near);
+}
+
 void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32_t *out) {
     memset(out, 0, px->leds * sizeof out[0]);
     if (!on) return;
     if (px->graphic == NEOPIXEL_GFX_POINT) {
-        out[neopixel_point_led(px, fraction)] = colour(px, fraction, 1);
+        point_light(px, fraction, out);
         return;
     }
     // A bar: its steps up to fraction × its length lit, and the step it ends in lit as

@@ -1547,6 +1547,66 @@ void test_neopixel_point(void)
     TEST_ASSERT_EQUAL_STRING("8 9 10 11 8", point_path(compile_point(&p, NEOPIXEL_CIRCLE, rings, 3, 1, 0, 1, 0, 0)));
 }
 
+/* Between two LEDs of its path, a point lights both, each as much as it is near it. */
+void test_neopixel_point_blends(void)
+{
+    static hw_program p;
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    static const uint8_t grid[] = { 5, 5 }, ring[] = { 8 }, rings[] = { 8, 4, 1 };
+
+    /* Along row 3, 4 steps: at 0.375 half way from LED 11 to 12; at 0.3125 a quarter. */
+    const prog_node *n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 2, 0, 2, 4, 0);
+    TEST_ASSERT_EQUAL_UINT16(4, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.375f, true, out);
+    TEST_ASSERT_EQUAL_STRING("11 12", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[11]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[12]);
+    neopixel_render(&n->px, 0.3125f, true, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.75f), out[11]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.25f), out[12]);
+    neopixel_render(&n->px, 1, true, out);         /* at its end: that LED alone */
+    TEST_ASSERT_EQUAL_STRING("14", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[14]);
+
+    /* On a slant, 4 steps, LED to LED along the diagonal: 20, 16, 12, 8, 4. */
+    n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 4, 0, 0, 4, 0);
+    neopixel_render(&n->px, 0.125f, true, out);
+    TEST_ASSERT_EQUAL_STRING("16 20", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[16]);
+    /* A slant of 2 rows over 4 columns: 4 steps, a row every other one. */
+    n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 0, 0, 2, 4, 0);
+    TEST_ASSERT_EQUAL_UINT16(4, neopixel_point_steps(&n->px));
+    TEST_ASSERT_EQUAL_STRING("0 6 7 13 14", point_path(n));   /* rows rounded, a half up */
+    /* Start and end the same: no steps, one LED. */
+    n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 1, 1, 1, 1, 0);
+    TEST_ASSERT_EQUAL_UINT16(0, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.3f, true, out);
+    TEST_ASSERT_EQUAL_STRING("6", lit_leds(out, 25));
+
+    /* A doughnut of 8 from LED 2 to 6: 4 steps; reversed the other way round, 4 too. */
+    n = compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 2, 0, 6, 0);
+    TEST_ASSERT_EQUAL_UINT16(4, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.125f, true, out);
+    TEST_ASSERT_EQUAL_STRING("2 3", lit_leds(out, 8));
+    n = compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 2, 0, 6, NEOPIXEL_GFX_REVERSE);
+    neopixel_render(&n->px, 0.375f, true, out);
+    TEST_ASSERT_EQUAL_STRING("0 1", lit_leds(out, 8));
+    /* Once round from LED 6: 8 steps; near the end, between LED 5 and back at 6. */
+    n = compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 6, 0, 6, 0);
+    TEST_ASSERT_EQUAL_UINT16(8, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.9375f, true, out);
+    TEST_ASSERT_EQUAL_STRING("5 6", lit_leds(out, 8));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[5]);
+
+    /* A circle from the middle out to the outer ring's LED 2: 2 rings, a quarter of 8 LEDs:
+       2 steps, 12 then 9 then 2; a quarter of the way, between 12 and 9. */
+    n = compile_point(&p, NEOPIXEL_CIRCLE, rings, 3, 2, 0, 0, 2, 0);
+    TEST_ASSERT_EQUAL_UINT16(2, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.25f, true, out);
+    TEST_ASSERT_EQUAL_STRING("9 12", lit_leds(out, 13));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[9]);
+}
+
 void test_neopixel_colour_input_and_switch(void)
 {
     static hw_program p;
@@ -1824,6 +1884,7 @@ int main(void)
     RUN_TEST(test_neopixel_payload_read);
     RUN_TEST(test_neopixel_bar);
     RUN_TEST(test_neopixel_point);
+    RUN_TEST(test_neopixel_point_blends);
     RUN_TEST(test_neopixel_colour_input_and_switch);
     RUN_TEST(test_feedback_reference);
     RUN_TEST(test_program_counter);

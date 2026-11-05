@@ -1230,8 +1230,9 @@ settings:
 | Circle | Around ring *position* from its LED 0, in wiring order; reversed, from its LED 0 the other way | Across the rings, from the centre out, each ring a step lit whole; reversed, from the outside in. Position is 0 |
 | Doughnut | Around from LED *position*, in wiring order; reversed, the other way | Not used |
 
-**A point** (`NEOPIXEL_GFX_POINT`) lights one LED, which moves from its start, at 0,
-to its end, at 1. Its settings:
+**A point** (`NEOPIXEL_GFX_POINT`) moves from its start, at 0, to its end, at 1,
+gliding from LED to LED: between two LEDs of its path it lights both, each as much as
+it is near it, and on one LED that one alone. Its settings:
 
 | Byte | Field | Values (UI default) |
 |---|---|---|
@@ -1252,6 +1253,15 @@ to its end, at 1. Its settings:
   its LED the nearest to its angle on that ring. With the same ring and angle at both
   ends it goes once all the way round; with the same angle on two rings, straight out
   or in.
+- **Its path** is a number of steps (`neopixel_point_steps`), each from one LED to the
+  next: on an array the rows or the columns it crosses, whichever is more; on a circle
+  or doughnut the rings it crosses or the LEDs it goes round on the bigger of its two
+  rings (its sweep × that ring's LEDs, rounded), whichever is more. Step *i* of *S* is on
+  the LED nearest the point at *i* ÷ *S* (as above). At a fraction *f*, the point is
+  *f* × *S* steps along: between step *i* and *i* + 1 it lights the first by 1 − the
+  part of the step it has gone, and the second by that part (a quarter of the way
+  lights them three quarters and a quarter). Two steps on one LED light it whole; a
+  path of no steps (the same LED at both ends of an array) lights its one LED.
 
 **Sending.** Each node takes a PIO state machine, running the Pico SDK's WS2812
 program (`src/ws2812.pio`) at 800 kHz, and a DMA channel that feeds it, so core 1 doesn't

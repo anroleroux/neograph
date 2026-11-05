@@ -279,15 +279,50 @@ class uiNeoPixel extends uiComponents {
         const outwards = this.layout === NEOPIXEL_CIRCLE ? this.ringsOutwards() : [0];
         const rank = (p) => outwards.indexOf(p[0]), turn = (p) => p[1] / rings[p[0]];
         const [rank0, rank1, turn0, turn1] = [rank(this.from), rank(this.to), turn(this.from), turn(this.to)];
-        let sweep = this.reverse ? turn0 - turn1 : turn1 - turn0;
-        if (sweep < 0) sweep += 1;
-        if (sweep === 0 && this.from[0] === this.to[0] && this.from[1] === this.to[1]) sweep = 1;
+        const sweep = this.pointSweep();
         let t = turn0 + (this.reverse ? -sweep : sweep) * fraction;
         t -= Math.trunc(t);
         if (t < 0) t += 1;
         const ring = outwards[Math.floor(rank0 + (rank1 - rank0) * fraction + 0.5)], n = rings[ring];
         const first = this.layout === NEOPIXEL_CIRCLE ? this.ringFirst(ring) : 0;
         return first + Math.floor(t * n + 0.5) % n;
+    }
+
+    // The rings a point's place is on from the centre out, and its angle, in turns.
+    ringPlace(p) {
+        const rings = this.layout === NEOPIXEL_CIRCLE ? this.rings : [this.ringLeds];
+        const outwards = this.layout === NEOPIXEL_CIRCLE ? this.ringsOutwards() : [0];
+        return [outwards.indexOf(p[0]), p[1] / rings[p[0]]];
+    }
+
+    // How far round a point on a circle or doughnut goes, in turns.
+    pointSweep() {
+        const turn0 = this.ringPlace(this.from)[1], turn1 = this.ringPlace(this.to)[1];
+        let sweep = this.reverse ? turn0 - turn1 : turn1 - turn0;
+        if (sweep < 0) sweep += 1;
+        if (sweep === 0 && this.from[0] === this.to[0] && this.from[1] === this.to[1]) sweep = 1;
+        return sweep;
+    }
+
+    // The steps of a point's path, each from one LED to the next (see neopixel_point_steps).
+    pointSteps() {
+        if (this.layout === NEOPIXEL_ARRAY) {
+            return Math.max(Math.abs(this.to[0] - this.from[0]), Math.abs(this.to[1] - this.from[1]));
+        }
+        const rings = this.layout === NEOPIXEL_CIRCLE ? this.rings : [this.ringLeds];
+        const n = Math.max(rings[this.from[0]], rings[this.to[0]]);
+        const around = Math.floor(this.pointSweep() * n + 0.5);
+        return Math.max(around, Math.abs(this.ringPlace(this.to)[0] - this.ringPlace(this.from)[0]));
+    }
+
+    // A point's LEDs at `fraction`, as [led, amount]: the two either side of it on its
+    // path, each as much as it is near it; or the one it is on.
+    pointLeds(fraction) {
+        const steps = this.pointSteps();
+        if (steps === 0) return [[this.pointLed(fraction), 1]];
+        const at = fraction * steps, i = Math.min(Math.floor(at), steps - 1), near = at - i;
+        const a = this.pointLed(i / steps), b = this.pointLed((i + 1) / steps);
+        return a === b ? [[a, 1]] : [[a, 1 - near], [b, near]];
     }
 
     // Its colour at `fraction`, [r, g, b], scaled by an amount and its brightness.
@@ -303,7 +338,7 @@ class uiNeoPixel extends uiComponents {
         if (!on) return out;
         fraction = Math.max(0, Math.min(1, fraction));
         if (this.graphic === NEOPIXEL_GFX_POINT) {
-            out[this.pointLed(fraction)] = this.colourAt(fraction, 1);
+            this.pointLeds(fraction).forEach(([led, amount]) => out[led] = this.colourAt(fraction, amount));
             return out;
         }
         const steps = this.barSteps(), lit = fraction * steps;

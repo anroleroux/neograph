@@ -233,7 +233,9 @@ LED it ends in is lit part way, so it moves smoothly. Its settings depend on the
 | Circle | Around a ring, or Centre out | Around a ring: which ring, from 1 in wiring order. Centre out lights whole rings, the smallest first. | Around a ring: As wired, or Reversed. Centre out, or Outside in. |
 | Doughnut | Around | Starts at LED, from 1 | As wired, or Reversed. |
 
-The **Point** graphic lights one LED, which moves from its start at 0 to its end at 1:
+The **Point** graphic is a dot that moves from its start at 0 to its end at 1. It
+glides from LED to LED: between two LEDs it lights both, each as much as it is near
+it, so a slow input moves it smoothly, not in jumps.
 
 | Layout | Start and end | Direction |
 |---|---|---|

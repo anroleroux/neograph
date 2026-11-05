@@ -1636,9 +1636,11 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         shows.push(path());
         s.reverse = false; s.setPlace('from', 1, '7');
         shows.push(path());
+        const blend = (f) => s.render(f).map((c, i) => c.some(v => v) ? `${i}:${c[1]}` : null).filter(Boolean).join(' ');
+        shows.push(s.pointSteps() + ' ' + blend(0.9375));    // once round: between LED 5 and 6, half each
         s.setLayout(NEOPIXEL_CIRCLE);
         s.from = [2, 0]; s.to = [0, 2];
-        shows.push(path());
+        shows.push(path(), s.pointSteps() + ' ' + blend(0.25));
         // A colour from the input: green 200 at 0 to red 200 at 1.
         s.setGraphic(NEOPIXEL_GFX_BAR); s.setLayout(NEOPIXEL_ARRAY); s.setRows('1'); s.setCols('4'); s.setAlong(NEOPIXEL_BAR_ROW);
         s.colourInput = true; s.colour = [0, 200, 0]; s.colourAt1 = [200, 0, 0];
@@ -1669,7 +1671,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     packets.push(...await sent(page));
     expect(neo.shows === '0 10 11|8 9 10|8 9 10 11 12|5,10,15|8 9|12 17|off'
-        + '|10 11 12 13 14|20 16 12 8 4|2 1 0 7 6|6 0 2 4 6|12 8 9 2 2|100,100,0|50,150,0', 'the graphics lit ' + neo.shows);
+        + '|10 11 12 13 14|20 16 12 8 4|2 1 0 7 6|6 0 2 4 6|8 5:10 6:10|12 8 9 2 2|2 9:10 12:10|100,100,0|50,150,0', 'the graphics lit ' + neo.shows);
     expect(neo.rejected, 'NeoPixels took settings out of range');
     expect(neo.wired, 'NeoPixels did not take one number and one on/off wire');
     expect(neo.enableRef, 'NeoPixels did not save their on/off wire');
