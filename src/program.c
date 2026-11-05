@@ -445,6 +445,18 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_NEOPIXEL: {
+            neopixel_payload px;
+            if (!neopixel_payload_read(itr.pay, itr.len, itr.flags, &px)) break;
+            if (!(n = add_node(p, itr.type, itr.id))) break;
+            n->in_count = 1;
+            n->in[0] = ref_signal(p, px.source);
+            n->in_full[0] = signal_full(p, n->in[0]);
+            n->pin = px.pin;
+            n->px = px;
+            break;
+        }
+
         case MSG_HW_STEPPER: {
             stepper_payload sp;
             if (!stepper_payload_read(itr.pay, itr.len, itr.flags, &sp)) break;
@@ -624,6 +636,27 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->in[0]);
             put(&t, " / %.4g", (double)n->in_full[0]);
             break;
+        case MSG_HW_NEOPIXEL: {
+            const neopixel_payload *px = &n->px;
+            put(&t, "NEOPIXEL n%u pin %u ", n->id, n->pin);
+            if (px->layout == NEOPIXEL_ARRAY) {
+                put(&t, "array %ux%u%s", px->size[0], px->size[1], px->options & NEOPIXEL_ZIGZAG ? " zigzag" : "");
+            } else if (px->layout == NEOPIXEL_CIRCLE) {
+                put(&t, "circle");
+                for (uint8_t k = 0; k < px->size_len; k++) put(&t, "%s%u", k ? "+" : " ", px->size[k]);
+            } else {
+                put(&t, "doughnut %u", px->size[0]);
+            }
+            put(&t, " brightness %u bar ", px->brightness);
+            if (px->layout == NEOPIXEL_ARRAY) put(&t, "%s %u", px->along == NEOPIXEL_BAR_ROW ? "row" : "column", px->position);
+            else if (px->layout == NEOPIXEL_CIRCLE && px->along == NEOPIXEL_BAR_COLUMN) put(&t, "outwards");
+            else put(&t, "%s %u", px->layout == NEOPIXEL_CIRCLE ? "ring" : "from", px->position);
+            put(&t, "%s colour %02X%02X%02X <- ", px->bar_options & NEOPIXEL_BAR_REVERSE ? " reverse" : "",
+                px->red, px->green, px->blue);
+            put_signal(&t, n->in[0]);
+            put(&t, " / %.4g", (double)n->in_full[0]);
+            break;
+        }
         default: put(&t, "? n%u", n->id); break;
         }
         put(&t, "\n");

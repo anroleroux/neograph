@@ -20,7 +20,7 @@
  *     latch, counter), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
  *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
- *     servo), which read one or two.
+ *     servo, NeoPixels), which read one or two.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
  * while it runs a program; core 0 reads them for telemetry.
@@ -52,7 +52,7 @@ typedef struct {
                                     // frequency; a latch's set, then its reset; a counter's count, then its reset
     uint8_t feedback;       // logic: bit k set when in[k] comes through a feedback wire
     float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V);
-                            // a servo: its input's, in_full[0]
+                            // a servo or NeoPixels: its input's, in_full[0]
     uint8_t duty, duty_min, duty_max;       // a PWM, percent
     uint16_t freq, freq_min, freq_max;      // a PWM, Hz
     float threshold, hysteresis;            // a compare
@@ -66,6 +66,7 @@ typedef struct {
     uint8_t angle_min, angle_max;           // a servo: degrees at its input's 0 and full scale
     uint16_t pulse_min, pulse_max;          // a servo: µs at 0° and at SERVO_ANGLE_MAX°
     uint16_t slew;                          // a servo: °/s it turns at most, 0 = no limit
+    neopixel_payload px;                    // NeoPixels: their layout, size and graphic (its source is in[0])
 } prog_node;
 
 // What a logic node keeps from one scan to the next, besides its output.

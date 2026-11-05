@@ -7,12 +7,16 @@
 #include "hardware/adc.h"
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
+#include "hardware/dma.h"
+#include "hardware/pio.h"
 
 #include "hwman.h"
+#include "neopixel.h"
 #include "program.h"
 #include "protocol.h"
 #include "servo.h"
 #include "stepper.h"
+#include "ws2812.pio.h"
 
 // Core 1 runs the program core 0 compiled from the config (src/program.h): every
 // SCAN_MS it reads the hardware inputs into their signals, then drives each
@@ -303,6 +307,12 @@ typedef struct {
     stepper_motion motion;      // stepper: its steps a revolution, top speed and acceleration
     stepper_state stepper;      // stepper: where it is, and how fast it turns
     uint64_t stepped_us;        // stepper: when stepper_advance last ran
+    float fraction;             // NeoPixels: the input they show, as a fraction of its full scale
+    uint32_t *leds;             // NeoPixels: each LED's colour, in neopixel_pool, which DMA sends out
+    PIO pio;                    // NeoPixels: the state machine that sends the bits, and its program
+    uint sm, offset;
+    int dma;                    // NeoPixels: the DMA channel that feeds it
+    uint64_t ready_us;          // NeoPixels: when the last send has gone out and latched
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -332,6 +342,89 @@ static void release_pins(void) {
     }
     used_pins = 0;
     memset(adc_inputs, 0, sizeof adc_inputs);
+}
+
+// ── NeoPixel outputs ──
+// Each NeoPixel node takes a PIO state machine running ws2812.pio on its pin, and a DMA
+// channel that feeds it the LEDs' colours from neopixel_pool, so core 1 doesn't wait while
+// they go out: 30 µs an LED at 800 kHz, so 7.7 ms for NEOPIXEL_LEDS_MAX. It sends them
+// again when what they show changes, once the last send has gone out and the line has
+// been low NEOPIXEL_RESET_US, which latches it.
+#define NEOPIXEL_BIT_HZ     800000
+#define NEOPIXEL_LED_US     30          // 24 bits of 1.25 µs
+#define NEOPIXEL_RESET_US   300         // low this long, a WS2812B shows what it took (older ones 50 µs)
+#define NEOPIXEL_LEDS_TOTAL 1024        // LEDs on all the program's NeoPixel nodes
+
+static uint32_t neopixel_pool[NEOPIXEL_LEDS_TOTAL];
+static uint16_t neopixel_pool_used = 0;
+
+static bool neopixel_setup(const prog_node *n, node_state *st) {
+    if (neopixel_pool_used + n->px.leds > NEOPIXEL_LEDS_TOTAL) {
+        printf("NeoPixels n%u: more than %u LEDs in all\n", n->id, NEOPIXEL_LEDS_TOTAL);
+        return false;
+    }
+    if (!claim_pin(n->pin)) return false;
+    if (!pio_claim_free_sm_and_add_program_for_gpio_range(&ws2812_program, &st->pio, &st->sm, &st->offset,
+                                                          n->pin, 1, true)) {
+        printf("NeoPixels n%u: no PIO state machine free\n", n->id);
+        used_pins &= ~(1u << n->pin);
+        return false;
+    }
+    st->dma = dma_claim_unused_channel(false);
+    if (st->dma < 0) {
+        printf("NeoPixels n%u: no DMA channel free\n", n->id);
+        pio_remove_program_and_unclaim_sm(&ws2812_program, st->pio, st->sm, st->offset);
+        used_pins &= ~(1u << n->pin);
+        return false;
+    }
+    ws2812_program_init(st->pio, st->sm, st->offset, n->pin, NEOPIXEL_BIT_HZ);
+
+    dma_channel_config c = dma_channel_get_default_config((uint)st->dma);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_dreq(&c, pio_get_dreq(st->pio, st->sm, true));
+    dma_channel_configure((uint)st->dma, &c, &st->pio->txf[st->sm], NULL, 0, false);
+
+    st->leds = neopixel_pool + neopixel_pool_used;
+    neopixel_pool_used += n->px.leds;
+    printf("NeoPixels on GPIO %u: %u LEDs\n", n->pin, n->px.leds);
+    return true;
+}
+
+// Whether a program has a NeoPixel node on a pin.
+static bool neopixel_on_pin(const hw_program *p, uint8_t pin) {
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        if (p->nodes[i].type == MSG_HW_NEOPIXEL && p->nodes[i].pin == pin) return true;
+    }
+    return false;
+}
+
+// Let the NeoPixel nodes of the program core 1 ran go: their state machines, programs
+// and DMA channels. The LEDs of one whose pin `next` has no NeoPixels on are turned off
+// first; the others are left showing what they did, so a save doesn't flicker them.
+// Returns their pins, which release_pins then makes inputs: they are pulled down then, so
+// the LEDs' data line doesn't float.
+static uint32_t neopixels_release(const hw_program *p, const hw_program *next) {
+    uint32_t pins = 0;
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        const prog_node *n = &p->nodes[i];
+        node_state *st = &states[i];
+        if (n->type != MSG_HW_NEOPIXEL || !st->ok) continue;
+        dma_channel_wait_for_finish_blocking((uint)st->dma);
+        if (!neopixel_on_pin(next, n->pin)) {
+            while (time_us_64() < st->ready_us) tight_loop_contents();
+            for (uint16_t k = 0; k < n->px.leds; k++) pio_sm_put_blocking(st->pio, st->sm, 0);
+            while (!pio_sm_is_tx_fifo_empty(st->pio, st->sm)) tight_loop_contents();
+            busy_wait_us_32(NEOPIXEL_LED_US + NEOPIXEL_RESET_US);    // the last LED's bits, then the latch
+        }
+        dma_channel_unclaim((uint)st->dma);
+        pio_sm_set_enabled(st->pio, st->sm, false);
+        pio_remove_program_and_unclaim_sm(&ws2812_program, st->pio, st->sm, st->offset);
+        pins |= 1u << n->pin;
+    }
+    neopixel_pool_used = 0;
+    return pins;
 }
 
 // Set up a node's hardware. Inputs come before outputs in a program, so an
@@ -374,6 +467,9 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
     case MSG_HW_PWM:
     case MSG_HW_SERVO:
         return claim_pin(n->pin);       // its slice starts at the first scan
+
+    case MSG_HW_NEOPIXEL:
+        return neopixel_setup(n, st);
 
     case MSG_HW_STEPPER:
         // Its four pins, or none: a stepper missing a coil can't turn.
@@ -462,7 +558,9 @@ static void take_program(void) {
         }
     }
 
+    uint32_t neopixel_pins = neopixels_release(old, p);
     release_pins();
+    for (uint gpio = 0; gpio < 32; gpio++) if (neopixel_pins >> gpio & 1) gpio_pull_down(gpio);
     memset(states, 0, sizeof states);
     running ^= 1;
     __dmb();
@@ -585,6 +683,21 @@ static void scan(uint32_t count) {
             float level = st->top * servo_pulse_us(n, angle) * SERVO_FREQ / 1e6f + 0.5f;
             pwm_set_gpio_level(n->pin, (uint16_t)(level > st->top ? st->top : level));
             st->angle = angle;
+            st->driven = true;
+            break;
+        }
+
+        case MSG_HW_NEOPIXEL: {
+            // Sent again when what they show changes, once the last send is out; if it
+            // isn't yet, at a later scan.
+            float f = neopixel_fraction(n, signal_value(p, n->in[0]));
+            if (st->driven && f == st->fraction) break;
+            uint64_t now = time_us_64();
+            if (now < st->ready_us || dma_channel_is_busy((uint)st->dma)) break;
+            neopixel_render(&n->px, f, st->leds);
+            dma_channel_transfer_from_buffer_now((uint)st->dma, st->leds, n->px.leds);
+            st->ready_us = now + (uint64_t)n->px.leds * NEOPIXEL_LED_US + NEOPIXEL_RESET_US;
+            st->fraction = f;
             st->driven = true;
             break;
         }

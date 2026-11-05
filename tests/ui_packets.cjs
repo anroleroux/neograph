@@ -222,7 +222,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1580,6 +1580,65 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [s.pin, s.angleMin, s.angleMax, s.pulseMin, s.pulseMax, s.speed, s.inConns().map(c => c.start.node.name).join()].join();
     });
     expect(servoBack === '6,20,160,600,2340,45,n1', 'a servo restored as ' + servoBack);
+
+    // NeoPixels: an array's settings, then a circle's and a doughnut's; its bar lights
+    // the LEDs src/neopixel.c does (test_neopixel_bar). It marshals as the
+    // neopixel-config example in PROTOCOL.md, and restores from it.
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+    await page.locator('#add [title="Add NeoPixels"]').dispatchEvent('click');
+    const arrayRows = 'Label:|GPIO pin:|Layout:|Rows:|Columns:|Wiring:|Brightness (0-255):|Graphic:|Along:|Row:|Direction:|Colour:|Preview at:';
+    expect(await keyRows() === arrayRows, 'new NeoPixels do not show an array\'s settings: ' + await keyRows());
+    expect(await page.locator('#settings .neopixel-preview circle').count() === 64, 'the preview does not draw 64 LEDs');
+    await choice('Along', 'Column');
+    expect(await keyRows() === arrayRows.replace('Row:', 'Column:'), 'a bar up a column shows ' + await keyRows());
+    await choice('Layout', 'Circle');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rings (LEDs, as wired):|Brightness (0-255):|Graphic:|Along:|Direction:|Colour:|Preview at:',
+        'a circle across its rings shows ' + await keyRows());
+    await choice('Layout', 'Doughnut');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|LEDs:|Brightness (0-255):|Graphic:|Starts at LED:|Direction:|Colour:|Preview at:',
+        'a doughnut shows ' + await keyRows());
+    const neo = await page.evaluate(() => {
+        const s = selected;
+        const lit = (f) => s.render(f).map((c, i) => c.some(v => v) ? i : null).filter(i => i !== null).join(' ');
+        const shows = [];
+        s.setLayout(NEOPIXEL_DOUGHNUT); s.setRingLeds('12'); s.setPosition('11'); s.colour = [10, 20, 30]; s.brightness = 255;
+        shows.push(lit(0.25));
+        s.reverse = true; shows.push(lit(0.25)); s.reverse = false;
+        s.setLayout(NEOPIXEL_CIRCLE); s.setRings('8, 4, 1'); s.setAlong(NEOPIXEL_BAR_COLUMN);
+        shows.push(lit(0.5), s.render(0.5)[8].join());
+        s.setLayout(NEOPIXEL_ARRAY); s.setRows('4'); s.setCols('5'); s.zigzag = true; s.setAlong(NEOPIXEL_BAR_ROW); s.setPosition('2');
+        shows.push(lit(0.4));
+        s.zigzag = false; s.setAlong(NEOPIXEL_BAR_COLUMN); s.setPosition('3');
+        shows.push(lit(0.5));
+        s.setRows('8'); s.setCols('8');
+        const rejected = [s.setRows('0'), s.setCols('33'), s.setPosition('9'), s.setBrightness('256'), s.setColour('red'),
+            s.setRings('300'), s.setRings('1 1 1 1 1 1 1 1 1'), s.setRingLeds('256'), s.setPin('25')].every(r => r === false);
+        const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON);
+        const wired = createEdge(button.name, s.name) === null && !!createEdge(slider.name, s.name);
+        s.setAlong(NEOPIXEL_BAR_ROW); s.setPosition('1'); s.reverse = false;
+        s.setColour('#00ff00'); s.setBrightness('40');
+        const pay = s.marshal().slice(5);
+        pay[0] = 0; pay[1] = 1;         // as in the example: NeoPixels n2 <- slider n1
+        pay[3] = 16;
+        saveGraph();
+        return { shows: shows.join('|'), rejected, wired, pay: pay.map(b => b.toString(16).padStart(2, '0')).join('') };
+    });
+    packets.push(...await sent(page));
+    expect(neo.shows === '0 10 11|8 9 10|8 9 10 11 12|5,10,15|8 9|12 17', 'the bar lit ' + neo.shows);
+    expect(neo.rejected, 'NeoPixels took settings out of range');
+    expect(neo.wired, 'NeoPixels took a button, or not a slider');
+    expect(neo.pay === '000100' + '10000028' + '020808' + '0006' + '00000000ff00', 'NeoPixels marshal as ' + neo.pay);
+    const neoBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x12, 0, 0, 1, 1, 0,
+            0x26, 1, 0, 2, 21, 0, 1, 0, 7, NEOPIXEL_CIRCLE, 0, 99, 5, 24, 16, 12, 8, 1,
+            NEOPIXEL_GFX_BAR, 6, NEOPIXEL_BAR_ROW, 4, NEOPIXEL_BAR_REVERSE, 255, 128, 0,
+        ])));
+        const s = elements.n2;
+        return [s.pin, s.layout, s.rings.join('+'), s.brightness, s.along, s.position, s.reverse, s.colourHex(),
+            s.inConns().map(c => c.start.node.name).join()].join();
+    });
+    expect(neoBack === '7,1,24+16+12+8+1,99,0,4,true,#ff8000,n1', 'NeoPixels restored as ' + neoBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

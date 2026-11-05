@@ -18,6 +18,8 @@
 
 /* {{servo-js}} */
 
+/* {{neopixel-js}} */
+
 /* {{plot-js}} */
 
 /* {{indicator-js}} */

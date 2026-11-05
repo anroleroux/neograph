@@ -12,7 +12,7 @@ the TMP button in the HWI group.
 | Group | Category | Nodes |
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
-| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV |
+| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
@@ -192,6 +192,56 @@ Things to know:
 - **Power it from 5 V,** red to VBUS (or VSYS) and brown to GND. A servo starting or
   under load draws a lot, and can reset the Pico on a weak USB supply; a separate 5 V
   supply with its ground joined to the Pico's is safer for more than one.
+
+### NeoPixels: `HWO-NPX`
+
+| | |
+|---|---|
+| Category | Hardware output |
+| Input | Number, as a fraction of its source's full scale |
+| Default label | NEOPIXEL |
+
+A chain of NeoPixels (WS2812 LEDs) on one pin, showing a graphic of its input. As with
+a servo, the input is taken as a fraction of its source's full scale: 1 for a slider or
+scale, 3.3 V for an ADC, 100 °C for the core temperature, a counter's preset.
+
+The node's settings say how the LEDs are laid out, and which graphic they show:
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| GPIO pin | GPIO 0–22, 26–28, not used by another node | 16, or the lowest free pin | The LEDs' data in (DIN). |
+| Layout | Array, Circle, Doughnut | Array | **Array:** rows of columns, LED 1 at the top left, along the top row. **Circle:** rings one inside another, as on a NeoPixel disc. **Doughnut:** one ring. |
+| Rows, Columns | 1–255 each, at most 256 LEDs | 8, 8 | An array's size. One row is a strip. |
+| Wiring | Row by row, Zigzag | Row by row | An array: Zigzag when every other row runs back, right to left, as on many panels. |
+| Rings (LEDs, as wired) | 1–8 rings, at most 256 LEDs | 24, 16, 12, 8, 1 | A circle: each ring's LEDs, in the order they are wired. |
+| LEDs | 1–255 | 24 | A doughnut's size. |
+| Brightness (0-255) | 0–255 | 40 | Scales every colour. |
+| Graphic | Bar level | Bar level | What it shows. |
+
+The **Bar level** graphic lights a bar in its colour as far as the input reaches; the
+LED it ends in is lit part way, so it moves smoothly. Its settings depend on the layout:
+
+| Layout | Along | Position | Direction |
+|---|---|---|---|
+| Array | Row or Column | Which row (from the top) or column (from the left), from 1 | Along a row: Left to right, or Right to left. Up a column: Bottom up, or Top down. |
+| Circle | Around a ring, or Centre out | Around a ring: which ring, from 1 in wiring order. Centre out lights whole rings, the smallest first. | Around a ring: As wired, or Reversed. Centre out, or Outside in. |
+| Doughnut | Around | Starts at LED, from 1 | As wired, or Reversed. |
+
+Each has a **Colour**, picked with the colour picker. Under the settings a **preview**
+draws the LEDs with the graphic at the level of its slider, at full brightness, so a
+dim setting still shows; point at an LED for its number.
+
+Things to know:
+
+- **Power them from 5 V.** A NeoPixel draws up to 60 mA at full white: more than a few
+  want their own 5 V supply, with its ground joined to the Pico's. Keep the brightness
+  down: at 40 a white LED draws about 10 mA.
+- **The data line** goes straight to the pin. Most WS2812Bs take 3.3 V on it; if yours
+  flicker or show the wrong colours, a level shifter to 5 V fixes it.
+- **Up to 256 LEDs a node, and 1024 in all.** Each node takes one of the chip's PIO
+  state machines and a DMA channel; a node that finds none free is skipped.
+- **On a save** the LEDs keep what they show until the device draws them again; taken
+  out of the graph, or moved to another pin, they turn off.
 
 ### Stepper motor: `HWO-STP`
 

@@ -41,6 +41,12 @@ const NODE_HELP = {
         "Speed limit slows it to that many degrees a second; 0 lets it turn as fast as it can. Power it from 5 V, not 3.3 V; its signal wire can go straight to the pin.",
         "A servo uses its pin's PWM slice, so a PWM or another servo can't use the other pin on that slice.",
     ],
+    neopixel: [
+        "NeoPixels (WS2812 LEDs) on one pin, showing a graphic of the number wired in. The input is taken as a fraction of its source's full scale (1 for a slider, 3.3 V for an ADC), as a servo takes it.",
+        "Layout: an Array is rows of columns, LED 1 at the top left along the top row (Zigzag: every other row runs back). A Circle is rings one inside another, listed in the order they are wired. A Doughnut is one ring.",
+        "Bar level lights a bar in its colour, as far as the input reaches; the LED it ends in is lit part way. On an array it runs along a row or up a column; on a circle around one ring, or across the rings from the centre out; on a doughnut around from the LED it starts at.",
+        "Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, not the Pico's 3.3 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",
