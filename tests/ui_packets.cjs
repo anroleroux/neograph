@@ -1601,6 +1601,10 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await select('Graphic').selectOption('1');
     expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rows:|Columns:|Wiring:|Brightness (0-255):|Graphic:|'
         + 'Start row:|Start column:|End row:|End column:|' + neoTail, 'a point on an array shows ' + await keyRows());
+    await select('Graphic').selectOption('2');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rows:|Columns:|Wiring:|Brightness (0-255):|Graphic:|'
+        + 'Start row:|Start column:|End row:|End column:|' + neoTail, 'a patch on an array shows ' + await keyRows());
+    await select('Graphic').selectOption('1');
     await choice('Layout', 'Circle');
     expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rings (LEDs, as wired):|Brightness (0-255):|Graphic:|'
         + 'Start ring:|Start LED:|End ring:|End LED:|Direction:|' + neoTail, 'a point on a circle shows ' + await keyRows());
@@ -1641,6 +1645,18 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         s.setLayout(NEOPIXEL_CIRCLE);
         s.from = [2, 0]; s.to = [0, 2];
         shows.push(path(), s.pointSteps() + ' ' + blend(0.25));
+        // Patches: an array's rectangle, a doughnut's arc either way round, a circle's sector.
+        s.setGraphic(NEOPIXEL_GFX_PATCH); s.reverse = false;
+        s.setLayout(NEOPIXEL_ARRAY); s.setRows('5'); s.setCols('5'); s.from = [1, 1]; s.to = [2, 3];
+        shows.push(lit(0.5));
+        s.setLayout(NEOPIXEL_DOUGHNUT); s.from = [0, 6]; s.to = [0, 1];
+        shows.push(lit(0.5));
+        s.reverse = true; shows.push(lit(0.5)); s.reverse = false;
+        s.setLayout(NEOPIXEL_CIRCLE); s.from = [1, 0]; s.to = [0, 2];
+        shows.push(lit(0.5));
+        s.colourInput = true; s.colour = [0, 200, 0]; s.colourAt1 = [200, 0, 0];
+        shows.push(s.render(0.5)[8].join());
+        s.colourInput = false;
         // A colour from the input: green 200 at 0 to red 200 at 1.
         s.setGraphic(NEOPIXEL_GFX_BAR); s.setLayout(NEOPIXEL_ARRAY); s.setRows('1'); s.setCols('4'); s.setAlong(NEOPIXEL_BAR_ROW);
         s.colourInput = true; s.colour = [0, 200, 0]; s.colourAt1 = [200, 0, 0];
@@ -1650,7 +1666,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         s.setRows('8'); s.setCols('8');
         const rejected = [s.setRows('0'), s.setCols('33'), s.setPosition('9'), s.setBrightness('256'), s.setColour('red'),
             s.setRings('300'), s.setRings('1 1 1 1 1 1 1 1 1'), s.setRingLeds('256'), s.setPin('25'),
-            s.setPlace('from', 0, '9'), s.setPlace('to', 1, '0'), s.setGraphic(2)].every(r => r === false);
+            s.setPlace('from', 0, '9'), s.setPlace('to', 1, '0'), s.setGraphic(3)].every(r => r === false);
         // A number and an on/off wire: a second of either replaces the first; a plot's
         // can't come in, nor can a button's on the number.
         const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON), button2 = addNode(MSG_UI_BUTTON);
@@ -1671,7 +1687,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     packets.push(...await sent(page));
     expect(neo.shows === '0 10 11|8 9 10|8 9 10 11 12|5,10,15|8 9|12 17|off'
-        + '|10 11 12 13 14|20 16 12 8 4|2 1 0 7 6|6 0 2 4 6|8 5:10 6:10|12 8 9 2 2|2 9:10 12:10|100,100,0|50,150,0', 'the graphics lit ' + neo.shows);
+        + '|10 11 12 13 14|20 16 12 8 4|2 1 0 7 6|6 0 2 4 6|8 5:10 6:10|12 8 9 2 2|2 9:10 12:10|6 7 8 11 12 13|0 1 6 7|1 2 3 4 5 6|0 1 2 8 9|100,100,0|100,100,0|50,150,0', 'the graphics lit ' + neo.shows);
     expect(neo.rejected, 'NeoPixels took settings out of range');
     expect(neo.wired, 'NeoPixels did not take one number and one on/off wire');
     expect(neo.enableRef, 'NeoPixels did not save their on/off wire');

@@ -47,6 +47,7 @@ const NODE_HELP = {
         "Layout: an Array is rows of columns, LED 1 at the top left along the top row (Zigzag: every other row runs back). A Circle is rings one inside another, listed in the order they are wired. A Doughnut is one ring.",
         "Bar level lights a bar as far as the input reaches; the LED it ends in is lit part way. On an array it runs along a row or up a column; on a circle around one ring, or across the rings from the centre out; on a doughnut around from the LED it starts at.",
         "Point is a dot moving from its start at 0 to its end at 1, gliding between LEDs (it lights the two it is between, each as much as it is near it): on an array in a straight line, any way across; on a circle or doughnut around (and from ring to ring), the way Direction says. The same LED at both ends goes once round.",
+        "Patch lights a fixed area from its start to its end: a rectangle on an array (start and end are opposite corners), an arc on a doughnut, a sector on a circle. The number doesn't move it; with Colour From input it sets its colour.",
         "Colour: Fixed, or From input, which blends from Colour at 0 to Colour at 1 as the input rises. Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
     ],
     plot: [

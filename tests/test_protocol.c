@@ -1370,6 +1370,15 @@ void test_neopixel_payload_read(void)
     TEST_ASSERT_TRUE(point_ok(NEOPIXEL_ARRAY, grid, 2, 0, 0, 7, 7));
     TEST_ASSERT_TRUE(point_ok(NEOPIXEL_CIRCLE, rings, 5, 0, 23, 4, 0));
     TEST_ASSERT_TRUE(point_ok(NEOPIXEL_DOUGHNUT, ring, 1, 0, 3, 0, 3));
+    {
+        /* A patch takes the same places; not one off its LEDs. */
+        const uint8_t ok[] = { 0, 0, 7, 7, 0, 10, 20, 30 }, off[] = { 0, 0, 8, 7, 0, 10, 20, 30 };
+        len = neopixel_pay(pay, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_PATCH, ok, sizeof ok);
+        TEST_ASSERT_TRUE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+        TEST_ASSERT_EQUAL_UINT8(7, px.to[1]);
+        len = neopixel_pay(pay, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_PATCH, off, sizeof off);
+        TEST_ASSERT_FALSE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+    }
     TEST_ASSERT_FALSE(point_ok(NEOPIXEL_ARRAY, grid, 2, 0, 0, 8, 0));        /* row 9 of 8 */
     TEST_ASSERT_FALSE(point_ok(NEOPIXEL_ARRAY, grid, 2, 0, 8, 0, 0));
     TEST_ASSERT_FALSE(point_ok(NEOPIXEL_CIRCLE, rings, 5, 0, 0, 5, 0));      /* ring 6 of 5 */
@@ -1381,7 +1390,7 @@ void test_neopixel_payload_read(void)
     pay[6] = 25;                                                            /* the WiFi chip's GPIO */
     TEST_ASSERT_FALSE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
     pay[6] = 16;
-    pay[len - 8] = 2;                                                       /* no such graphic */
+    pay[len - 8] = 3;                                                       /* no such graphic */
     TEST_ASSERT_FALSE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
 }
 
@@ -1605,6 +1614,75 @@ void test_neopixel_point_blends(void)
     neopixel_render(&n->px, 0.25f, true, out);
     TEST_ASSERT_EQUAL_STRING("9 12", lit_leds(out, 13));
     TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[9]);
+}
+
+static const prog_node *compile_patch(hw_program *p, uint8_t layout, const uint8_t *size, uint8_t k,
+                                      uint8_t a0, uint8_t b0, uint8_t a1, uint8_t b1, uint8_t gfx_options)
+{
+    const uint8_t set[] = { a0, b0, a1, b1, gfx_options, 10, 20, 30 };
+    return compile_neopixel_gfx(p, layout, 0, size, k, NEOPIXEL_GFX_PATCH, set, sizeof set);
+}
+
+/* The LEDs a patch lights, at an input of 0.5. */
+static const char *patch_leds(const prog_node *n, uint16_t leds)
+{
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    neopixel_render(&n->px, 0.5f, true, out);
+    return lit_leds(out, leds);
+}
+
+/* A patch lights every LED from its start to its end, whatever its input. */
+void test_neopixel_patch(void)
+{
+    static hw_program p;
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    static const uint8_t grid[] = { 5, 5 }, ring[] = { 8 }, rings[] = { 8, 4, 1 };
+
+    /* On an array, the rectangle with those corners, given either way round. */
+    const prog_node *n = compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 1, 1, 2, 3, 0);
+    TEST_ASSERT_EQUAL_STRING("6 7 8 11 12 13", patch_leds(n, 25));
+    TEST_ASSERT_EQUAL_STRING("6 7 8 11 12 13", patch_leds(compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 2, 3, 1, 1, 0), 25));
+    TEST_ASSERT_EQUAL_STRING("16 17 18 19", patch_leds(compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 3, 4, 3, 1, 0), 25));
+    TEST_ASSERT_EQUAL_STRING("24", patch_leds(compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 4, 4, 4, 4, 0), 25));
+    /* Its input doesn't move it, or dim it; off, it is dark. */
+    n = compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 0, 0, 0, 1, 0);
+    neopixel_render(&n->px, 0, true, out);
+    TEST_ASSERT_EQUAL_STRING("0 1", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[1]);
+    neopixel_render(&n->px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[0]);
+    neopixel_render(&n->px, 1, false, out);
+    TEST_ASSERT_EQUAL_STRING("", lit_leds(out, 25));
+
+    /* Its colour from its input: green 200 at 0 to red 200 at 1, on every LED of it. */
+    const uint8_t fade[] = { 0, 0, 0, 1, NEOPIXEL_GFX_COLOUR_INPUT, 0, 200, 0, 200, 0, 0 };
+    n = compile_neopixel_gfx(&p, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_PATCH, fade, sizeof fade);
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_HEX32(100u << 24 | 100u << 16, out[0]);
+    TEST_ASSERT_EQUAL_HEX32(100u << 24 | 100u << 16, out[1]);
+    neopixel_render(&n->px, 0, true, out);
+    TEST_ASSERT_EQUAL_HEX32(200u << 24, out[1]);
+
+    /* A doughnut of 8: from LED 6 round to 1 in wiring order, or reversed the other way;
+       one LED; the whole ring. */
+    TEST_ASSERT_EQUAL_STRING("0 1 6 7", patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 6, 0, 1, 0), 8));
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6",
+                             patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 6, 0, 1, NEOPIXEL_GFX_REVERSE), 8));
+    TEST_ASSERT_EQUAL_STRING("3", patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 3, 0, 3, 0), 8));
+    TEST_ASSERT_EQUAL_STRING("0 1 2 3 4 5 6 7", patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 0, 0, 7, 0), 8));
+
+    /* A circle wired outside in, 8, 4, 1 (LEDs 0-7, 8-11, 12): a quarter turn from LED 0
+       on the ring of 4 out to the ring of 8: LEDs 8 and 9, and 0 to 2. From the middle,
+       the middle too. */
+    n = compile_patch(&p, NEOPIXEL_CIRCLE, rings, 3, 1, 0, 0, 2, 0);
+    TEST_ASSERT_EQUAL_STRING("0 1 2 8 9", patch_leds(n, 13));
+    uint8_t start, more;
+    neopixel_patch_span(&n->px, 0, &start, &more);
+    TEST_ASSERT_EQUAL_UINT8(0, start);
+    TEST_ASSERT_EQUAL_UINT8(2, more);
+    TEST_ASSERT_EQUAL_STRING("0 1 2 8 9 12", patch_leds(compile_patch(&p, NEOPIXEL_CIRCLE, rings, 3, 2, 0, 0, 2, 0), 13));
+    /* The whole of the ring of 4 and the middle: from the middle to the ring of 4's LED 3. */
+    TEST_ASSERT_EQUAL_STRING("8 9 10 11 12", patch_leds(compile_patch(&p, NEOPIXEL_CIRCLE, rings, 3, 2, 0, 1, 3, 0), 13));
 }
 
 void test_neopixel_colour_input_and_switch(void)
@@ -1885,6 +1963,7 @@ int main(void)
     RUN_TEST(test_neopixel_bar);
     RUN_TEST(test_neopixel_point);
     RUN_TEST(test_neopixel_point_blends);
+    RUN_TEST(test_neopixel_patch);
     RUN_TEST(test_neopixel_colour_input_and_switch);
     RUN_TEST(test_feedback_reference);
     RUN_TEST(test_program_counter);

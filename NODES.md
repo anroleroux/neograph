@@ -221,7 +221,7 @@ The node's settings say how the LEDs are laid out, and which graphic they show:
 | Rings (LEDs, as wired) | 1–8 rings, at most 256 LEDs | 24, 16, 12, 8, 1 | A circle: each ring's LEDs, in the order they are wired. |
 | LEDs | 1–255 | 24 | A doughnut's size. |
 | Brightness (0-255) | 0–255 | 40 | Scales every colour. |
-| Graphic | Bar level, Point | Bar level | What it shows. |
+| Graphic | Bar level, Moving point, Patch | Bar level | What it shows. |
 | Colour | Fixed, From input | Fixed | **Fixed:** one colour, picked with the colour picker. **From input:** a Colour at 0 and a Colour at 1, and in between a blend of the two as the input goes from 0 to 1 (green to red is yellow half way). |
 
 The **Bar level** graphic lights a bar in its colour as far as the input reaches; the
@@ -233,7 +233,7 @@ LED it ends in is lit part way, so it moves smoothly. Its settings depend on the
 | Circle | Around a ring, or Centre out | Around a ring: which ring, from 1 in wiring order. Centre out lights whole rings, the smallest first. | Around a ring: As wired, or Reversed. Centre out, or Outside in. |
 | Doughnut | Around | Starts at LED, from 1 | As wired, or Reversed. |
 
-The **Point** graphic is a dot that moves from its start at 0 to its end at 1. It
+The **Moving point** graphic is a dot that moves from its start at 0 to its end at 1. It
 glides from LED to LED: between two LEDs it lights both, each as much as it is near
 it, so a slow input moves it smoothly, not in jumps.
 
@@ -242,6 +242,17 @@ it, so a slow input moves it smoothly, not in jumps.
 | Array | A row and a column each, from 1. It goes in a straight line between them: along a row, up or down a column, or on a slant | (none) |
 | Circle | A ring (in wiring order) and an LED of that ring each, from 1. It moves from ring to ring, and around from the start's angle to the end's | As wired, or Reversed: which way round it goes |
 | Doughnut | An LED each, from 1. The same LED at both ends goes once all the way round | As wired, or Reversed |
+
+The **Patch** graphic lights a fixed area: every LED from its start to its end. The
+number wired in doesn't move or resize it; with Colour From input it sets the patch's
+colour, fading from the Colour at 0 to the Colour at 1. With a Fixed colour it is a
+static patch, which the on/off input can still switch.
+
+| Layout | Start and end | Direction |
+|---|---|---|
+| Array | A row and a column each, from 1: opposite corners of a rectangle, both included. The same row at both ends gives a strip of one row; the same LED, one LED | (none) |
+| Circle | A ring (in wiring order) and an LED of it each, from 1. It lights the rings from the start's to the end's, each from the start's angle round to the end's | As wired, or Reversed: which way round it goes |
+| Doughnut | An LED each, from 1: an arc from one round to the other. LED 1 to the last lights the whole ring | As wired, or Reversed |
 
 Under the settings a **preview**
 draws the LEDs with the graphic at the level of its slider, at full brightness, so a

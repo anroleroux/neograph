@@ -183,11 +183,57 @@ static void point_light(const neopixel_payload *px, float fraction, uint32_t *ou
     out[b] = colour(px, fraction, near);
 }
 
+void neopixel_patch_span(const neopixel_payload *px, uint8_t ring, uint8_t *start, uint8_t *more) {
+    float rank, turn0, turn1;
+    uint8_t outwards[NEOPIXEL_RINGS_MAX] = { 0 };
+    if (px->layout == NEOPIXEL_CIRCLE) rings_outwards(px, outwards);
+    ring_place(px, px->from, outwards, &rank, &turn0);
+    ring_place(px, px->to, outwards, &rank, &turn1);
+    float sweep = px->gfx_options & NEOPIXEL_GFX_REVERSE ? turn0 - turn1 : turn1 - turn0;
+    if (sweep < 0) sweep += 1;
+    uint8_t n = px->size[ring];
+    uint16_t m = (uint16_t)(sweep * n + 0.5f);
+    *start = (uint8_t)((uint16_t)(turn0 * n + 0.5f) % n);
+    *more = (uint8_t)(m < n ? m : n - 1);
+}
+
+// A patch: every LED from its start to its end, in its colour (which its input may set).
+// On an array the rectangle with those corners; on a circle or doughnut, on each ring
+// from its start ring to its end ring, the LEDs from the one nearest its start angle
+// round to the one nearest its end angle.
+static void patch_light(const neopixel_payload *px, float fraction, uint32_t *out) {
+    uint32_t c = colour(px, fraction, 1);
+    if (px->layout == NEOPIXEL_ARRAY) {
+        uint8_t r0 = px->from[0] < px->to[0] ? px->from[0] : px->to[0], r1 = px->from[0] ^ px->to[0] ^ r0;
+        uint8_t c0 = px->from[1] < px->to[1] ? px->from[1] : px->to[1], c1 = px->from[1] ^ px->to[1] ^ c0;
+        for (uint16_t r = r0; r <= r1; r++)
+            for (uint16_t col = c0; col <= c1; col++) out[neopixel_array_led(px, (uint8_t)r, (uint8_t)col)] = c;
+        return;
+    }
+    uint8_t outwards[NEOPIXEL_RINGS_MAX] = { 0 };
+    if (px->layout == NEOPIXEL_CIRCLE) rings_outwards(px, outwards);
+    float rank0 = 0, rank1 = 0, turn;
+    ring_place(px, px->from, outwards, &rank0, &turn);
+    ring_place(px, px->to, outwards, &rank1, &turn);
+    uint8_t lo = (uint8_t)(rank0 < rank1 ? rank0 : rank1), hi = (uint8_t)(rank0 < rank1 ? rank1 : rank0);
+    bool reverse = px->gfx_options & NEOPIXEL_GFX_REVERSE;
+    for (uint8_t j = lo; j <= hi; j++) {
+        uint8_t ring = outwards[j], n = px->size[ring], start, more;
+        uint16_t first = ring_first(px, ring);
+        neopixel_patch_span(px, ring, &start, &more);
+        for (uint16_t e = 0; e <= more; e++) out[first + (reverse ? start + n - e : start + e) % n] = c;
+    }
+}
+
 void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32_t *out) {
     memset(out, 0, px->leds * sizeof out[0]);
     if (!on) return;
     if (px->graphic == NEOPIXEL_GFX_POINT) {
         point_light(px, fraction, out);
+        return;
+    }
+    if (px->graphic == NEOPIXEL_GFX_PATCH) {
+        patch_light(px, fraction, out);
         return;
     }
     // A bar: its steps up to fraction × its length lit, and the step it ends in lit as

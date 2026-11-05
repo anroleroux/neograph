@@ -181,7 +181,7 @@ class uiNeoPixel extends uiComponents {
     }
 
     setGraphic(g) {
-        if (g !== NEOPIXEL_GFX_BAR && g !== NEOPIXEL_GFX_POINT) return false;
+        if (![NEOPIXEL_GFX_BAR, NEOPIXEL_GFX_POINT, NEOPIXEL_GFX_PATCH].includes(g)) return false;
         this.graphic = g;
     }
 
@@ -325,6 +325,31 @@ class uiNeoPixel extends uiComponents {
         return a === b ? [[a, 1]] : [[a, 1 - near], [b, near]];
     }
 
+    // The LEDs of a patch (see neopixel_render's patch_light): on an array the rectangle
+    // with its start and end at its corners; on a circle or doughnut, on each ring from
+    // its start ring to its end ring, from the LED nearest its start angle round to the
+    // one nearest its end angle.
+    patchLeds() {
+        const leds = [];
+        if (this.layout === NEOPIXEL_ARRAY) {
+            const [r0, r1] = [this.from[0], this.to[0]].sort((a, b) => a - b);
+            const [c0, c1] = [this.from[1], this.to[1]].sort((a, b) => a - b);
+            for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) leds.push(this.arrayLed(r, c));
+            return leds;
+        }
+        const rings = this.layout === NEOPIXEL_CIRCLE ? this.rings : [this.ringLeds];
+        const outwards = this.layout === NEOPIXEL_CIRCLE ? this.ringsOutwards() : [0];
+        const [rank0, turn0] = this.ringPlace(this.from), [rank1, turn1] = this.ringPlace(this.to);
+        let sweep = this.reverse ? turn0 - turn1 : turn1 - turn0;
+        if (sweep < 0) sweep += 1;
+        for (let j = Math.min(rank0, rank1); j <= Math.max(rank0, rank1); j++) {
+            const ring = outwards[j], n = rings[ring], first = this.layout === NEOPIXEL_CIRCLE ? this.ringFirst(ring) : 0;
+            const start = Math.floor(turn0 * n + 0.5) % n, more = Math.min(Math.floor(sweep * n + 0.5), n - 1);
+            for (let e = 0; e <= more; e++) leds.push(first + (this.reverse ? start + n - e : start + e) % n);
+        }
+        return leds;
+    }
+
     // Its colour at `fraction`, [r, g, b], scaled by an amount and its brightness.
     colourAt(fraction, amount) {
         const t = this.colourInput ? fraction : 0, k = amount * this.brightness / 255;
@@ -337,6 +362,11 @@ class uiNeoPixel extends uiComponents {
         const out = Array.from({length: this.leds()}, () => [0, 0, 0]);
         if (!on) return out;
         fraction = Math.max(0, Math.min(1, fraction));
+        if (this.graphic === NEOPIXEL_GFX_PATCH) {
+            const c = this.colourAt(fraction, 1);
+            this.patchLeds().forEach(led => out[led] = c);
+            return out;
+        }
         if (this.graphic === NEOPIXEL_GFX_POINT) {
             this.pointLeds(fraction).forEach(([led, amount]) => out[led] = this.colourAt(fraction, amount));
             return out;
@@ -415,9 +445,10 @@ class uiNeoPixel extends uiComponents {
         settings.appendChild(editableSetting('Brightness (0-255)', () => this.brightness, (v) => this.setBrightness(v),
             {type: 'number', min: 0, max: 255, step: 1}));
 
-        settings.appendChild(selectSetting('Graphic', [[NEOPIXEL_GFX_BAR, 'Bar level'], [NEOPIXEL_GFX_POINT, 'Point']],
+        settings.appendChild(selectSetting('Graphic',
+            [[NEOPIXEL_GFX_BAR, 'Bar level'], [NEOPIXEL_GFX_POINT, 'Moving point'], [NEOPIXEL_GFX_PATCH, 'Patch']],
             () => this.graphic, (v) => { this.setGraphic(Number(v)); again(); }));
-        if (this.graphic === NEOPIXEL_GFX_POINT) this.pointSettings(settings, again);
+        if (this.graphic !== NEOPIXEL_GFX_BAR) this.pointSettings(settings, again);
         else this.barSettings(settings, again);
         this.colourSettings(settings, again);
         settings.appendChild(this.previewSetting());
@@ -454,7 +485,8 @@ class uiNeoPixel extends uiComponents {
         }
     }
 
-    // A point's settings: where it starts and ends, and on a ring which way round.
+    // A point's or patch's settings: where it starts and ends (a patch: its corners on an
+    // array), and on a ring which way round.
     pointSettings(settings, again) {
         const place = (end, k, label, max) => settings.appendChild(editableSetting(label, () => this[end][k] + 1,
             (v) => this.setPlace(end, k, v) ?? again(), {type: 'number', min: 1, max, step: 1}));
@@ -536,7 +568,7 @@ class uiNeoPixel extends uiComponents {
     // colour, and with NEOPIXEL_GFX_COLOUR_INPUT its colour at 1.
     graphicBytes() {
         const options = (this.reverse ? NEOPIXEL_GFX_REVERSE : 0) | (this.colourInput ? NEOPIXEL_GFX_COLOUR_INPUT : 0);
-        const head = this.graphic === NEOPIXEL_GFX_POINT ? [...this.from, ...this.to] : [this.along, this.position];
+        const head = this.graphic !== NEOPIXEL_GFX_BAR ? [...this.from, ...this.to] : [this.along, this.position];
         return [...head, options, ...this.colour, ...(this.colourInput ? this.colourAt1 : [])];
     }
 
@@ -563,7 +595,8 @@ class uiNeoPixel extends uiComponents {
         const leds = layout === NEOPIXEL_ARRAY ? size[0] * size[1] : size.reduce((a, b) => a + b, 0);
         if (leds > NEOPIXEL_LEDS_MAX || ![NEOPIXEL_ARRAY, NEOPIXEL_CIRCLE, NEOPIXEL_DOUGHNUT].includes(layout)
             || (layout === NEOPIXEL_ARRAY && k !== 2) || (layout === NEOPIXEL_DOUGHNUT && k !== 1)) return;
-        const base = graphic === NEOPIXEL_GFX_BAR ? NEOPIXEL_BAR_LEN : graphic === NEOPIXEL_GFX_POINT ? NEOPIXEL_POINT_LEN : 0;
+        const base = graphic === NEOPIXEL_GFX_BAR ? NEOPIXEL_BAR_LEN : graphic === NEOPIXEL_GFX_POINT ? NEOPIXEL_POINT_LEN
+            : graphic === NEOPIXEL_GFX_PATCH ? NEOPIXEL_PATCH_LEN : 0;
         if (!base) return;
         const gfxOptions = g(base - NEOPIXEL_COLOUR_LEN - 1);
         const colourInput = !!(gfxOptions & NEOPIXEL_GFX_COLOUR_INPUT);
@@ -577,7 +610,7 @@ class uiNeoPixel extends uiComponents {
         else if (layout === NEOPIXEL_CIRCLE) this.rings = size;
         else this.ringLeds = size[0];
         let ok;
-        if (graphic === NEOPIXEL_GFX_POINT) {
+        if (graphic !== NEOPIXEL_GFX_BAR) {
             ok = this.placeValid([g(0), g(1)]) && this.placeValid([g(2), g(3)]);
         } else {
             const [along, position] = [g(0), g(1)];
@@ -589,7 +622,7 @@ class uiNeoPixel extends uiComponents {
             Object.assign(this, was);
             return;
         }
-        if (graphic === NEOPIXEL_GFX_POINT) {
+        if (graphic !== NEOPIXEL_GFX_BAR) {
             this.from = [g(0), g(1)];
             this.to = [g(2), g(3)];
         } else {

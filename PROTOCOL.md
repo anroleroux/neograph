@@ -1186,8 +1186,8 @@ on and off: while it is off (below 0.5) every LED is off. Not wired, it is alway
 | 9 | Brightness | 0–255: each colour is scaled by it ÷ 255 (40) |
 | 10 | *k*, the bytes of its size | An array 2; a circle 1–`NEOPIXEL_RINGS_MAX` (8); a doughnut 1 |
 | 11 … 10 + *k* | Size | An array: its rows, then its columns (8, 8). A circle: each ring's LEDs, in the order they are wired (24, 16, 12, 8, 1). A doughnut: its LEDs (24). Each 1 or more, and at most `NEOPIXEL_LEDS_MAX` (256) LEDs in all |
-| 11 + *k* | Graphic | `NEOPIXEL_GFX_BAR` (0), a bar level indicator; `NEOPIXEL_GFX_POINT` (1), a point (bar) |
-| 12 + *k* | *g*, the bytes of its settings | A bar `NEOPIXEL_BAR_LEN` (6), a point `NEOPIXEL_POINT_LEN` (8); 3 more with `NEOPIXEL_GFX_COLOUR_INPUT` |
+| 11 + *k* | Graphic | `NEOPIXEL_GFX_BAR` (0), a bar level indicator; `NEOPIXEL_GFX_POINT` (1), a moving point; `NEOPIXEL_GFX_PATCH` (2), a patch (bar) |
+| 12 + *k* | *g*, the bytes of its settings | A bar `NEOPIXEL_BAR_LEN` (6), a point `NEOPIXEL_POINT_LEN` (8), a patch `NEOPIXEL_PATCH_LEN` (8); 3 more with `NEOPIXEL_GFX_COLOUR_INPUT` |
 | 13 + *k* … | Its settings | See below |
 
 **The layouts.** LED 0 is the first on the chain, nearest the pin.
@@ -1263,6 +1263,23 @@ it is near it, and on one LED that one alone. Its settings:
   lights them three quarters and a quarter). Two steps on one LED light it whole; a
   path of no steps (the same LED at both ends of an array) lights its one LED.
 
+**A patch** (`NEOPIXEL_GFX_PATCH`) lights every LED from its start to its end, and
+stays there: its input doesn't move it or dim it. With `NEOPIXEL_GFX_COLOUR_INPUT` its
+input sets its colour, from its colour at 0 to its colour at 1; without, it is one
+colour whatever its input. Its settings are a point's (its start, its end, options and
+colour), and it covers:
+
+- **on an array** the rectangle with its start and end at opposite corners (either way
+  round), the rows and columns of both included: one row of it is a strip of LEDs, one
+  LED a single LED;
+- **on a circle or doughnut**, on each ring from its start ring to its end ring (by
+  rank from the centre out, both included), the LED nearest its start angle and the
+  ones after it, round to the one nearest its end angle: in wiring order, or reversed
+  the other way round. The LEDs past the first are its sweep (as a point's, but 0 when
+  start and end have one angle) × the ring's LEDs, rounded, and at most all of them
+  (`neopixel_patch_span`). The same angle at both ends lights one LED a ring; to light
+  a doughnut of 24 whole, go from LED 0 to LED 23.
+
 **Sending.** Each node takes a PIO state machine, running the Pico SDK's WS2812
 program (`src/ws2812.pio`) at 800 kHz, and a DMA channel that feeds it, so core 1 doesn't
 wait for the LEDs: 24 bits, 30 µs, an LED, 7.7 ms for 256. Core 1 sends the colours,
@@ -1303,6 +1320,18 @@ goes from 0 to 1, from green to red, while button `n3` is on:
                 01 18                           #   24 LEDs
                 01 0B 00 00 00 00 02            #   a point from LED 0 to LED 0: once round; colour from input
                 00 FF 00  FF 00 00              #   green at 0, red at 1
+```
+
+An 8 × 8 array whose top two rows are lit, blue with slider `n1` at 0, red at 1:
+
+```hex example=neopixel-patch-config
+0A 00 25                                        # Config, 37 bytes
+12 00 00 01 01  00                              # slider n1, horizontal
+26 01 00 02 1A  00 01 00 00 00 00               # NeoPixels n2 ← n1, always on
+                10 00 00 28                     #   GPIO 16, array, brightness 40
+                02 08 08                        #   8 rows of 8
+                02 0B 00 00 01 07 02            #   a patch from row 0 column 0 to row 1 column 7; colour from input
+                00 00 FF  FF 00 00              #   blue at 0, red at 1
 ```
 
 ### Labels, positions and wires
@@ -1603,7 +1632,7 @@ SERVO n2 pin 14 angle 0-180 pulse 500-2400 us speed 90 <- s0 / 1
 ```
 
 For the [NeoPixel examples](#neopixels): its pin, layout and size, brightness, its
-graphic (a bar's row, column or ring, or a point's start and end, from 0 as in the
+graphic (a bar's row, column or ring, or a point's or patch's start and end, from 0 as in the
 payload), its colour as red, green, blue in hex (and its colour at 1, if it follows its
 input), `/ F` the value of its signal that gives a full bar, and the signal that
 switches it on and off:
@@ -1617,6 +1646,11 @@ NEOPIXEL n2 pin 16 array 8x8 brightness 40 bar row 0 colour 00FF00 <- s0 / 1 on 
 s0 n1.0 slider = 0
 s1 n3.0 button = 0
 NEOPIXEL n2 pin 16 doughnut 24 brightness 40 point 0,0-0,0 colour 00FF00-FF0000 <- s0 / 1 on <- s1
+```
+
+```program example=neopixel-patch-config
+s0 n1.0 slider = 0
+NEOPIXEL n2 pin 16 array 8x8 brightness 40 patch 0,0-1,7 colour 0000FF-FF0000 <- s0 / 1 on <- -
 ```
 
 For the [logic-config example](#logic): the compare reads the temperature and writes

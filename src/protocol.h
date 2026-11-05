@@ -260,10 +260,12 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define NEOPIXEL_LEDS_MAX       256     /* LEDs on one node */
 #define NEOPIXEL_GFX_BAR        0x00    /* graphic: a bar level indicator */
 #define NEOPIXEL_GFX_POINT      0x01    /* graphic: one LED, moving from a start to an end as its input goes 0 to 1 */
+#define NEOPIXEL_GFX_PATCH      0x02    /* graphic: every LED from a start to an end, lit; its input may set its colour */
 #define NEOPIXEL_GFX_REVERSE    0x01    /* graphic options bit 0: it runs the other way */
 #define NEOPIXEL_GFX_COLOUR_INPUT 0x02  /* graphic options bit 1: its colour goes from a colour at 0 to one at 1 with its input */
 #define NEOPIXEL_BAR_LEN        6       /* a bar's settings: along, position, options, then its colour */
 #define NEOPIXEL_POINT_LEN      8       /* a point's settings: its start and end, options, then its colour */
+#define NEOPIXEL_PATCH_LEN      8       /* a patch's settings: its start and end corners, options, then its colour */
 #define NEOPIXEL_COLOUR_LEN     3       /* red, green, blue; a second colour with NEOPIXEL_GFX_COLOUR_INPUT */
 #define NEOPIXEL_BAR_ROW        0x00    /* a bar along an array's row; around a circle's ring; around a doughnut */
 #define NEOPIXEL_BAR_COLUMN     0x01    /* a bar up an array's column; across a circle's rings, from the centre out */
@@ -438,8 +440,8 @@ typedef struct {
     uint8_t graphic;                        /* NEOPIXEL_GFX_ */
     uint8_t gfx_options;                    /* NEOPIXEL_GFX_REVERSE, NEOPIXEL_GFX_COLOUR_INPUT */
     uint8_t along, position;                /* a bar: NEOPIXEL_BAR_ROW or _COLUMN; which row, column or ring */
-    uint8_t from[2], to[2];                 /* a point: where it starts and ends: an array's row and column; a
-                                               circle's ring and its LED; a doughnut's 0 and LED */
+    uint8_t from[2], to[2];                 /* a point or patch: where it starts and ends: an array's row and
+                                               column; a circle's ring and its LED; a doughnut's 0 and LED */
     uint8_t colour[2][3];                   /* red, green, blue: its colour (at 0), and at 1 */
 } neopixel_payload;
 
@@ -461,7 +463,8 @@ static inline int neopixel_place_valid(const neopixel_payload *px, const uint8_t
    LED or more; a doughnut 1 byte, 1 LED or more), at most NEOPIXEL_LEDS_MAX LEDs, and a
    graphic it knows with settings that fit the layout: a bar along a row or column of
    an array that it has, around a ring of a circle that it has or across its rings, or
-   around a doughnut from one of its LEDs; a point from one place on it to another. A
+   around a doughnut from one of its LEDs; a point or patch from one place on it to
+   another. A
    graphic with NEOPIXEL_GFX_COLOUR_INPUT has a second colour. */
 static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t flags, neopixel_payload *out) {
     uint8_t r = msg_ref_len(flags);
@@ -500,7 +503,8 @@ static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t
     out->graphic = g[0];
     const uint8_t *set = g + 2;
     uint8_t base = out->graphic == NEOPIXEL_GFX_BAR ? NEOPIXEL_BAR_LEN
-                 : out->graphic == NEOPIXEL_GFX_POINT ? NEOPIXEL_POINT_LEN : 0;
+                 : out->graphic == NEOPIXEL_GFX_POINT ? NEOPIXEL_POINT_LEN
+                 : out->graphic == NEOPIXEL_GFX_PATCH ? NEOPIXEL_PATCH_LEN : 0;
     if (!base) return 0;
     out->gfx_options = set[base - NEOPIXEL_COLOUR_LEN - 1];
     if (out->gfx_options & ~(NEOPIXEL_GFX_REVERSE | NEOPIXEL_GFX_COLOUR_INPUT)) return 0;
@@ -509,7 +513,7 @@ static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t
     memcpy(out->colour[0], set + base - NEOPIXEL_COLOUR_LEN, NEOPIXEL_COLOUR_LEN);
     memcpy(out->colour[1], set + base - NEOPIXEL_COLOUR_LEN * (2 - colours), NEOPIXEL_COLOUR_LEN);
 
-    if (out->graphic == NEOPIXEL_GFX_POINT) {
+    if (out->graphic == NEOPIXEL_GFX_POINT || out->graphic == NEOPIXEL_GFX_PATCH) {
         out->from[0] = set[0];
         out->from[1] = set[1];
         out->to[0] = set[2];

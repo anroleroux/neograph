@@ -26,6 +26,10 @@ void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32
 // The LED nearest a point, for its input at `fraction` of full scale.
 uint16_t neopixel_point_led(const neopixel_payload *px, float fraction);
 
+// A patch on a circle's or doughnut's ring: the LED nearest its start angle, and how
+// many more it lights from there, in wiring order (reversed, the other way round).
+void neopixel_patch_span(const neopixel_payload *px, uint8_t ring, uint8_t *start, uint8_t *more);
+
 // The steps of a point's path, each from one LED to the next: on an array the rows or
 // columns it crosses, whichever is more; on a circle or doughnut the rings it crosses or
 // the LEDs it goes round on the bigger of its rings, whichever is more. Between two

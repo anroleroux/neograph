@@ -649,8 +649,9 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
                 put(&t, "doughnut %u", px->size[0]);
             }
             put(&t, " brightness %u ", px->brightness);
-            if (px->graphic == NEOPIXEL_GFX_POINT) {
-                put(&t, "point %u,%u-%u,%u", px->from[0], px->from[1], px->to[0], px->to[1]);
+            if (px->graphic == NEOPIXEL_GFX_POINT || px->graphic == NEOPIXEL_GFX_PATCH) {
+                put(&t, "%s %u,%u-%u,%u", px->graphic == NEOPIXEL_GFX_POINT ? "point" : "patch",
+                    px->from[0], px->from[1], px->to[0], px->to[1]);
             } else {
                 put(&t, "bar ");
                 if (px->layout == NEOPIXEL_ARRAY) put(&t, "%s %u", px->along == NEOPIXEL_BAR_ROW ? "row" : "column", px->position);
