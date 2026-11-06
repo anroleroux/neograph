@@ -41,6 +41,21 @@ const NODE_HELP = {
         "Speed limit slows it to that many degrees a second; 0 lets it turn as fast as it can. Power it from 5 V, not 3.3 V; its signal wire can go straight to the pin.",
         "A servo uses its pin's PWM slice, so a PWM or another servo can't use the other pin on that slice.",
     ],
+    neopixel: [
+        "NeoPixels (WS2812 LEDs) on one pin, showing a graphic of the number wired in. The number is taken as a fraction of its source's full scale (1 for a slider, 3.3 V for an ADC), as a servo takes it.",
+        "It also takes an on/off wire (a button, GPIO input or logic): while it is off, every LED is off. Not wired, it is always on. A new wire replaces the one of its type.",
+        "Layout: an Array is rows of columns, LED 1 at the top left along the top row (Zigzag: every other row runs back). A Circle is rings one inside another, listed in the order they are wired. A Doughnut is one ring.",
+        "Bar level lights a bar as far as the input reaches; the LED it ends in is lit part way. On an array it runs along a row or up a column; on a circle around one ring, or across the rings from the centre out; on a doughnut around from the LED it starts at.",
+        "Point is a dot moving from its start at 0 to its end at 1, gliding between LEDs (it lights the two it is between, each as much as it is near it): on an array in a straight line, any way across; on a circle or doughnut around (and from ring to ring), the way Direction says. The same LED at both ends goes once round.",
+        "Patch lights a fixed area from its start to its end: a rectangle on an array (start and end are opposite corners), an arc on a doughnut, a sector on a circle. The number doesn't move it; with Colour From input it sets its colour.",
+        "Colour: Fixed, or From input, which blends from Colour at 0 to Colour at 1 as the input rises. Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
+    ],
+    ds18b20: [
+        "A DS18B20 digital temperature sensor on one pin, read by the device about every 0.1 to 0.75 s. It has two outputs: °C, the temperature (a number), and Found (on/off), on while the sensor answers. Pick the one the next wire leaves from in Wire from.",
+        "Wire it: red (VDD) to 3.3 V, black (GND) to GND, yellow (DQ, data) to the pin, and a 4.7 kΩ resistor from DQ to 3.3 V. For a short wire and one sensor, Internal uses the pin's own weak pull-up in place of the resistor; if it reads No sensor, fit the resistor. One sensor per pin; parasite power (two wires) is not supported.",
+        "Resolution: 9 bits gives 0.5 °C steps, a reading every 94 ms; 12 bits 0.0625 °C every 750 ms. Its temperature is good from −55 to +125 °C. Wired into a PWM or servo, it counts as a fraction of 100 °C.",
+        "If the sensor stops answering, Found goes off after three failed reads, and the temperature keeps its last reading.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",

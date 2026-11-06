@@ -156,10 +156,12 @@ const NODE_CLASSES = {
     [MSG_HW_PWM]: uiPWM,
     [MSG_HW_STEPPER]: uiStepper,
     [MSG_HW_SERVO]: uiServo,
+    [MSG_HW_NEOPIXEL]: uiNeoPixel,
     [MSG_UI_GRAPH]: uiPlot,
     [MSG_UI_INDICATOR]: uiIndicator,
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
+    [MSG_HW_DS18B20]: uiDS18B20,
     [MSG_HW_GPI]: uiGPI,
     [MSG_HW_KEYBOARD]: uiKeyboard,
     [MSG_LOGIC_COMPARE]: uiCompare,
@@ -330,7 +332,7 @@ function buildGraph(msgs) {
             elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
-        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
+        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI, MSG_HW_DS18B20].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
         // Logic with settings takes them from after its source reference (an invalid payload keeps the
         // defaults); a block takes its definition.
         if (elm.restore) elm.restore(m.pay, r, m.len);
@@ -358,7 +360,7 @@ function buildGraph(msgs) {
     idCounter = Math.max(...controls.keys()) + 1;
 
     // Wires: each output's source references (a PWM's duty and frequency
-    // sources, an AND's or OR's several, a latch's or counter's roles, another
+    // sources, NeoPixels' value and on/off, an AND's or OR's several, a latch's or counter's roles, another
     // output's or logic's one source), shaped by their MSG_WIRE messages if there
     // are any (otherwise drawn straight between the nodes). Feedback wires come
     // last, so each closes the loop it closed when it was drawn.
@@ -395,7 +397,8 @@ function buildGraph(msgs) {
             // An AND, OR, min or max has a reference for each wire in; the others one.
             const r = refLen(m);
             const several = [MSG_LOGIC_AND, MSG_LOGIC_OR, MSG_LOGIC_MIN, MSG_LOGIC_MAX].includes(m.type);
-            const refs = several ? Math.floor(m.len / r) : 1;
+            // NeoPixels have two: their value's, then their on/off's (wireRefs).
+            const refs = several ? Math.floor(m.len / r) : elm.wireRefs ?? 1;
             for (let k = 0; k < refs; k++) {
                 const ref = refAt(m, k * r);
                 // None if the types don't match, or (in a config not saved by the UI) it would close
@@ -776,7 +779,8 @@ svg.addEventListener('pointercancel', touchEnd, true);
 // button blinks the light three times, through a copy of the block "Blink 3".
 // Inside it, a loop: its input sets the latch, which runs the blink; the counter
 // counts the blinks, and its done output, wired back to the latch's reset as a
-// feedback wire, stops them; the counter is reset while the latch is off.
+// feedback wire, stops them; the counter is reset while the latch is off. At the
+// bottom, a slider shows as a bar on a 4 × 4 NeoPixel array.
 function demoGraph() {
     new uiButton(-200, -40);                    // n1
     new uiLED(100, 40);                         // n2
@@ -809,6 +813,10 @@ function demoGraph() {
     copy.setDef(def);                           // its parts: n6 to n9
     createEdge('n3', 'n4');                     // button → block: start
     createEdge('n4', 'n5');                     // block → light
+
+    new uiSlider(-200, 420).setLabel('Level');  // n10
+    new uiNeoPixel(100, 420);                   // n11: a 4 × 4 array on GPIO 16, a bar along its top row
+    createEdge('n10', 'n11');                   // slider → NeoPixels
 }
 demoGraph();
 

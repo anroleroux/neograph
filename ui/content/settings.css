@@ -48,3 +48,32 @@
     max-width: 60ch;
     opacity: 0.85;
 }
+/* NeoPixels: the colour picker, and a preview of the LEDs at a level. */
+#settings .editable.colour > input {
+    width: 3em;
+    min-width: 0;
+    height: 1.6em;
+    padding: 0;
+    border: 1px solid var(--clr-face-fade);
+    background: none;
+    cursor: pointer;
+}
+
+#settings .neopixel-drawing {
+    width: var(--step-13);
+    max-width: 100%;
+    margin-top: var(--step--1);
+}
+
+#settings .neopixel-preview {
+    display: block;
+    width: 100%;
+    max-height: 16em;
+}
+
+/* A note under a setting, such as a sensor's steps and reading rate. */
+#settings .setting-note {
+    margin: calc(-1 * var(--step--3)) 0 var(--step--2);
+    font-size: 0.85em;
+    opacity: 0.75;
+}

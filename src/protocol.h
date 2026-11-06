@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_ and SUB_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -36,7 +36,7 @@
    sources had several outputs. */
 #define MSG_FLAG_OUTPUT         0x01
 
-/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
@@ -66,9 +66,11 @@
 #define MSG_HW_KEYBOARD         0x23    /* a keystroke typed to the PC over USB */
 #define MSG_HW_STEPPER          0x24    /* a stepper motor on four pins, through a ULN2003 */
 #define MSG_HW_SERVO            0x25    /* a hobby servo, such as an SG90, on a PWM pin */
+#define MSG_HW_NEOPIXEL         0x26    /* NeoPixels (WS2812): an array, circle or doughnut, showing a graphic */
 #define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
+#define MSG_HW_DS18B20          0x33    /* a DS18B20 temperature sensor on a 1-Wire pin; two outputs */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
    source itself, with one output, 0: boolean, or floating for a scale, min or max. A
@@ -181,6 +183,21 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    0 °C (0) to CORE_TEMP_FULL °C (VALUE_FULL), clamped. */
 #define CORE_TEMP_FULL          100
 
+/* DS18B20 temperature sensor (MSG_HW_DS18B20) payload byte 0: its GPIO pin, the 1-Wire
+   data line (DQ), a usable one (pin_usable). Byte 1: options. Bits 0-1: its resolution,
+   9 to 12 bits (DS18B20_RES_); bit 2 (DS18B20_PULLUP): the pin's internal pull-up on,
+   for short wires without the 4.7 kΩ resistor. Two outputs: its temperature in °C (0,
+   floating), and whether the sensor answers (1, boolean). On the device it drives outputs
+   with its temperature from 0 °C (0) to DS18B20_FULL °C (VALUE_FULL), clamped, as the core
+   temperature does. */
+#define DS18B20_RES_MASK        0x03
+#define DS18B20_RES_9           0x00    /* 0.5 °C steps, a reading every 94 ms */
+#define DS18B20_RES_10          0x01    /* 0.25 °C, 188 ms */
+#define DS18B20_RES_11          0x02    /* 0.125 °C, 375 ms */
+#define DS18B20_RES_12          0x03    /* 0.0625 °C, 750 ms */
+#define DS18B20_PULLUP          0x04
+#define DS18B20_FULL            100     /* °C: its full scale, for an output that takes a fraction */
+
 /* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
    (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
    float, big endian. An AND or OR: 1 to LOGIC_INPUTS_MAX source references. A NOT: one.
@@ -246,6 +263,28 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define SERVO_PULSE_MIN         100     /* µs, the shortest pulse it may be set to */
 #define SERVO_PULSE_MAX         3000    /* µs, the longest */
 #define SERVO_SPEED_MAX         3600    /* °/s, the highest speed limit; 0 = none */
+
+/* NeoPixel (MSG_HW_NEOPIXEL) payload. A chain of WS2812 LEDs on one pin, laid out as
+   an array (rows of columns), a circle (rings, one inside the other) or a doughnut (one
+   ring); its graphic draws its input on them, while its on/off input is on (or not
+   wired). PROTOCOL.md, "NeoPixels", has the bytes. */
+#define NEOPIXEL_ARRAY          0x00    /* layout: rows × columns; LED 0 at the top left, along the top row */
+#define NEOPIXEL_CIRCLE         0x01    /* layout: 1 to NEOPIXEL_RINGS_MAX rings, in the order they are wired */
+#define NEOPIXEL_DOUGHNUT       0x02    /* layout: one ring of LEDs */
+#define NEOPIXEL_ZIGZAG         0x01    /* options bit 0, an array: every other row runs back, right to left */
+#define NEOPIXEL_RINGS_MAX      8       /* a circle's rings */
+#define NEOPIXEL_LEDS_MAX       256     /* LEDs on one node */
+#define NEOPIXEL_GFX_BAR        0x00    /* graphic: a bar level indicator */
+#define NEOPIXEL_GFX_POINT      0x01    /* graphic: one LED, moving from a start to an end as its input goes 0 to 1 */
+#define NEOPIXEL_GFX_PATCH      0x02    /* graphic: every LED from a start to an end, lit; its input may set its colour */
+#define NEOPIXEL_GFX_REVERSE    0x01    /* graphic options bit 0: it runs the other way */
+#define NEOPIXEL_GFX_COLOUR_INPUT 0x02  /* graphic options bit 1: its colour goes from a colour at 0 to one at 1 with its input */
+#define NEOPIXEL_BAR_LEN        6       /* a bar's settings: along, position, options, then its colour */
+#define NEOPIXEL_POINT_LEN      8       /* a point's settings: its start and end, options, then its colour */
+#define NEOPIXEL_PATCH_LEN      8       /* a patch's settings: its start and end corners, options, then its colour */
+#define NEOPIXEL_COLOUR_LEN     3       /* red, green, blue; a second colour with NEOPIXEL_GFX_COLOUR_INPUT */
+#define NEOPIXEL_BAR_ROW        0x00    /* a bar along an array's row; around a circle's ring; around a doughnut */
+#define NEOPIXEL_BAR_COLUMN     0x01    /* a bar up an array's column; across a circle's rings, from the centre out */
 
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
 
@@ -401,6 +440,110 @@ static inline int servo_payload_read(const uint8_t *pay, uint8_t len, uint8_t fl
         && out->pulse_min >= SERVO_PULSE_MIN && out->pulse_min <= SERVO_PULSE_MAX
         && out->pulse_max >= SERVO_PULSE_MIN && out->pulse_max <= SERVO_PULSE_MAX
         && out->speed <= SERVO_SPEED_MAX;
+}
+
+/* A NeoPixel (MSG_HW_NEOPIXEL) payload, read by neopixel_payload_read. */
+typedef struct {
+    msg_ref source;                         /* the number it shows */
+    msg_ref enable;                         /* on/off: off turns its LEDs off; 0 = none, always on */
+    uint8_t pin;
+    uint8_t layout;                         /* NEOPIXEL_ARRAY, _CIRCLE or _DOUGHNUT */
+    uint8_t options;                        /* NEOPIXEL_ZIGZAG */
+    uint8_t brightness;                     /* 0 to 255: every colour is scaled by brightness / 255 */
+    uint8_t size_len;                       /* the bytes of its size */
+    uint8_t size[NEOPIXEL_RINGS_MAX];       /* an array: rows, columns; a circle: each ring's LEDs; a doughnut: its LEDs */
+    uint16_t leds;                          /* LEDs in all */
+    uint8_t graphic;                        /* NEOPIXEL_GFX_ */
+    uint8_t gfx_options;                    /* NEOPIXEL_GFX_REVERSE, NEOPIXEL_GFX_COLOUR_INPUT */
+    uint8_t along, position;                /* a bar: NEOPIXEL_BAR_ROW or _COLUMN; which row, column or ring */
+    uint8_t from[2], to[2];                 /* a point or patch: where it starts and ends: an array's row and
+                                               column; a circle's ring and its LED; a doughnut's 0 and LED */
+    uint8_t colour[2][3];                   /* red, green, blue: its colour (at 0), and at 1 */
+} neopixel_payload;
+
+/* Whether a NeoPixel's point position fits its layout: an array's row and column, a
+   circle's ring and an LED of it, or a doughnut's 0 and an LED. */
+static inline int neopixel_place_valid(const neopixel_payload *px, const uint8_t at[2]) {
+    switch (px->layout) {
+    case NEOPIXEL_ARRAY:  return at[0] < px->size[0] && at[1] < px->size[1];
+    case NEOPIXEL_CIRCLE: return at[0] < px->size_len && at[1] < px->size[at[0]];
+    default:              return at[0] == 0 && at[1] < px->size[0];
+    }
+}
+
+/* Read a NeoPixel payload: its source and on/off source, pin, layout, options,
+   brightness, then its size (a length, then that many bytes), then its graphic (a type,
+   a length, then that many bytes). Returns 0 if it is not one the device runs: a
+   usable pin, a known layout and options, a size the layout takes (an array 2 bytes,
+   rows and columns each 1 or more; a circle 1 to NEOPIXEL_RINGS_MAX rings, each of 1
+   LED or more; a doughnut 1 byte, 1 LED or more), at most NEOPIXEL_LEDS_MAX LEDs, and a
+   graphic it knows with settings that fit the layout: a bar along a row or column of
+   an array that it has, around a ring of a circle that it has or across its rings, or
+   around a doughnut from one of its LEDs; a point or patch from one place on it to
+   another. A
+   graphic with NEOPIXEL_GFX_COLOUR_INPUT has a second colour. */
+static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t flags, neopixel_payload *out) {
+    uint8_t r = msg_ref_len(flags);
+    if (len < 2 * r + 5) return 0;
+    const uint8_t *q = pay + 2 * r;         /* after the sources */
+    uint8_t k = q[4];                       /* the bytes of its size */
+    if (k < 1 || k > NEOPIXEL_RINGS_MAX || len < 2 * r + 5 + k + 2) return 0;
+    const uint8_t *g = q + 5 + k;           /* its graphic */
+    if (len != 2 * r + 5 + k + 2 + g[1]) return 0;
+    memset(out, 0, sizeof *out);
+    out->source = msg_ref_at(pay, flags);
+    out->enable = msg_ref_at(pay + r, flags);
+    out->pin = q[0];
+    out->layout = q[1];
+    out->options = q[2];
+    out->brightness = q[3];
+    out->size_len = k;
+    memcpy(out->size, q + 5, k);
+    if (!pin_usable(out->pin) || (out->options & ~NEOPIXEL_ZIGZAG)) return 0;
+
+    uint16_t leds = 0;
+    for (uint8_t i = 0; i < k; i++) {
+        if (out->size[i] == 0) return 0;
+        leds += out->size[i];
+    }
+    switch (out->layout) {
+    case NEOPIXEL_ARRAY:    if (k != 2) return 0; leds = (uint16_t)(out->size[0] * out->size[1]); break;
+    case NEOPIXEL_CIRCLE:   break;
+    case NEOPIXEL_DOUGHNUT: if (k != 1) return 0; break;
+    default: return 0;
+    }
+    if (leds > NEOPIXEL_LEDS_MAX) return 0;
+    out->leds = leds;
+
+    /* Its graphic: its settings, then its colours: one, or two with NEOPIXEL_GFX_COLOUR_INPUT. */
+    out->graphic = g[0];
+    const uint8_t *set = g + 2;
+    uint8_t base = out->graphic == NEOPIXEL_GFX_BAR ? NEOPIXEL_BAR_LEN
+                 : out->graphic == NEOPIXEL_GFX_POINT ? NEOPIXEL_POINT_LEN
+                 : out->graphic == NEOPIXEL_GFX_PATCH ? NEOPIXEL_PATCH_LEN : 0;
+    if (!base) return 0;
+    out->gfx_options = set[base - NEOPIXEL_COLOUR_LEN - 1];
+    if (out->gfx_options & ~(NEOPIXEL_GFX_REVERSE | NEOPIXEL_GFX_COLOUR_INPUT)) return 0;
+    uint8_t colours = out->gfx_options & NEOPIXEL_GFX_COLOUR_INPUT ? 2 : 1;
+    if (g[1] != base + (colours - 1) * NEOPIXEL_COLOUR_LEN) return 0;
+    memcpy(out->colour[0], set + base - NEOPIXEL_COLOUR_LEN, NEOPIXEL_COLOUR_LEN);
+    memcpy(out->colour[1], set + base - NEOPIXEL_COLOUR_LEN * (2 - colours), NEOPIXEL_COLOUR_LEN);
+
+    if (out->graphic == NEOPIXEL_GFX_POINT || out->graphic == NEOPIXEL_GFX_PATCH) {
+        out->from[0] = set[0];
+        out->from[1] = set[1];
+        out->to[0] = set[2];
+        out->to[1] = set[3];
+        return neopixel_place_valid(out, out->from) && neopixel_place_valid(out, out->to);
+    }
+    out->along = set[0];
+    out->position = set[1];
+    if (out->along > NEOPIXEL_BAR_COLUMN) return 0;
+    switch (out->layout) {
+    case NEOPIXEL_ARRAY:    return out->position < out->size[out->along == NEOPIXEL_BAR_ROW ? 0 : 1];
+    case NEOPIXEL_CIRCLE:   return out->along == NEOPIXEL_BAR_COLUMN ? out->position == 0 : out->position < k;
+    default:                return out->along == NEOPIXEL_BAR_ROW && out->position < out->size[0];
+    }
 }
 
 /* Whether a block's (MSG_SUB) payload is well formed: written with outputs, its

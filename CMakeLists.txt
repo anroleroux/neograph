@@ -20,11 +20,16 @@ add_executable(twitcher
     src/program.c
     src/stepper.c
     src/servo.c
+    src/neopixel.c
+    src/ds18b20.c
     src/keyboard.c
     src/usb_descriptors.c
     src/networking/dhcpserver.c
     src/networking/ws_frame.c
 )
+
+# NeoPixels (src/neopixel.c) are driven by a PIO program.
+pico_generate_pio_header(twitcher ${CMAKE_CURRENT_LIST_DIR}/src/ws2812.pio)
 
 target_compile_definitions(twitcher PRIVATE
     CYW43_COUNTRY_CODE=CYW43_COUNTRY_SOUTH_AFRICA
@@ -39,6 +44,8 @@ target_link_libraries(twitcher
     pico_stdlib
     hardware_adc
     hardware_pwm
+    hardware_pio
+    hardware_dma
     pico_mbedtls
     pico_multicore
     pico_cyw43_arch_lwip_poll

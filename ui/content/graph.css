@@ -64,7 +64,8 @@
      HWI UIO LGC SUB      row 3: HW inputs, UI outputs, logic, blocks
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM STP SRV         e.g. UII's or HWO's
-     TMP ADC GPI
+     NPX                  (HW outputs: rows 4 and 5)
+     TMP ADC GPI DS
      PLT LGT
      KEY
      DLY PLS BLK

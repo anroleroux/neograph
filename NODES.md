@@ -12,8 +12,8 @@ the TMP button in the HWI group.
 | Group | Category | Nodes |
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
-| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV |
-| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI |
+| **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
+| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
 | **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
@@ -193,6 +193,85 @@ Things to know:
   under load draws a lot, and can reset the Pico on a weak USB supply; a separate 5 V
   supply with its ground joined to the Pico's is safer for more than one.
 
+### NeoPixels: `HWO-NPX`
+
+| | |
+|---|---|
+| Category | Hardware output |
+| Inputs | A number, as a fraction of its source's full scale; and an on/off |
+| Default label | NEOPIXEL |
+
+A chain of NeoPixels (WS2812 LEDs) on one pin, showing a graphic of its input. As with
+a servo, the number is taken as a fraction of its source's full scale: 1 for a slider or
+scale, 3.3 V for an ADC, 100 °C for the core temperature, a counter's preset.
+
+It takes two wires, told apart by their type: a **number**, which the graphic shows,
+and an **on/off** (a button, a GPIO input or logic). While the on/off is off every LED
+is off; with none wired it is always on. A new wire of either type replaces the old one
+of that type.
+
+The node's settings say how the LEDs are laid out, and which graphic they show:
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| GPIO pin | GPIO 0–22, 26–28, not used by another node | 16, or the lowest free pin | The LEDs' data in (DIN). |
+| Layout | Array, Circle, Doughnut | Array | **Array:** rows of columns, LED 1 at the top left, along the top row. **Circle:** rings one inside another, as on a NeoPixel disc. **Doughnut:** one ring. |
+| Rows, Columns | 1–255 each, at most 256 LEDs | 4, 4 | An array's size. One row is a strip. |
+| Wiring | Row by row, Zigzag | Row by row | An array: Zigzag when every other row runs back, right to left, as on many panels. |
+| Rings (LEDs, as wired) | 1–8 rings, at most 256 LEDs | 24, 16, 12, 8, 1 | A circle: each ring's LEDs, in the order they are wired. |
+| LEDs | 1–255 | 24 | A doughnut's size. |
+| Brightness (0-255) | 0–255 | 40 | Scales every colour. |
+| Graphic | Bar level, Moving point, Patch | Bar level | What it shows. |
+| Colour | Fixed, From input | Fixed | **Fixed:** one colour, picked with the colour picker. **From input:** a Colour at 0 and a Colour at 1, and in between a blend of the two as the input goes from 0 to 1 (green to red is yellow half way). |
+
+The **Bar level** graphic lights a bar in its colour as far as the input reaches; the
+LED it ends in is lit part way, so it moves smoothly. Its settings depend on the layout:
+
+| Layout | Along | Position | Direction |
+|---|---|---|---|
+| Array | Row or Column | Which row (from the top) or column (from the left), from 1 | Along a row: Left to right, or Right to left. Up a column: Bottom up, or Top down. |
+| Circle | Around a ring, or Centre out | Around a ring: which ring, from 1 in wiring order. Centre out lights whole rings, the smallest first. | Around a ring: As wired, or Reversed. Centre out, or Outside in. |
+| Doughnut | Around | Starts at LED, from 1 | As wired, or Reversed. |
+
+The **Moving point** graphic is a dot that moves from its start at 0 to its end at 1. It
+glides from LED to LED: between two LEDs it lights both, each as much as it is near
+it, so a slow input moves it smoothly, not in jumps.
+
+| Layout | Start and end | Direction |
+|---|---|---|
+| Array | A row and a column each, from 1. It goes in a straight line between them: along a row, up or down a column, or on a slant | (none) |
+| Circle | A ring (in wiring order) and an LED of that ring each, from 1. It moves from ring to ring, and around from the start's angle to the end's | As wired, or Reversed: which way round it goes |
+| Doughnut | An LED each, from 1. The same LED at both ends goes once all the way round | As wired, or Reversed |
+
+The **Patch** graphic lights a fixed area: every LED from its start to its end. The
+number wired in doesn't move or resize it; with Colour From input it sets the patch's
+colour, fading from the Colour at 0 to the Colour at 1. With a Fixed colour it is a
+static patch, which the on/off input can still switch.
+
+| Layout | Start and end | Direction |
+|---|---|---|
+| Array | A row and a column each, from 1: opposite corners of a rectangle, both included. The same row at both ends gives a strip of one row; the same LED, one LED | (none) |
+| Circle | A ring (in wiring order) and an LED of it each, from 1. It lights the rings from the start's to the end's, each from the start's angle round to the end's | As wired, or Reversed: which way round it goes |
+| Doughnut | An LED each, from 1: an arc from one round to the other. LED 1 to the last lights the whole ring | As wired, or Reversed |
+
+Under the settings a **preview**
+draws the LEDs with the graphic at the level of its slider, at full brightness, so a
+dim setting still shows; point at an LED for its number.
+
+Things to know:
+
+- **Power them from 5 V.** A NeoPixel draws up to 60 mA at full white: more than a few
+  want their own 5 V supply, with its ground joined to the Pico's. Keep the brightness
+  down: at 40 a white LED draws about 10 mA.
+- **The data line** goes straight to the pin. Most WS2812Bs take 3.3 V on it; if yours
+  flicker or show the wrong colours, a level shifter to 5 V fixes it.
+- **The on/off** is read on the device: a button in the Command view, a GPIO input or
+  logic turns the LEDs on and off within one 10 ms scan.
+- **Up to 256 LEDs a node, and 1024 in all.** Each node takes one of the chip's PIO
+  state machines and a DMA channel; a node that finds none free is skipped.
+- **On a save** the LEDs keep what they show until the device draws them again; taken
+  out of the graph, or moved to another pin, they turn off.
+
 ### Stepper motor: `HWO-STP`
 
 | | |
@@ -290,6 +369,46 @@ Drive the pin with 3.3 V at most. Not simulated in the offline demo.
 | Pull | None, Up, Down | Down | The pin's internal pull resistor. Down suits a switch to 3.3 V; Up suits a switch to ground. |
 | On when | High, Low | High | Whether it is on while the pin is high or while it is low. Use Low with Pull Up and a switch to ground. |
 | Command view | Show, Hide | Hide | A tile showing On or Off. |
+
+### DS18B20 temperature sensor: `HWI-DS`
+
+| | |
+|---|---|
+| Category | Hardware input |
+| Outputs | **°C**: number, the temperature; **Found**: on/off, on while the sensor answers |
+| Default label | DS18B20 |
+
+A DS18B20 digital temperature sensor (the common waterproof probe, or the TO-92
+part) on one pin. The device reads it over and over: at 12 bits a new reading every
+0.75 s, in 0.0625 °C steps, good to ±0.5 °C from −10 to +85 °C. It reads −55 to
++125 °C. The offline demo simulates a room around 22 °C.
+
+It has two outputs. Pick the one the next wire leaves from in **Wire from**, and each
+wire is labelled with it:
+
+- **°C** goes to anything that takes a number: a compare (a thermostat: on above
+  30 °C), a plot, a scale, or a PWM, servo or NeoPixels, which take it as a fraction of
+  100 °C.
+- **Found** goes to anything that takes on/off: an LED, a light, or logic that
+  sounds an alarm when the sensor is unplugged or its wire breaks.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| GPIO pin | GPIO 0–22, 26–28, not used by another node | 15, or the lowest free pin | The pin its data wire (DQ, yellow) is on. |
+| Resolution | 9, 10, 11, 12 bits | 12 | 9: 0.5 °C steps, a reading every 94 ms; 10: 0.25 °C, 188 ms; 11: 0.125 °C, 375 ms; 12: 0.0625 °C, 750 ms. The settings say which under the choice. |
+| Pull-up | 4.7 kΩ resistor, Internal | 4.7 kΩ resistor | The data line needs a pull-up to 3.3 V. Internal uses the pin's own, weaker one: enough for one sensor on a short wire. |
+| Wire from | °C, Found | °C | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile with the temperature, or "No sensor". |
+
+Things to know:
+
+- **Wiring:** red (VDD) to 3.3 V, black (GND) to GND, yellow (DQ) to the pin, and a
+  4.7 kΩ resistor between DQ and 3.3 V. Parasite power (two wires, VDD to GND) is not
+  supported.
+- **One sensor per pin.** For two sensors, use two pins and two nodes.
+- **If it stops answering,** Found goes off after three failed reads (a second or two),
+  the temperature keeps its last reading, and the device keeps looking for it.
+- **After a save** it keeps its reading until the next one.
 
 ---
 
@@ -708,7 +827,9 @@ counter, ready for the next press.
 The demo graph, which a new device starts from, has this loop inside a block,
 "Blink 3": a momentary button **Blink 3 times** → the block → a light in the Command
 view. The block's input, Start, sets the latch; its output, Blink, is the blink.
-Double-click the block to see the loop.
+Double-click the block to see the loop. Below it, a slider **Level** drives a
+NeoPixel node: a 4 × 4 array on GPIO 16 showing the slider as a green bar along its
+top row.
 
 Another loop: **a tick every 5 s.** NOT → Delay (on delay 5 s) → back into the NOT.
 The delay turns on 5 s after the NOT does, which turns the NOT off, which turns the

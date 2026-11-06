@@ -8,11 +8,13 @@
 {{pwm-js}}:ui/content/components/pwm.js
 {{stepper-js}}:ui/content/components/stepper.js
 {{servo-js}}:ui/content/components/servo.js
+{{neopixel-js}}:ui/content/components/neopixel.js
 {{plot-js}}:ui/content/components/plot.js
 {{indicator-js}}:ui/content/components/indicator.js
 {{core-js}}:ui/content/components/core.js
 {{adc-js}}:ui/content/components/adc.js
 {{gpi-js}}:ui/content/components/gpi.js
+{{ds18b20-js}}:ui/content/components/ds18b20.js
 {{keyboard-js}}:ui/content/components/keyboard.js
 {{logic-js}}:ui/content/components/logic.js
 {{sub-js}}:ui/content/components/sub.js

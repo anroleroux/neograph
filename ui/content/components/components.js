@@ -18,6 +18,8 @@
 
 /* {{servo-js}} */
 
+/* {{neopixel-js}} */
+
 /* {{plot-js}} */
 
 /* {{indicator-js}} */
@@ -27,6 +29,8 @@
 /* {{adc-js}} */
 
 /* {{gpi-js}} */
+
+/* {{ds18b20-js}} */
 
 /* {{keyboard-js}} */
 

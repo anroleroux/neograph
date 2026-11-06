@@ -15,12 +15,13 @@
  *     value, a 2D slider's X and Y, an ADC, a GPIO input, the core temperature,
  *     a logic element), as a float in the source's own unit;
  *   - nodes: the elements core 1 runs, in the order it runs them: the hardware
- *     inputs (ADC, GPIO input, core temperature), which write a signal; then the
+ *     inputs (ADC, GPIO input, core temperature, DS18B20), which write a signal (a
+ *     DS18B20 two); then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
  *     latch, counter), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
  *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
- *     servo), which read one or two.
+ *     servo, NeoPixels), which read one or two.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
  * while it runs a program; core 0 reads them for telemetry.
@@ -42,17 +43,17 @@ typedef struct {
 typedef struct {
     uint8_t type;           // MSG_HW_ or MSG_LOGIC_
     uint16_t id;
-    uint8_t pin;            // GPO, PWM, GPIO input: its GPIO; ADC: its channel
+    uint8_t pin;            // GPO, PWM, GPIO input, DS18B20: its GPIO; ADC: its channel
     uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options;
                             // stepper: STEPPER_ options
     uint8_t out;            // an input or logic: the signal it writes
-    uint8_t out_count;      // a counter: the signal of its count, its output 1
+    uint8_t out_count;      // a counter: the signal of its count, its output 1; a DS18B20: of found, its output 1
     uint8_t in_count;       // the signals it reads
     uint8_t in[PROG_NODE_INPUTS];   // logic or an output: the signals it reads; a PWM's duty, then its
                                     // frequency; a latch's set, then its reset; a counter's count, then its reset
     uint8_t feedback;       // logic: bit k set when in[k] comes through a feedback wire
     float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V);
-                            // a servo: its input's, in_full[0]
+                            // a servo or NeoPixels: its input's, in_full[0]
     uint8_t duty, duty_min, duty_max;       // a PWM, percent
     uint16_t freq, freq_min, freq_max;      // a PWM, Hz
     float threshold, hysteresis;            // a compare
@@ -66,6 +67,7 @@ typedef struct {
     uint8_t angle_min, angle_max;           // a servo: degrees at its input's 0 and full scale
     uint16_t pulse_min, pulse_max;          // a servo: µs at 0° and at SERVO_ANGLE_MAX°
     uint16_t slew;                          // a servo: °/s it turns at most, 0 = no limit
+    neopixel_payload px;                    // NeoPixels: their layout, size and graphic (its source is in[0])
 } prog_node;
 
 // What a logic node keeps from one scan to the next, besides its output.

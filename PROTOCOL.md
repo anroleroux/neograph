@@ -235,7 +235,8 @@ Core 0 sends the most recently connected client WebSocket text frames:
   all within a second.
 - **In the UI.** A `sig` frame goes to the node `nI`. A hardware input or logic
   element hands the value to the nodes wired to it: a [core temperature](#core-temperature)
-  in °C, an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
+  in °C, a [DS18B20](#ds18b20-temperature-sensors) its temperature in °C (output 0) and
+  whether it answers (output 1), an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
   [logic](#logic) on from 0.5. Other nodes, such as a button or slider, ignore theirs,
   and so does an element the page doesn't have. The UI ignores `uptime N`.
 
@@ -245,6 +246,8 @@ sig 10 0 1.65               # ADC n10: 1.65 V
 sig 19 0 1                  # GPIO input n19: on
 sig 6 1 0.502               # 2D slider n6, Y: 0.502
 sig 4 1 2                   # counter n4, its count: 2
+sig 7 0 22.44               # DS18B20 n7: 22.44 °C (4 significant digits)
+sig 7 1 1                   # DS18B20 n7: found
 ```
 
 ### Limits
@@ -353,9 +356,11 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `23` | `MSG_HW_KEYBOARD` | HW output: a keystroke typed to the PC over USB | Implemented |
 | `24` | `MSG_HW_STEPPER` | HW output: a stepper motor on four pins, through a ULN2003 | Implemented |
 | `25` | `MSG_HW_SERVO` | HW output: a hobby servo on a PWM pin | Implemented |
+| `26` | `MSG_HW_NEOPIXEL` | HW output: NeoPixels (WS2812), an array, circle or doughnut showing a graphic | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
+| `33` | `MSG_HW_DS18B20` | HW input: a DS18B20 temperature sensor on a 1-Wire pin; two outputs | Implemented |
 | `40` | `MSG_LOGIC_COMPARE` | Logic: a floating input above or below a threshold | Implemented |
 | `41` | `MSG_LOGIC_AND` | Logic: on while every input is on | Implemented |
 | `42` | `MSG_LOGIC_OR` | Logic: on while any input is on | Implemented |
@@ -393,6 +398,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `02` Plot | 4–20 | Bytes 0–2: source reference (0 = not connected) · byte 3: time window, 1–255 s (UI default 10) · bytes 4…: the unit, 0–16 bytes of UTF-8 text; none (the UI default) shows the source's unit. The device ignores plot messages in a config: the plot is drawn in the browser (see [Plots](#plots)). |
 | `30` Core temperature | 0 | None: the chip has one sensor. See [Core temperature](#core-temperature). |
 | `31` GPIO input | 2 | Byte 0: the GPIO pin, a [usable](#gpio-pins) one (UI default 3). Byte 1: options; bits 0–1 (`GPI_PULL_MASK`) the pin's pull, `GPI_PULL_NONE` (0), `GPI_PULL_UP` (1) or `GPI_PULL_DOWN` (2, UI default); bit 2 (`GPI_INVERT`): 0 = on while the pin is high (UI default), 1 = on while it is low. Other bits are 0. See [GPIO inputs](#gpio-inputs). |
+| `33` DS18B20 | 2 | Byte 0: the GPIO pin of its data line (DQ), a [usable](#gpio-pins) one (UI default 15). Byte 1: options; bits 0–1 (`DS18B20_RES_MASK`) its resolution, `DS18B20_RES_9` (0) to `DS18B20_RES_12` (3, UI default); bit 2 (`DS18B20_PULLUP`): the pin's internal pull-up on (UI default off: a 4.7 kΩ resistor). Other bits are 0. See [DS18B20 temperature sensors](#ds18b20-temperature-sensors). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -415,26 +421,27 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `A4` Block definition message | 5–255 | One message of the definition, header and all. Keyed by the definition's ID |
 | `24` Stepper | 22 | Bytes 0–2: source reference (0 = not connected) · bytes 3–6: the GPIO pins of IN1 to IN4 · byte 7: options · bytes 8–9: full steps per revolution · bytes 10–21: three floats, the scale, the top speed and the acceleration. See [Stepper motors](#stepper-motors). |
 | `25` Servo | 12 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin · bytes 4–5: angles at input 0 and 1 · bytes 6–9: pulses at 0° and 180° · bytes 10–11: speed limit. See [Servos](#servos). |
+| `26` NeoPixels | 20–35 | Bytes 0–2: source reference · bytes 3–5: on/off source reference (each 0 = not connected) · byte 6: GPIO pin · byte 7: layout · byte 8: options · byte 9: brightness · byte 10: the bytes of its size, *k* · then its size · then its graphic: its type, the bytes of its settings, and those. See [NeoPixels](#neopixels). |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
 shorter, and so is everything after it: an LED is 2 bytes, a GPO 3, a PWM 15, a
-stepper 21, a servo 11, a plot 3–19 and a keyboard 5 or 4–67. `pwm_payload_read`,
-`stepper_payload_read`, `servo_payload_read` and `keyboard_payload_valid` in
-`src/protocol.h` read either.
+stepper 21, a servo 11, NeoPixels 18–33, a plot 3–19 and a keyboard 5 or 4–67.
+`pwm_payload_read`, `stepper_payload_read`, `servo_payload_read`,
+`neopixel_payload_read` and `keyboard_payload_valid` in `src/protocol.h` read either.
 
 #### GPIO pins
 
-A GPO, PWM, stepper or servo may use **GPIO 0–22 and 26–28**, the pins on the Pico 2 W's header
+A GPO, PWM, stepper, servo or NeoPixel node may use **GPIO 0–22 and 26–28**, the pins on the Pico 2 W's header
 (`PIN_USABLE_MASK`, bit n for GPIO n). GPIO 23, 24, 25 and 29 drive the WiFi chip:
 changing them cuts the device off the network.
 
 - The UI offers only the usable pins, and keeps the default pin when a config names
   another one.
-- **One node per pin.** A GPO, PWM, stepper, servo or GPIO input is offered only the pins no
+- **One node per pin.** A GPO, PWM, stepper, servo, NeoPixel node or GPIO input is offered only the pins no
   other node uses, and an ADC only the channels whose pin (GPIO 26–28) no other node
   uses. A new node takes its default pin (GPO 1, PWM 2, GPIO input 3) if it is free,
-  otherwise the lowest free one (a servo's default is 14); a new ADC the first free channel, and a new stepper
+  otherwise the lowest free one (a servo's default is 14, NeoPixels' 16); a new ADC the first free channel, and a new stepper
   GPIO 10–13 if all four are free, otherwise the lowest four free pins. A stepper's
   four pins differ.
 - **One PWM per slice.** The pins of a PWM slice share its counter, so its frequency:
@@ -443,7 +450,7 @@ changing them cuts the device off the network.
   and a new one takes a free pin on a free slice. A servo runs its slice at 50 Hz, so
   it counts as a PWM here: no PWM or servo is offered a pin on another one's slice. A
   GPO, stepper or GPIO input may still use them: it doesn't use the slice.
-- Core 1 doesn't set up a GPO, PWM, stepper or servo on another pin, and logs that it skipped
+- Core 1 doesn't set up a GPO, PWM, stepper, servo or NeoPixel node on another pin, and logs that it skipped
   it. A stepper missing one of its pins is skipped whole.
 
 A PWM has two parameters, its **duty cycle** and its **frequency**. Each is constant, or
@@ -499,8 +506,8 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature in °C; a count, 0 to its preset |
+| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -508,6 +515,7 @@ ADC or core temperature drives a PWM on the device and a plot in the browser, an
 GPIO input an LED, GPO or USB keyboard on the device and a light in the browser. A PWM
 maps a floating value onto its range as a fraction of the source's full scale: 1 for
 a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature,
+`DS18B20_FULL` (100) °C for a DS18B20,
 for a min or max that of its first wired input, and for a counter's count its preset.
 The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
@@ -568,10 +576,13 @@ When a config arrives, the UI rebuilds the graph from it:
   driving the onboard LED `n2`, and a momentary button `n3` driving a light `n5`
   through a copy `n4` of the [block](#blocks) "Blink 3" (its parts `n6` to `n9`).
   Inside the block is the [blink-three-times loop](#loops) of `logic-loop-config`:
-  its input sets the latch, and its output is the blink.
+  its input sets the latch, and its output is the blink. Below them, a slider `n10`
+  ("Level") drives [NeoPixels](#neopixels) `n11`: a 4 × 4 array on GPIO 16 showing it
+  as a green bar along its top row.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `30` core temperature, `31` GPIO input, `32` ADC, the logic `40`–`4C`
+  `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `30` core temperature, `31` GPIO input,
+  `32` ADC, `33` DS18B20, the logic `40`–`4C`
   and a block's copy `60`) becomes a node with the message's ID. Messages marked
   `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
   definition, which is restored first from its `A3` and `A4` messages (see
@@ -579,7 +590,7 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
@@ -645,7 +656,7 @@ s0 n1.0 button = 0
 
 ### Hardware input tiles
 
-A hardware input (core temperature, GPIO input, ADC) or a [logic](#logic) element shows
+A hardware input (core temperature, GPIO input, ADC, DS18B20) or a [logic](#logic) element shows
 a tile in the Command view only if its settings say so: "Command view: Show | Hide", Hide by default. A light or
 plot wired to it shows its values either way. The choice is saved as `MSG_FLAG_SHOWN`
 in its message's flags; a message without it, such as one saved before the choice
@@ -753,6 +764,76 @@ An ADC on ADC1 (GPIO 27) driving a PWM's duty cycle, and drawn on a plot:
 22 01 00 02 11  00 01 00 02 03 E8 01            # PWM n2: duty ← n1, pin 2, 1000 Hz, duty from input
                 32 00 64  00 00 00 00 64 27 10  #   duty 50 %, 0–100 %; no frequency source, 100–10000 Hz
 02 01 00 03 04  00 01 00 0A                     # plot n3 ← n1, 10 s
+```
+
+### DS18B20 temperature sensors
+
+A DS18B20 node (`33`) reads a DS18B20 digital temperature sensor on one pin, its 1-Wire
+data line. It is a source with two outputs: **its temperature** in °C (output 0,
+floating, unit °C), and **found** (output 1, boolean): on while the sensor answers. The
+Command view can show it on a tile (see [Hardware input tiles](#hardware-input-tiles)):
+its temperature, `No sensor` while found is off, `–` until the device says.
+
+**Wiring.** VDD (red) to 3.3 V, GND (black) to GND, DQ (yellow) to the pin, and a
+4.7 kΩ resistor from DQ to 3.3 V. `DS18B20_PULLUP` turns on the pin's internal pull-up
+(50–80 kΩ) instead: enough for one sensor on a short wire, not for long ones. One sensor
+a pin: core 1 talks to it without its address (Skip ROM, `CC`). Parasite power, with
+VDD tied to GND, is not supported: it needs a strong pull-up while it converts.
+
+**Resolution.**
+
+| `DS18B20_RES_` | Bits | Steps | A reading every |
+|---|---|---|---|
+| `_9` (0) | 9 | 0.5 °C | 94 ms (`ds18b20_conversion_ms`), plus the reading |
+| `_10` (1) | 10 | 0.25 °C | 188 ms |
+| `_11` (2) | 11 | 0.125 °C | 375 ms |
+| `_12` (3, UI default) | 12 | 0.0625 °C | 750 ms |
+
+The sensor reads −55 to +125 °C, to ±0.5 °C from −10 to +85 °C.
+
+**On the device.** Core 1 drives the line open-drain: the pin's output level is 0,
+and it is switched to an output to pull the line low and back to an input to let it
+go. Each bit's time slot (70 µs; a reset 960 µs) is timed with interrupts off. The line
+may idle between slots, so a sensor's work is spread over scans, about 2 ms a scan at
+most, and the scan stays on time:
+
+1. **Configure** (after it is found, or found again): reset (the sensor answers with a
+   presence pulse), `CC`, Write Scratchpad (`4E`), TH `4B`, TL `46` (its alarm bytes,
+   unused: their defaults) and its configuration register, the resolution in bits 5–6
+   (`ds18b20_config`: `1F`, `3F`, `5F` or `7F`). The register isn't copied to its
+   EEPROM, so the sensor is configured again whenever it is found.
+2. **Convert:** reset, `CC`, Convert T (`44`).
+3. **Wait** its conversion time, in scans.
+4. **Read:** reset, `CC`, Read Scratchpad (`BE`); then its 9 bytes, 3 a scan.
+5. **Check** (`ds18b20_celsius`): the Dallas CRC-8 (x⁸ + x⁵ + x⁴ + 1) of the 9 bytes is
+   0, and they are not all `00` (the line held low) nor all `FF` (nothing answering).
+   The temperature is bytes 0–1, little endian, two's complement, in 1/16 °C, with the
+   bits below its resolution, which are undefined, cleared. Then back to 2.
+
+- **Its signals.** A good reading sets its temperature and turns found on. 85 °C is
+  what the sensor holds from power-on until it converts: an 85 °C reading is dropped
+  once, unless the last reading was within 10 °C of it (`ds18b20_take`); the next 85 °C
+  in a row is taken.
+- **Lost.** No presence pulse, or a reading that fails its check, counts as a failure;
+  after 3 in a row (`DS18B20_FAILS_LOST`) found goes off, its temperature keeps its last
+  reading, and the sensor is looked for again every second. Core 1 logs when it finds
+  and loses one.
+- **A PWM, servo or NeoPixels** wired to its temperature take it as a fraction of
+  `DS18B20_FULL` (100) °C, as they take the core temperature.
+- **In the browser.** Core 0 sends both signals as `sig` [telemetry](#telemetry-text-frames);
+  the node hands its temperature and found to the nodes wired to them.
+- **After a save** it keeps its reading until the next, and is configured again.
+
+A DS18B20 `n1` on GPIO 15 at 12 bits, its tile shown: a compare turns GPO `n3` (a fan)
+on above 30 °C, back off below 29 °C, and the onboard LED shows that it is found:
+
+```hex example=ds18b20-config
+0A 00 29                                        # Config, 41 bytes
+33 02 00 01 02  0F 03                           # DS18B20 n1, tile shown: GPIO 15, 12 bits
+40 01 00 02 0C  00 01 00 00                     # compare n2 ← n1's temperature, above
+                41 F0 00 00  3F 80 00 00        #   30 °C, hysteresis 1 °C
+21 01 00 03 04  00 02 00 01                     # GPO n3 ← n2, GPIO 1
+20 01 00 04 03  00 01 01                        # LED n4 ← n1's found (output 1)
 ```
 
 ### 2D sliders
@@ -1165,6 +1246,173 @@ A slider `n1` turning an SG90 on GPIO 14 across its 180°, at up to 90° a secon
                 01 F4 09 60 00 5A               #   500 µs at 0°, 2400 µs at 180°, 90 °/s
 ```
 
+### NeoPixels
+
+A NeoPixel node (`26`) drives a chain of WS2812 (or WS2812B, SK6812 RGB) LEDs on one
+pin, laid out as an array, a circle or a doughnut, and draws its input on them as a
+**graphic**. Its input is floating, and taken as a servo takes it: as a fraction of its
+source's full scale (1 for a slider or a scale, 3.3 V for an ADC, 100 °C for the core
+temperature, a counter's preset), clamped to 0–1. A second, boolean input switches it
+on and off: while it is off (below 0.5) every LED is off. Not wired, it is always on.
+
+| Bytes | Field | Range (UI default) |
+|---|---|---|
+| 0–2 | Source reference, 0 = none | A floating source |
+| 3–5 | On/off source reference, 0 = none: always on | A boolean source |
+| 6 | GPIO pin, the LEDs' data in (DIN) | A [usable](#gpio-pins) one (16) |
+| 7 | Layout | `NEOPIXEL_ARRAY` (0), `NEOPIXEL_CIRCLE` (1) or `NEOPIXEL_DOUGHNUT` (2) (array) |
+| 8 | Options | Bit 0, `NEOPIXEL_ZIGZAG`: an array's every other row runs back (0) |
+| 9 | Brightness | 0–255: each colour is scaled by it ÷ 255 (40) |
+| 10 | *k*, the bytes of its size | An array 2; a circle 1–`NEOPIXEL_RINGS_MAX` (8); a doughnut 1 |
+| 11 … 10 + *k* | Size | An array: its rows, then its columns (4, 4). A circle: each ring's LEDs, in the order they are wired (24, 16, 12, 8, 1). A doughnut: its LEDs (24). Each 1 or more, and at most `NEOPIXEL_LEDS_MAX` (256) LEDs in all |
+| 11 + *k* | Graphic | `NEOPIXEL_GFX_BAR` (0), a bar level indicator; `NEOPIXEL_GFX_POINT` (1), a moving point; `NEOPIXEL_GFX_PATCH` (2), a patch (bar) |
+| 12 + *k* | *g*, the bytes of its settings | A bar `NEOPIXEL_BAR_LEN` (6), a point `NEOPIXEL_POINT_LEN` (8), a patch `NEOPIXEL_PATCH_LEN` (8); 3 more with `NEOPIXEL_GFX_COLOUR_INPUT` |
+| 13 + *k* … | Its settings | See below |
+
+**The layouts.** LED 0 is the first on the chain, nearest the pin.
+
+- **An array** is rows of columns: LED 0 at the top left, along the top row, then the
+  next row down. With `NEOPIXEL_ZIGZAG` every other row (the 2nd, 4th …) runs back,
+  right to left, as on many 8 × 8 and 16 × 16 panels. One row is a strip.
+- **A circle** is rings, one inside another, as on a NeoPixel disc: its size lists each
+  ring's LEDs in the order they are wired, so the first ring is LEDs 0 to its count − 1.
+  "From the centre out" takes them smallest first (in wiring order among rings of one
+  size), however they are wired.
+- **A doughnut** is one ring.
+
+**The graphic's options and colour.** Each graphic's settings end with its options and
+its colour:
+
+- options bit 0, `NEOPIXEL_GFX_REVERSE`: it runs the other way;
+- options bit 1, `NEOPIXEL_GFX_COLOUR_INPUT`: its colour follows its input. It is
+  followed by two colours, red, green, blue each: the colour at 0 and the colour at 1,
+  and at a fraction *f* each of red, green and blue is that far from the one to the
+  other (green at 0 and red at 1 is yellow half way). Without it, one colour, the
+  same whatever the input.
+
+**A bar** (`NEOPIXEL_GFX_BAR`) lights its steps in its colour as far as its input
+reaches: a fraction *f* lights *f* × its steps, and the step it ends in as much as it
+is reached (2.5 of 5 lights two, and the third at half), so it moves smoothly. Its
+settings:
+
+| Byte | Field | Values (UI default) |
+|---|---|---|
+| 0 | Along | `NEOPIXEL_BAR_ROW` (0) or `NEOPIXEL_BAR_COLUMN` (1) (row) |
+| 1 | Position, from 0 | Which row, column or ring; a doughnut's first LED (0) |
+| 2 | Options | `NEOPIXEL_GFX_REVERSE`, `NEOPIXEL_GFX_COLOUR_INPUT` (0) |
+| 3–5 | Colour; at 0 with `NEOPIXEL_GFX_COLOUR_INPUT` | Red, green, blue, 0–255 each (0, 255, 0) |
+| 6–8 | With `NEOPIXEL_GFX_COLOUR_INPUT`: the colour at 1 | (255, 0, 0) |
+
+| Layout | Along `ROW` (0) | Along `COLUMN` (1) |
+|---|---|---|
+| Array | Along row *position*, from the left; reversed, from the right. Its steps are the LEDs of the row | Up column *position*, from the bottom; reversed, down from the top |
+| Circle | Around ring *position* from its LED 0, in wiring order; reversed, from its LED 0 the other way | Across the rings, from the centre out, each ring a step lit whole; reversed, from the outside in. Position is 0 |
+| Doughnut | Around from LED *position*, in wiring order; reversed, the other way | Not used |
+
+**A point** (`NEOPIXEL_GFX_POINT`) moves from its start, at 0, to its end, at 1,
+gliding from LED to LED: between two LEDs of its path it lights both, each as much as
+it is near it, and on one LED that one alone. Its settings:
+
+| Byte | Field | Values (UI default) |
+|---|---|---|
+| 0–1 | Its start | An array: a row and a column. A circle: a ring (in wiring order) and an LED of it, from 0 in wiring order. A doughnut: 0 and an LED (0, 0) |
+| 2–3 | Its end | The same (an array's last row and column: 3, 3) |
+| 4 | Options | `NEOPIXEL_GFX_REVERSE`, `NEOPIXEL_GFX_COLOUR_INPUT` (0) |
+| 5–7 | Colour; at 0 with `NEOPIXEL_GFX_COLOUR_INPUT` | (0, 255, 0) |
+| 8–10 | With `NEOPIXEL_GFX_COLOUR_INPUT`: the colour at 1 | (255, 0, 0) |
+
+- **On an array** it goes in a straight line, so in any direction: along a row, up or
+  down a column, or on a slant. At a fraction *f* its row is start row + (end row −
+  start row) × *f*, and its column the same, each rounded to the nearest (a half up).
+- **On a circle or doughnut** it goes from its start ring to its end ring, and around
+  from its start angle to its end angle. An LED's angle is its place on its ring ÷ the
+  ring's LEDs, in turns from LED 0; the point goes around in wiring order, or reversed
+  the other way, so it can go the short or the long way. Its ring is the one at start
+  rank + (end rank − start rank) × *f*, ranking the rings from the centre out, rounded;
+  its LED the nearest to its angle on that ring. With the same ring and angle at both
+  ends it goes once all the way round; with the same angle on two rings, straight out
+  or in.
+- **Its path** is a number of steps (`neopixel_point_steps`), each from one LED to the
+  next: on an array the rows or the columns it crosses, whichever is more; on a circle
+  or doughnut the rings it crosses or the LEDs it goes round on the bigger of its two
+  rings (its sweep × that ring's LEDs, rounded), whichever is more. Step *i* of *S* is on
+  the LED nearest the point at *i* ÷ *S* (as above). At a fraction *f*, the point is
+  *f* × *S* steps along: between step *i* and *i* + 1 it lights the first by 1 − the
+  part of the step it has gone, and the second by that part (a quarter of the way
+  lights them three quarters and a quarter). Two steps on one LED light it whole; a
+  path of no steps (the same LED at both ends of an array) lights its one LED.
+
+**A patch** (`NEOPIXEL_GFX_PATCH`) lights every LED from its start to its end, and
+stays there: its input doesn't move it or dim it. With `NEOPIXEL_GFX_COLOUR_INPUT` its
+input sets its colour, from its colour at 0 to its colour at 1; without, it is one
+colour whatever its input. Its settings are a point's (its start, its end, options and
+colour), and it covers:
+
+- **on an array** the rectangle with its start and end at opposite corners (either way
+  round), the rows and columns of both included: one row of it is a strip of LEDs, one
+  LED a single LED;
+- **on a circle or doughnut**, on each ring from its start ring to its end ring (by
+  rank from the centre out, both included), the LED nearest its start angle and the
+  ones after it, round to the one nearest its end angle: in wiring order, or reversed
+  the other way round. The LEDs past the first are its sweep (as a point's, but 0 when
+  start and end have one angle) × the ring's LEDs, rounded, and at most all of them
+  (`neopixel_patch_span`). The same angle at both ends lights one LED a ring; to light
+  a doughnut of 24 whole, go from LED 0 to LED 23.
+
+**Sending.** Each node takes a PIO state machine, running the Pico SDK's WS2812
+program (`src/ws2812.pio`) at 800 kHz, and a DMA channel that feeds it, so core 1 doesn't
+wait for the LEDs: 24 bits, 30 µs, an LED, 7.7 ms for 256. Core 1 sends the colours,
+green, red, blue, most significant bit first, again when its input's fraction or its
+on/off input changes, once the last send has gone out and the line has been low 300
+µs, which latches it. All the program's NeoPixel nodes may have 1024 LEDs between
+them; the node that would go over, or that finds no state machine or DMA channel free,
+is skipped, and logged. On a save the LEDs keep what they show until the new program
+sends; a NeoPixel node taken out, or moved to another pin, has its LEDs turned off.
+
+- **Power.** A WS2812 draws up to 60 mA at full white. Power more than a handful from
+  5 V (VBUS, or a supply with its ground joined to the Pico's), not from 3.3 V, and
+  keep the brightness down: at 40 of 255 a white LED draws about 10 mA. The data line
+  goes to the pin; most WS2812Bs take the Pico's 3.3 V on it, and a level shifter
+  (or a first LED powered a diode drop below 5 V) makes sure.
+
+An 8 × 8 array on GPIO 16 showing a slider `n1` as a green bar along its top row, at
+brightness 40, always on:
+
+```hex example=neopixel-config
+0A 00 20                                        # Config, 32 bytes
+12 00 00 01 01  00                              # slider n1, horizontal
+26 01 00 02 15  00 01 00 00 00 00               # NeoPixels n2 ← n1, no on/off: always on
+                10 00 00 28                     #   GPIO 16, array, brightness 40
+                02 08 08                        #   8 rows of 8
+                00 06 00 00 00 00 FF 00         #   a bar along row 0, green
+```
+
+A 24-LED doughnut on GPIO 16 with a point going once round from LED 0 as slider `n1`
+goes from 0 to 1, from green to red, while button `n3` is on:
+
+```hex example=neopixel-point-config
+0A 00 29                                        # Config, 41 bytes
+12 00 00 01 01  00                              # slider n1, horizontal
+10 00 00 03 00                                  # button n3
+26 01 00 02 19  00 01 00 00 03 00               # NeoPixels n2 ← n1, on/off ← n3
+                10 02 00 28                     #   GPIO 16, doughnut, brightness 40
+                01 18                           #   24 LEDs
+                01 0B 00 00 00 00 02            #   a point from LED 0 to LED 0: once round; colour from input
+                00 FF 00  FF 00 00              #   green at 0, red at 1
+```
+
+An 8 × 8 array whose top two rows are lit, blue with slider `n1` at 0, red at 1:
+
+```hex example=neopixel-patch-config
+0A 00 25                                        # Config, 37 bytes
+12 00 00 01 01  00                              # slider n1, horizontal
+26 01 00 02 1A  00 01 00 00 00 00               # NeoPixels n2 ← n1, always on
+                10 00 00 28                     #   GPIO 16, array, brightness 40
+                02 08 08                        #   8 rows of 8
+                02 0B 00 00 01 07 02            #   a patch from row 0 column 0 to row 1 column 7; colour from input
+                00 00 FF  FF 00 00              #   blue at 0, red at 1
+```
+
 ### Labels, positions and wires
 
 A node's label, position and incoming wire are each a message whose element ID is
@@ -1321,14 +1569,15 @@ Every source in the config has its signals, wired or not:
 | `40`–`4C` [logic](#logic) | 1; a counter 2: done (output 0), its count (output 1) | 0 off, 1 on; a scale, min or max its value; a counter's count | 0, then its state at the first scan |
 | `31` GPIO input | 1 | 0 off, 1 on | the pin when it is set up |
 | `32` ADC | 1 | volts, 0 to 3.3 | 0, then its first reading |
+| `33` DS18B20 | 2: its temperature (output 0), found (output 1) | °C; 0 or 1 | 0, then its first reading; as in the program core 1 ran |
 
 - **The browser sets a UI source's** (button, slider, 2D slider) with a
   [command](#01-command): each byte becomes byte ÷ 255.
 - **Core 1 sets a hardware input's** from the hardware, and a logic element's from
   its inputs, each scan.
-- **A new program keeps the UI sources' values:** a signal of the same element and
-  output in the program core 1 ran takes its value, so saving the graph doesn't move
-  a slider's outputs. A source new to the graph starts as in the table.
+- **A new program keeps the UI sources' values,** and a DS18B20's: a signal of the
+  same element and output in the program core 1 ran takes its value, so saving the
+  graph doesn't move a slider's outputs, or drop a reading until the next. A source new to the graph starts as in the table.
 - **Core 0 reads every signal** for telemetry (see
   [Telemetry text frames](#telemetry-text-frames)).
 
@@ -1343,6 +1592,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `32` ADC | its channel | its signal | See [ADC inputs](#adc-inputs) |
 | `31` GPIO input | its pin | its signal | See [GPIO inputs](#gpio-inputs) |
 | `30` core temperature | the chip's sensor | its signal | See [Core temperature](#core-temperature) |
+| `33` DS18B20 | its pin, 1-Wire | its two signals: its temperature, found | See [DS18B20 temperature sensors](#ds18b20-temperature-sensors) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
 | `41` AND, `42` OR | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `43` NOT, `44` delay, `48` pulse, `49` blink, `4A` toggle | 1 signal | its signal | See [Logic](#logic) |
@@ -1356,6 +1606,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `23` USB keyboard | 1 signal | a keystroke, through core 0 | Types when its signal goes from below 0.5 to 0.5 or up |
 | `24` stepper | 1 signal | its four pins | See [Stepper outputs](#stepper-outputs) |
 | `25` servo | 1 signal | its pin, a 50 Hz pulse | See [Servos](#servos) |
+| `26` NeoPixels | 2 signals: its value, on/off | its pin, through a PIO state machine | See [NeoPixels](#neopixels) |
 
 - **An output reads the signals its source references name.** A reference to an
   element that isn't in the program, or to nothing (ID 0), reads 0. A reference to
@@ -1368,12 +1619,14 @@ of the config; then the **logic**, each after the logic it reads; then the
   others' signals as the last scan left them.
 - **Left out:** the elements core 1 doesn't run (plots, lights, labels, positions,
   wires, networking), messages of the wrong length (the [payloads](#control-payloads)
-  give the lengths), an ADC channel over 2, a compare with a threshold or hysteresis
+  give the lengths), an ADC channel over 2, a DS18B20 on a pin that isn't usable or
+  with an unknown option, a compare with a threshold or hysteresis
   that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
   of its range, a scale whose ranges aren't finite numbers or whose input range is
   empty, a counter preset out of its range, a stepper `stepper_payload_read` refuses
-  (see [Stepper motors](#stepper-motors)) or servo `servo_payload_read` refuses
-  (see [Servos](#servos)), and anything over the limits:
+  (see [Stepper motors](#stepper-motors)), a servo `servo_payload_read` refuses
+  (see [Servos](#servos)) or NeoPixel node `neopixel_payload_read` refuses (see
+  [NeoPixels](#neopixels)), and anything over the limits:
   `PROG_SIGNALS_MAX` (96) signals and `PROG_NODES_MAX` (64) nodes.
 - **A repeated element ID**, as in configs from older UIs, keeps one signal, whose
   last message wins.
@@ -1424,6 +1677,20 @@ GPI n1 pin 3 options 05 -> s0
 LED n2 <- s0
 ```
 
+For the [ds18b20-config example](#ds18b20-temperature-sensors): its pin and
+resolution (and ` pull-up` with `DS18B20_PULLUP`), its temperature's signal, and
+`found` its found's:
+
+```program example=ds18b20-config
+s0 n1.0 ds18b20 = 0
+s1 n1.1 ds18b20 = 0
+s2 n2.0 compare = 0
+DS18B20 n1 pin 15 12-bit -> s0 found s1
+COMPARE n2 above 30 hysteresis 1 <- s0 -> s2
+GPO n3 pin 1 <- s2
+LED n4 <- s1
+```
+
 For the [slider-2d-config example](#2d-sliders): X and Y start at the slider's home,
 `40` and `BF` (0.251 and 0.749), and drive the PWM's duty and frequency:
 
@@ -1458,6 +1725,28 @@ For the [servo-config example](#servos): its pin, angles, pulses and speed limit
 ```program example=servo-config
 s0 n1.0 slider = 0
 SERVO n2 pin 14 angle 0-180 pulse 500-2400 us speed 90 <- s0 / 1
+```
+
+For the [NeoPixel examples](#neopixels): its pin, layout and size, brightness, its
+graphic (a bar's row, column or ring, or a point's or patch's start and end, from 0 as in the
+payload), its colour as red, green, blue in hex (and its colour at 1, if it follows its
+input), `/ F` the value of its signal that gives a full bar, and the signal that
+switches it on and off:
+
+```program example=neopixel-config
+s0 n1.0 slider = 0
+NEOPIXEL n2 pin 16 array 8x8 brightness 40 bar row 0 colour 00FF00 <- s0 / 1 on <- -
+```
+
+```program example=neopixel-point-config
+s0 n1.0 slider = 0
+s1 n3.0 button = 0
+NEOPIXEL n2 pin 16 doughnut 24 brightness 40 point 0,0-0,0 colour 00FF00-FF0000 <- s0 / 1 on <- s1
+```
+
+```program example=neopixel-patch-config
+s0 n1.0 slider = 0
+NEOPIXEL n2 pin 16 array 8x8 brightness 40 patch 0,0-1,7 colour 0000FF-FF0000 <- s0 / 1 on <- -
 ```
 
 For the [logic-config example](#logic): the compare reads the temperature and writes
@@ -1586,10 +1875,13 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - an ADC takes its channel's pin, GPIO 26 + channel (several ADC nodes may share a
      channel);
    - a GPIO input takes its pin, sets its pull, and reads it for its signal;
+   - a DS18B20 takes its pin as an input with its output level 0, its pull-up on or
+     off, and is configured at its first scan;
    - a GPO takes its pin as an output; a PWM takes its pin, and starts its slice at
      the first scan; a servo takes its pin, and starts its slice at 50 Hz at the
      first scan; a stepper takes its four pins as outputs, and holds its coils
-     from the first scan (unless it releases them);
+     from the first scan (unless it releases them); NeoPixels take their pin, a PIO
+     state machine and a DMA channel (see [NeoPixels](#neopixels));
    - an LED, keyboard, core temperature or logic takes no pin.
 
    A node whose pin isn't [usable](#gpio-pins), or that an earlier node took, is
@@ -1606,6 +1898,9 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - **Core temperature:** every 10th scan (100 ms) the sensor is read and smoothed
      (see [Core temperature](#core-temperature)); each core temperature signal is the
      temperature once it has moved 0.1 °C from it.
+   - **DS18B20:** one step of reading it, about 2 ms at most: a command, a wait, or 3
+     bytes of its scratchpad; a reading checked good becomes its signals (see
+     [DS18B20 temperature sensors](#ds18b20-temperature-sensors)).
 3. **The logic**, in program order, writes its signals from the signals it reads
    (see [Logic](#logic)).
 4. **The outputs**, in program order, each from the signals it reads, when the state
@@ -1622,6 +1917,10 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
      about 0.3 µs a step.
    - **Stepper:** takes its signal as its target or speed; it moves between scans
      (below).
+   - **NeoPixels:** their graphic is drawn for their signal's fraction of full scale
+     (all off while their on/off signal is below 0.5),
+     and DMA sends it out (see [NeoPixels](#neopixels)); if the last send isn't out
+     yet, a later scan sends it.
 
 Inputs come before logic, and logic before outputs, so an output follows its input,
 through any logic, in the same scan: within 10 ms of the pin, reading or command.

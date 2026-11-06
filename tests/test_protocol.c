@@ -8,6 +8,8 @@
 #include "unity.h"
 #include "protocol.h"
 #include "program.h"
+#include "ds18b20.h"
+#include "neopixel.h"
 #include "servo.h"
 #include "stepper.h"
 #include "config/config_iterator.h"
@@ -300,6 +302,14 @@ void test_graph_messages_belong_to_controls(void)
                 pwm_payload pwm;
                 if (labels.type != MSG_WIRE)
                     found = true;
+                else if (controls.type == MSG_HW_NEOPIXEL) {
+                    /* Two inputs: each wire names its source. */
+                    neopixel_payload px;
+                    TEST_ASSERT_TRUE_MESSAGE(neopixel_payload_read(controls.pay, controls.len, controls.flags, &px), ex->name);
+                    msg_ref wired = msg_ref_at(labels.pay + 4, labels.flags);
+                    found = labels.len == 4 + msg_ref_len(labels.flags) && wired.id != 0
+                        && (same_ref(wired, px.source) || same_ref(wired, px.enable));
+                }
                 else if (controls.type == MSG_HW_LED || controls.type == MSG_HW_GPO || controls.type == MSG_HW_STEPPER
                          || controls.type == MSG_HW_SERVO)
                     found = labels.len == 4 && msg_ref_at(controls.pay, controls.flags).id != 0;
@@ -343,8 +353,8 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
     if (src.id == 0) return;
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
-                             || type == MSG_HW_CORE || program_logic_floating(type), ex->name);
-    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);
+                             || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || program_logic_floating(type), ex->name);
+    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);   /* a DS18B20's temperature */
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
@@ -371,12 +381,21 @@ void test_wires_join_matching_types(void)
                 for (uint8_t k = 0; k < refs; k++) {
                     msg_ref src = through_block(ex, msg_ref_at(it.pay + k * r, it.flags));
                     uint8_t type = element_type(ex, src.id);
-                    if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI
+                    if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI || type == MSG_HW_DS18B20
                                                          || (program_logic(type) && !program_logic_floating(type)), ex->name);
-                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, src.output, ex->name);
+                    /* A DS18B20's found is its output 1; the others' only boolean output is 0. */
+                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 ? 1 : 0, src.output, ex->name);
                 }
             } else if (floating_in) {
                 for (uint8_t k = 0; k < refs; k++) assert_floating_hw(ex, msg_ref_at(it.pay + k * r, it.flags));
+            } else if (it.type == MSG_HW_NEOPIXEL) {
+                /* Its value from a floating source, its on/off from a boolean one. */
+                neopixel_payload px;
+                TEST_ASSERT_TRUE_MESSAGE(neopixel_payload_read(it.pay, it.len, it.flags, &px), ex->name);
+                assert_floating_hw(ex, px.source);
+                uint8_t type = element_type(ex, px.enable.id);
+                if (px.enable.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI
+                                                           || (program_logic(type) && !program_logic_floating(type)), ex->name);
             } else if (it.type == MSG_HW_PWM) {
                 pwm_payload pwm;
                 TEST_ASSERT_TRUE_MESSAGE(pwm_payload_read(it.pay, it.len, it.flags, &pwm), ex->name);
@@ -400,8 +419,10 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_KEYBOARD & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_STEPPER & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_SERVO & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT, MSG_HW_NEOPIXEL & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_DS18B20 & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
@@ -1239,6 +1260,552 @@ void test_servo_angle_and_pulse(void)
     TEST_ASSERT_INT_WITHIN(1, 200, scans);          /* 180° at 90 °/s: 2 s */
 }
 
+/* ── NeoPixels ────────────────────────────────────────────────────────── */
+
+/* A NeoPixel payload with outputs: source n1, no on/off source, GPIO 16, a layout,
+   options and brightness 255, its size, then a graphic: its type, then `glen` bytes of
+   settings. Returns its length. */
+static uint8_t neopixel_pay(uint8_t *pay, uint8_t layout, uint8_t options, const uint8_t *size, uint8_t k,
+                            uint8_t graphic, const uint8_t *set, uint8_t glen)
+{
+    uint8_t n = 0;
+    const uint8_t head[] = { 0, 1, 0, 0, 0, 0, 16, layout, options, 255, k };
+    memcpy(pay, head, sizeof head);
+    n += sizeof head;
+    memcpy(pay + n, size, k);
+    n += k;
+    pay[n++] = graphic;
+    pay[n++] = glen;
+    memcpy(pay + n, set, glen);
+    return (uint8_t)(n + glen);
+}
+
+/* A bar along `along` at `position`, with options, coloured red 10, green 20, blue 30. */
+static uint8_t bar_pay(uint8_t *pay, uint8_t layout, uint8_t options, const uint8_t *size, uint8_t k,
+                       uint8_t along, uint8_t position, uint8_t gfx_options)
+{
+    const uint8_t set[] = { along, position, gfx_options, 10, 20, 30 };
+    return neopixel_pay(pay, layout, options, size, k, NEOPIXEL_GFX_BAR, set, sizeof set);
+}
+
+static int bar_ok(uint8_t layout, uint8_t options, const uint8_t *size, uint8_t k,
+                  uint8_t along, uint8_t position, uint8_t gfx_options)
+{
+    uint8_t pay[64];
+    neopixel_payload px;
+    uint8_t len = bar_pay(pay, layout, options, size, k, along, position, gfx_options);
+    return neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px);
+}
+
+/* A point from (a0, b0) to (a1, b1), with options, coloured red 10, green 20, blue 30. */
+static int point_ok(uint8_t layout, const uint8_t *size, uint8_t k, uint8_t a0, uint8_t b0, uint8_t a1, uint8_t b1)
+{
+    uint8_t pay[64];
+    neopixel_payload px;
+    const uint8_t set[] = { a0, b0, a1, b1, 0, 10, 20, 30 };
+    uint8_t len = neopixel_pay(pay, layout, 0, size, k, NEOPIXEL_GFX_POINT, set, sizeof set);
+    return neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px);
+}
+
+void test_neopixel_payload_read(void)
+{
+    static const uint8_t grid[] = { 8, 8 }, rings[] = { 24, 16, 12, 8, 1 }, ring[] = { 24 };
+    uint8_t pay[64];
+    neopixel_payload px;
+    uint8_t len = bar_pay(pay, NEOPIXEL_ARRAY, NEOPIXEL_ZIGZAG, grid, 2, NEOPIXEL_BAR_COLUMN, 7, NEOPIXEL_GFX_REVERSE);
+    TEST_ASSERT_EQUAL_UINT8(21, len);
+    pay[3] = 0; pay[4] = 3;                                                 /* on/off from n3 */
+    TEST_ASSERT_TRUE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+    TEST_ASSERT_EQUAL_UINT16(1, px.source.id);
+    TEST_ASSERT_EQUAL_UINT16(3, px.enable.id);
+    TEST_ASSERT_EQUAL_UINT8(16, px.pin);
+    TEST_ASSERT_EQUAL_UINT16(64, px.leds);
+    TEST_ASSERT_EQUAL_UINT8(NEOPIXEL_BAR_COLUMN, px.along);
+    TEST_ASSERT_EQUAL_UINT8(7, px.position);
+    TEST_ASSERT_EQUAL_UINT8(NEOPIXEL_GFX_REVERSE, px.gfx_options);
+    TEST_ASSERT_EQUAL_UINT8(30, px.colour[0][2]);
+    TEST_ASSERT_EQUAL_UINT8(30, px.colour[1][2]);                           /* one colour: the same at 1 */
+    uint8_t two[64];                                                        /* 2-byte references: IDs 0x0100 and 0x0300 */
+    memcpy(two, pay + 1, 2);
+    memcpy(two + 2, pay + 4, len - 4);
+    TEST_ASSERT_TRUE(neopixel_payload_read(two, len - 2, 0, &px));
+    TEST_ASSERT_EQUAL_UINT16(0x0300, px.enable.id);
+    TEST_ASSERT_EQUAL_UINT8(16, px.pin);
+    TEST_ASSERT_FALSE(neopixel_payload_read(pay, len - 1, MSG_FLAG_OUTPUT, &px));
+    TEST_ASSERT_FALSE(neopixel_payload_read(pay, 4, MSG_FLAG_OUTPUT, &px));
+
+    /* A colour from its input: a second colour, at 1. */
+    const uint8_t two_colours[] = { NEOPIXEL_BAR_ROW, 0, NEOPIXEL_GFX_COLOUR_INPUT, 0, 255, 0, 255, 0, 0 };
+    len = neopixel_pay(pay, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_BAR, two_colours, sizeof two_colours);
+    TEST_ASSERT_TRUE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+    TEST_ASSERT_EQUAL_UINT8(255, px.colour[0][1]);
+    TEST_ASSERT_EQUAL_UINT8(255, px.colour[1][0]);
+    len = neopixel_pay(pay, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_BAR, two_colours, 6);  /* the flag, but one colour */
+    TEST_ASSERT_FALSE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+
+    TEST_ASSERT_TRUE(bar_ok(NEOPIXEL_CIRCLE, 0, rings, 5, NEOPIXEL_BAR_ROW, 4, 0));
+    TEST_ASSERT_TRUE(bar_ok(NEOPIXEL_CIRCLE, 0, rings, 5, NEOPIXEL_BAR_COLUMN, 0, NEOPIXEL_GFX_REVERSE));
+    TEST_ASSERT_TRUE(bar_ok(NEOPIXEL_DOUGHNUT, 0, ring, 1, NEOPIXEL_BAR_ROW, 23, NEOPIXEL_GFX_REVERSE));
+    static const uint8_t strip[] = { 1, 255 }, big[] = { 16, 16 }, over[] = { 16, 17 };
+    TEST_ASSERT_TRUE(bar_ok(NEOPIXEL_ARRAY, 0, strip, 2, NEOPIXEL_BAR_ROW, 0, 0));
+    TEST_ASSERT_TRUE(bar_ok(NEOPIXEL_ARRAY, 0, big, 2, NEOPIXEL_BAR_ROW, 15, 0));
+
+    /* Each of these is one the device doesn't run. */
+    static const uint8_t zero[] = { 8, 0 }, rings9[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 }, rings_big[] = { 200, 57 };
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0, over, 2, NEOPIXEL_BAR_ROW, 0, 0));          /* 272 LEDs */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0, zero, 2, NEOPIXEL_BAR_ROW, 0, 0));          /* no columns */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0, ring, 1, NEOPIXEL_BAR_ROW, 0, 0));          /* no columns given */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_BAR_ROW, 8, 0));          /* row 9 of 8 */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0, strip, 2, NEOPIXEL_BAR_COLUMN, 255, 0));    /* column 256 of 255 */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0x02, grid, 2, NEOPIXEL_BAR_ROW, 0, 0));       /* an unknown option */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0, grid, 2, 2, 0, 0));                         /* along neither */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_BAR_ROW, 0, 0x04));       /* an unknown graphic option */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_CIRCLE, 0, rings9, 9, NEOPIXEL_BAR_ROW, 0, 0));       /* 9 rings */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_CIRCLE, 0, rings_big, 2, NEOPIXEL_BAR_ROW, 0, 0));    /* 257 LEDs */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_CIRCLE, 0, rings, 5, NEOPIXEL_BAR_ROW, 5, 0));        /* ring 6 of 5 */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_CIRCLE, 0, rings, 5, NEOPIXEL_BAR_COLUMN, 1, 0));     /* across, from ring 2 */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_DOUGHNUT, 0, grid, 2, NEOPIXEL_BAR_ROW, 0, 0));       /* two sizes */
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_DOUGHNUT, 0, ring, 1, NEOPIXEL_BAR_COLUMN, 0, 0));
+    TEST_ASSERT_FALSE(bar_ok(NEOPIXEL_DOUGHNUT, 0, ring, 1, NEOPIXEL_BAR_ROW, 24, 0));      /* LED 25 of 24 */
+    TEST_ASSERT_FALSE(bar_ok(3, 0, ring, 1, NEOPIXEL_BAR_ROW, 0, 0));                       /* no such layout */
+
+    /* A point: from one place the layout has to another. */
+    TEST_ASSERT_TRUE(point_ok(NEOPIXEL_ARRAY, grid, 2, 0, 0, 7, 7));
+    TEST_ASSERT_TRUE(point_ok(NEOPIXEL_CIRCLE, rings, 5, 0, 23, 4, 0));
+    TEST_ASSERT_TRUE(point_ok(NEOPIXEL_DOUGHNUT, ring, 1, 0, 3, 0, 3));
+    {
+        /* A patch takes the same places; not one off its LEDs. */
+        const uint8_t ok[] = { 0, 0, 7, 7, 0, 10, 20, 30 }, off[] = { 0, 0, 8, 7, 0, 10, 20, 30 };
+        len = neopixel_pay(pay, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_PATCH, ok, sizeof ok);
+        TEST_ASSERT_TRUE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+        TEST_ASSERT_EQUAL_UINT8(7, px.to[1]);
+        len = neopixel_pay(pay, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_PATCH, off, sizeof off);
+        TEST_ASSERT_FALSE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+    }
+    TEST_ASSERT_FALSE(point_ok(NEOPIXEL_ARRAY, grid, 2, 0, 0, 8, 0));        /* row 9 of 8 */
+    TEST_ASSERT_FALSE(point_ok(NEOPIXEL_ARRAY, grid, 2, 0, 8, 0, 0));
+    TEST_ASSERT_FALSE(point_ok(NEOPIXEL_CIRCLE, rings, 5, 0, 0, 5, 0));      /* ring 6 of 5 */
+    TEST_ASSERT_FALSE(point_ok(NEOPIXEL_CIRCLE, rings, 5, 4, 1, 0, 0));      /* LED 2 of the ring of 1 */
+    TEST_ASSERT_FALSE(point_ok(NEOPIXEL_DOUGHNUT, ring, 1, 1, 0, 0, 0));     /* a doughnut has ring 0 only */
+    TEST_ASSERT_FALSE(point_ok(NEOPIXEL_DOUGHNUT, ring, 1, 0, 0, 0, 24));
+
+    len = bar_pay(pay, NEOPIXEL_DOUGHNUT, 0, ring, 1, NEOPIXEL_BAR_ROW, 0, 0);
+    pay[6] = 25;                                                            /* the WiFi chip's GPIO */
+    TEST_ASSERT_FALSE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+    pay[6] = 16;
+    pay[len - 8] = 3;                                                       /* no such graphic */
+    TEST_ASSERT_FALSE(neopixel_payload_read(pay, len, MSG_FLAG_OUTPUT, &px));
+}
+
+/* A NeoPixel node with these settings, compiled behind an ADC n1, a button n3 on its
+   on/off input. */
+static const prog_node *compile_neopixel_gfx(hw_program *p, uint8_t layout, uint8_t options, const uint8_t *size,
+                                             uint8_t k, uint8_t graphic, const uint8_t *set, uint8_t glen)
+{
+    uint8_t cfg[96] = { MSG_HW_ADC, 0, 0, 1, 1, 0, MSG_UI_BUTTON, 0, 0, 3, 0, MSG_HW_NEOPIXEL, MSG_FLAG_OUTPUT, 0, 2 };
+    cfg[15] = neopixel_pay(cfg + 16, layout, options, size, k, graphic, set, glen);
+    cfg[16 + 4] = 3;                        /* on/off <- n3 */
+    program_compile(cfg, 16u + cfg[15], p);
+    TEST_ASSERT_EQUAL_UINT8(2, p->node_count);
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_NEOPIXEL, p->nodes[1].type);
+    return &p->nodes[1];
+}
+
+static const prog_node *compile_neopixel(hw_program *p, uint8_t layout, uint8_t options, const uint8_t *size, uint8_t k,
+                                         uint8_t along, uint8_t position, uint8_t gfx_options)
+{
+    const uint8_t set[] = { along, position, gfx_options, 10, 20, 30 };
+    return compile_neopixel_gfx(p, layout, options, size, k, NEOPIXEL_GFX_BAR, set, sizeof set);
+}
+
+static const prog_node *compile_point(hw_program *p, uint8_t layout, const uint8_t *size, uint8_t k,
+                                      uint8_t a0, uint8_t b0, uint8_t a1, uint8_t b1, uint8_t gfx_options)
+{
+    const uint8_t set[] = { a0, b0, a1, b1, gfx_options, 10, 20, 30 };
+    return compile_neopixel_gfx(p, layout, 0, size, k, NEOPIXEL_GFX_POINT, set, sizeof set);
+}
+
+/* The colours as a WS2812 takes them, red 10, green 20, blue 30 (neopixel_pay's) at `k`. */
+#define LIT(k) ((uint32_t)(20 * (k) + 0.5f) << 24 | (uint32_t)(10 * (k) + 0.5f) << 16 | (uint32_t)(30 * (k) + 0.5f) << 8)
+
+/* The LEDs out of `leds` that are lit, as a string of their numbers, one each: "0 1 2". */
+static const char *lit_leds(const uint32_t *out, uint16_t leds)
+{
+    static char text[1024];
+    size_t n = 0;
+    text[0] = 0;
+    for (uint16_t i = 0; i < leds; i++)
+        if (out[i]) n += (size_t)snprintf(text + n, sizeof text - n, "%s%u", n ? " " : "", i);
+    return text;
+}
+
+void test_neopixel_bar(void)
+{
+    static hw_program p;
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    static const uint8_t grid[] = { 4, 5 };     /* 4 rows of 5 */
+
+    /* Along row 2 of a 4 × 5 array, from the left: an ADC's 1.65 V is half way, 2.5 LEDs. */
+    const prog_node *n = compile_neopixel(&p, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_BAR_ROW, 1, 0);
+    TEST_ASSERT_EQUAL_FLOAT(PROG_ADC_VOLTS, n->in_full[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0.5f, neopixel_fraction(n, 1.65f));
+    TEST_ASSERT_EQUAL_FLOAT(1, neopixel_fraction(n, 9));
+    TEST_ASSERT_EQUAL_FLOAT(0, neopixel_fraction(n, -1));
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_STRING("5 6 7", lit_leds(out, 20));
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[5]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[6]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[7]);     /* the LED it ends in, half lit */
+    neopixel_render(&n->px, 0, true, out);
+    TEST_ASSERT_EQUAL_STRING("", lit_leds(out, 20));
+    neopixel_render(&n->px, 1, true, out);
+    TEST_ASSERT_EQUAL_STRING("5 6 7 8 9", lit_leds(out, 20));
+    neopixel_render(&n->px, 1, false, out);         /* switched off */
+    TEST_ASSERT_EQUAL_STRING("", lit_leds(out, 20));
+
+    /* Zigzag: row 2 runs right to left, so from the left is from LED 9. */
+    n = compile_neopixel(&p, NEOPIXEL_ARRAY, NEOPIXEL_ZIGZAG, grid, 2, NEOPIXEL_BAR_ROW, 1, 0);
+    TEST_ASSERT_EQUAL_UINT16(9, neopixel_array_led(&n->px, 1, 0));
+    neopixel_render(&n->px, 0.4f, true, out);
+    TEST_ASSERT_EQUAL_STRING("8 9", lit_leds(out, 20));
+    /* Reversed: from the right. */
+    n = compile_neopixel(&p, NEOPIXEL_ARRAY, NEOPIXEL_ZIGZAG, grid, 2, NEOPIXEL_BAR_ROW, 1, NEOPIXEL_GFX_REVERSE);
+    neopixel_render(&n->px, 0.4f, true, out);
+    TEST_ASSERT_EQUAL_STRING("5 6", lit_leds(out, 20));
+
+    /* Up column 3 from the bottom; reversed, down from the top. */
+    n = compile_neopixel(&p, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_BAR_COLUMN, 2, 0);
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_STRING("12 17", lit_leds(out, 20));
+    n = compile_neopixel(&p, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_BAR_COLUMN, 2, NEOPIXEL_GFX_REVERSE);
+    neopixel_render(&n->px, 0.75f, true, out);
+    TEST_ASSERT_EQUAL_STRING("2 7 12", lit_leds(out, 20));
+
+    /* Brightness scales the colour: 51 of 255 is a fifth. */
+    p.nodes[1].px.brightness = 51;
+    neopixel_render(&p.nodes[1].px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.2f), out[2]);
+
+    /* A doughnut of 12 from LED 10: on round past LED 11 to 0; reversed, back to 9. */
+    static const uint8_t ring[] = { 12 };
+    n = compile_neopixel(&p, NEOPIXEL_DOUGHNUT, 0, ring, 1, NEOPIXEL_BAR_ROW, 10, 0);
+    neopixel_render(&n->px, 0.25f, true, out);
+    TEST_ASSERT_EQUAL_STRING("0 10 11", lit_leds(out, 12));
+    n = compile_neopixel(&p, NEOPIXEL_DOUGHNUT, 0, ring, 1, NEOPIXEL_BAR_ROW, 10, NEOPIXEL_GFX_REVERSE);
+    neopixel_render(&n->px, 0.25f, true, out);
+    TEST_ASSERT_EQUAL_STRING("8 9 10", lit_leds(out, 12));
+
+    /* A circle wired outside in, 8 then 4 then 1 (LEDs 0-7, 8-11, 12): around ring 2, or
+       across the rings from the centre out (the ring of 1, then of 4, then of 8). */
+    static const uint8_t rings[] = { 8, 4, 1 };
+    n = compile_neopixel(&p, NEOPIXEL_CIRCLE, 0, rings, 3, NEOPIXEL_BAR_ROW, 1, 0);
+    TEST_ASSERT_EQUAL_UINT16(13, n->px.leds);
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_STRING("8 9", lit_leds(out, 13));
+    n = compile_neopixel(&p, NEOPIXEL_CIRCLE, 0, rings, 3, NEOPIXEL_BAR_ROW, 1, NEOPIXEL_GFX_REVERSE);
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_STRING("8 11", lit_leds(out, 13));
+    n = compile_neopixel(&p, NEOPIXEL_CIRCLE, 0, rings, 3, NEOPIXEL_BAR_COLUMN, 0, 0);
+    neopixel_render(&n->px, 0.5f, true, out);   /* 1.5 rings: the middle, and the ring of 4 half lit */
+    TEST_ASSERT_EQUAL_STRING("8 9 10 11 12", lit_leds(out, 13));
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[12]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[8]);
+    n = compile_neopixel(&p, NEOPIXEL_CIRCLE, 0, rings, 3, NEOPIXEL_BAR_COLUMN, 0, NEOPIXEL_GFX_REVERSE);
+    neopixel_render(&n->px, 0.33f, true, out);  /* outside in: the ring of 8, nearly all */
+    TEST_ASSERT_EQUAL_STRING("0 1 2 3 4 5 6 7", lit_leds(out, 13));
+}
+
+/* The LEDs a point is on as its input goes 0, 0.25, 0.5, 0.75, 1. */
+static const char *point_path(const prog_node *n)
+{
+    static char text[64];
+    size_t len = 0;
+    for (int i = 0; i <= 4; i++)
+        len += (size_t)snprintf(text + len, sizeof text - len, "%s%u", i ? " " : "", neopixel_point_led(&n->px, i / 4.0f));
+    return text;
+}
+
+void test_neopixel_point(void)
+{
+    static hw_program p;
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    static const uint8_t grid[] = { 5, 5 };     /* 5 rows of 5: LED row × 5 + column */
+
+    /* Across a row, down a column, and on a slant, either way. */
+    TEST_ASSERT_EQUAL_STRING("10 11 12 13 14", point_path(compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 2, 0, 2, 4, 0)));
+    TEST_ASSERT_EQUAL_STRING("14 13 12 11 10", point_path(compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 2, 4, 2, 0, 0)));
+    TEST_ASSERT_EQUAL_STRING("21 16 11 6 1", point_path(compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 4, 1, 0, 1, 0)));
+    TEST_ASSERT_EQUAL_STRING("20 16 12 8 4", point_path(compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 4, 0, 0, 4, 0)));
+
+    /* One LED lit, in its colour. */
+    const prog_node *n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 0, 0, 4, 4, 0);
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_STRING("12", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[12]);
+    neopixel_render(&n->px, 0.5f, false, out);
+    TEST_ASSERT_EQUAL_STRING("", lit_leds(out, 25));
+
+    /* A doughnut of 8: from LED 2 to 6 the short way or (reversed) the other way round; from
+       an LED to itself, once round. */
+    static const uint8_t ring[] = { 8 };
+    TEST_ASSERT_EQUAL_STRING("2 3 4 5 6", point_path(compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 2, 0, 6, 0)));
+    TEST_ASSERT_EQUAL_STRING("2 1 0 7 6", point_path(compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 2, 0, 6, NEOPIXEL_GFX_REVERSE)));
+    TEST_ASSERT_EQUAL_STRING("6 0 2 4 6", point_path(compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 6, 0, 6, 0)));
+
+    /* A circle wired outside in, 8, 4, 1 (LEDs 0-7, 8-11, 12): from the middle out to the
+       outer ring's LED 2 (a quarter turn), and around the ring of 4. */
+    static const uint8_t rings[] = { 8, 4, 1 };
+    TEST_ASSERT_EQUAL_STRING("12 8 9 2 2", point_path(compile_point(&p, NEOPIXEL_CIRCLE, rings, 3, 2, 0, 0, 2, 0)));
+    TEST_ASSERT_EQUAL_STRING("8 9 10 11 8", point_path(compile_point(&p, NEOPIXEL_CIRCLE, rings, 3, 1, 0, 1, 0, 0)));
+}
+
+/* Between two LEDs of its path, a point lights both, each as much as it is near it. */
+void test_neopixel_point_blends(void)
+{
+    static hw_program p;
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    static const uint8_t grid[] = { 5, 5 }, ring[] = { 8 }, rings[] = { 8, 4, 1 };
+
+    /* Along row 3, 4 steps: at 0.375 half way from LED 11 to 12; at 0.3125 a quarter. */
+    const prog_node *n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 2, 0, 2, 4, 0);
+    TEST_ASSERT_EQUAL_UINT16(4, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.375f, true, out);
+    TEST_ASSERT_EQUAL_STRING("11 12", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[11]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[12]);
+    neopixel_render(&n->px, 0.3125f, true, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.75f), out[11]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.25f), out[12]);
+    neopixel_render(&n->px, 1, true, out);         /* at its end: that LED alone */
+    TEST_ASSERT_EQUAL_STRING("14", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[14]);
+
+    /* On a slant, 4 steps, LED to LED along the diagonal: 20, 16, 12, 8, 4. */
+    n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 4, 0, 0, 4, 0);
+    neopixel_render(&n->px, 0.125f, true, out);
+    TEST_ASSERT_EQUAL_STRING("16 20", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[16]);
+    /* A slant of 2 rows over 4 columns: 4 steps, a row every other one. */
+    n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 0, 0, 2, 4, 0);
+    TEST_ASSERT_EQUAL_UINT16(4, neopixel_point_steps(&n->px));
+    TEST_ASSERT_EQUAL_STRING("0 6 7 13 14", point_path(n));   /* rows rounded, a half up */
+    /* Start and end the same: no steps, one LED. */
+    n = compile_point(&p, NEOPIXEL_ARRAY, grid, 2, 1, 1, 1, 1, 0);
+    TEST_ASSERT_EQUAL_UINT16(0, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.3f, true, out);
+    TEST_ASSERT_EQUAL_STRING("6", lit_leds(out, 25));
+
+    /* A doughnut of 8 from LED 2 to 6: 4 steps; reversed the other way round, 4 too. */
+    n = compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 2, 0, 6, 0);
+    TEST_ASSERT_EQUAL_UINT16(4, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.125f, true, out);
+    TEST_ASSERT_EQUAL_STRING("2 3", lit_leds(out, 8));
+    n = compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 2, 0, 6, NEOPIXEL_GFX_REVERSE);
+    neopixel_render(&n->px, 0.375f, true, out);
+    TEST_ASSERT_EQUAL_STRING("0 1", lit_leds(out, 8));
+    /* Once round from LED 6: 8 steps; near the end, between LED 5 and back at 6. */
+    n = compile_point(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 6, 0, 6, 0);
+    TEST_ASSERT_EQUAL_UINT16(8, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.9375f, true, out);
+    TEST_ASSERT_EQUAL_STRING("5 6", lit_leds(out, 8));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[5]);
+
+    /* A circle from the middle out to the outer ring's LED 2: 2 rings, a quarter of 8 LEDs:
+       2 steps, 12 then 9 then 2; a quarter of the way, between 12 and 9. */
+    n = compile_point(&p, NEOPIXEL_CIRCLE, rings, 3, 2, 0, 0, 2, 0);
+    TEST_ASSERT_EQUAL_UINT16(2, neopixel_point_steps(&n->px));
+    neopixel_render(&n->px, 0.25f, true, out);
+    TEST_ASSERT_EQUAL_STRING("9 12", lit_leds(out, 13));
+    TEST_ASSERT_EQUAL_HEX32(LIT(0.5f), out[9]);
+}
+
+static const prog_node *compile_patch(hw_program *p, uint8_t layout, const uint8_t *size, uint8_t k,
+                                      uint8_t a0, uint8_t b0, uint8_t a1, uint8_t b1, uint8_t gfx_options)
+{
+    const uint8_t set[] = { a0, b0, a1, b1, gfx_options, 10, 20, 30 };
+    return compile_neopixel_gfx(p, layout, 0, size, k, NEOPIXEL_GFX_PATCH, set, sizeof set);
+}
+
+/* The LEDs a patch lights, at an input of 0.5. */
+static const char *patch_leds(const prog_node *n, uint16_t leds)
+{
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    neopixel_render(&n->px, 0.5f, true, out);
+    return lit_leds(out, leds);
+}
+
+/* A patch lights every LED from its start to its end, whatever its input. */
+void test_neopixel_patch(void)
+{
+    static hw_program p;
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    static const uint8_t grid[] = { 5, 5 }, ring[] = { 8 }, rings[] = { 8, 4, 1 };
+
+    /* On an array, the rectangle with those corners, given either way round. */
+    const prog_node *n = compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 1, 1, 2, 3, 0);
+    TEST_ASSERT_EQUAL_STRING("6 7 8 11 12 13", patch_leds(n, 25));
+    TEST_ASSERT_EQUAL_STRING("6 7 8 11 12 13", patch_leds(compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 2, 3, 1, 1, 0), 25));
+    TEST_ASSERT_EQUAL_STRING("16 17 18 19", patch_leds(compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 3, 4, 3, 1, 0), 25));
+    TEST_ASSERT_EQUAL_STRING("24", patch_leds(compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 4, 4, 4, 4, 0), 25));
+    /* Its input doesn't move it, or dim it; off, it is dark. */
+    n = compile_patch(&p, NEOPIXEL_ARRAY, grid, 2, 0, 0, 0, 1, 0);
+    neopixel_render(&n->px, 0, true, out);
+    TEST_ASSERT_EQUAL_STRING("0 1", lit_leds(out, 25));
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[1]);
+    neopixel_render(&n->px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[0]);
+    neopixel_render(&n->px, 1, false, out);
+    TEST_ASSERT_EQUAL_STRING("", lit_leds(out, 25));
+
+    /* Its colour from its input: green 200 at 0 to red 200 at 1, on every LED of it. */
+    const uint8_t fade[] = { 0, 0, 0, 1, NEOPIXEL_GFX_COLOUR_INPUT, 0, 200, 0, 200, 0, 0 };
+    n = compile_neopixel_gfx(&p, NEOPIXEL_ARRAY, 0, grid, 2, NEOPIXEL_GFX_PATCH, fade, sizeof fade);
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_HEX32(100u << 24 | 100u << 16, out[0]);
+    TEST_ASSERT_EQUAL_HEX32(100u << 24 | 100u << 16, out[1]);
+    neopixel_render(&n->px, 0, true, out);
+    TEST_ASSERT_EQUAL_HEX32(200u << 24, out[1]);
+
+    /* A doughnut of 8: from LED 6 round to 1 in wiring order, or reversed the other way;
+       one LED; the whole ring. */
+    TEST_ASSERT_EQUAL_STRING("0 1 6 7", patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 6, 0, 1, 0), 8));
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6",
+                             patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 6, 0, 1, NEOPIXEL_GFX_REVERSE), 8));
+    TEST_ASSERT_EQUAL_STRING("3", patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 3, 0, 3, 0), 8));
+    TEST_ASSERT_EQUAL_STRING("0 1 2 3 4 5 6 7", patch_leds(compile_patch(&p, NEOPIXEL_DOUGHNUT, ring, 1, 0, 0, 0, 7, 0), 8));
+
+    /* A circle wired outside in, 8, 4, 1 (LEDs 0-7, 8-11, 12): a quarter turn from LED 0
+       on the ring of 4 out to the ring of 8: LEDs 8 and 9, and 0 to 2. From the middle,
+       the middle too. */
+    n = compile_patch(&p, NEOPIXEL_CIRCLE, rings, 3, 1, 0, 0, 2, 0);
+    TEST_ASSERT_EQUAL_STRING("0 1 2 8 9", patch_leds(n, 13));
+    uint8_t start, more;
+    neopixel_patch_span(&n->px, 0, &start, &more);
+    TEST_ASSERT_EQUAL_UINT8(0, start);
+    TEST_ASSERT_EQUAL_UINT8(2, more);
+    TEST_ASSERT_EQUAL_STRING("0 1 2 8 9 12", patch_leds(compile_patch(&p, NEOPIXEL_CIRCLE, rings, 3, 2, 0, 0, 2, 0), 13));
+    /* The whole of the ring of 4 and the middle: from the middle to the ring of 4's LED 3. */
+    TEST_ASSERT_EQUAL_STRING("8 9 10 11 12", patch_leds(compile_patch(&p, NEOPIXEL_CIRCLE, rings, 3, 2, 0, 1, 3, 0), 13));
+}
+
+void test_neopixel_colour_input_and_switch(void)
+{
+    static hw_program p;
+    static uint32_t out[NEOPIXEL_LEDS_MAX];
+    static const uint8_t strip[] = { 1, 4 };
+
+    /* A bar from green at 0 to red at 1: half way, half of each, on every lit LED. */
+    const uint8_t set[] = { NEOPIXEL_BAR_ROW, 0, NEOPIXEL_GFX_COLOUR_INPUT, 0, 200, 0, 200, 0, 0 };
+    const prog_node *n = compile_neopixel_gfx(&p, NEOPIXEL_ARRAY, 0, strip, 2, NEOPIXEL_GFX_BAR, set, sizeof set);
+    neopixel_render(&n->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_STRING("0 1", lit_leds(out, 4));
+    TEST_ASSERT_EQUAL_HEX32(100u << 24 | 100u << 16, out[0]);
+    neopixel_render(&n->px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(200u << 16, out[3]);
+    neopixel_render(&n->px, 0.25f, true, out);
+    TEST_ASSERT_EQUAL_HEX32(150u << 24 | 50u << 16, out[0]);
+
+    /* The on/off input: wired to button n3, on from 0.5; not wired, always on. */
+    TEST_ASSERT_EQUAL_UINT8(2, n->in_count);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 3, 0), n->in[1]);
+    TEST_ASSERT_FALSE(neopixel_enabled(n, 0));
+    TEST_ASSERT_TRUE(neopixel_enabled(n, 1));
+    p.nodes[1].in[1] = PROG_NO_SIGNAL;
+    TEST_ASSERT_TRUE(neopixel_enabled(n, 0));
+}
+
+/* ── DS18B20 temperature sensors ──────────────────────────────────────── */
+
+/* A scratchpad holding a temperature (its LSB and MSB), with its CRC. */
+static void ds18b20_pad(uint8_t pad[DS18B20_PAD_LEN], uint8_t lsb, uint8_t msb)
+{
+    const uint8_t head[] = { lsb, msb, 0x4B, 0x46, 0x7F, 0xFF, 0x0C, 0x10 };
+    memcpy(pad, head, sizeof head);
+    pad[8] = ds18b20_crc8(pad, 8);
+}
+
+void test_ds18b20_scratchpad(void)
+{
+    /* The CRC of Maxim's application note 27 example: a ROM of 02 1C B8 01 00 00 00 has CRC A2. */
+    static const uint8_t rom[] = { 0x02, 0x1C, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xA2 };
+    TEST_ASSERT_EQUAL_HEX8(0xA2, ds18b20_crc8(rom, 7));
+    TEST_ASSERT_EQUAL_HEX8(0, ds18b20_crc8(rom, 8));
+
+    uint8_t pad[DS18B20_PAD_LEN];
+    float c = 0;
+    ds18b20_pad(pad, 0x91, 0x01);                       /* +25.0625 °C (the datasheet's table) */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(25.0625f, c);
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_11, &c));
+    TEST_ASSERT_EQUAL_FLOAT(25.0f, c);                  /* the low bit is undefined at 11 bits */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_9, &c));
+    TEST_ASSERT_EQUAL_FLOAT(25.0f, c);
+    ds18b20_pad(pad, 0x5E, 0xFF);                       /* −10.125 °C */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(-10.125f, c);
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_9, &c));
+    TEST_ASSERT_EQUAL_FLOAT(-10.5f, c);
+    ds18b20_pad(pad, 0x90, 0xFC);                       /* −55 °C, its lowest */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(-55.0f, c);
+    ds18b20_pad(pad, 0xD0, 0x07);                       /* +125 °C, its highest */
+    TEST_ASSERT_TRUE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(125.0f, c);
+
+    /* A bit wrong anywhere fails the CRC; a line held low, or left high, is no sensor. */
+    c = 1;
+    pad[4] ^= 0x01;
+    TEST_ASSERT_FALSE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    TEST_ASSERT_EQUAL_FLOAT(1, c);
+    memset(pad, 0, sizeof pad);
+    TEST_ASSERT_FALSE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+    memset(pad, 0xFF, sizeof pad);
+    TEST_ASSERT_FALSE(ds18b20_celsius(pad, DS18B20_RES_12, &c));
+
+    TEST_ASSERT_EQUAL_UINT16(94, ds18b20_conversion_ms(DS18B20_RES_9));
+    TEST_ASSERT_EQUAL_UINT16(750, ds18b20_conversion_ms(DS18B20_RES_12));
+    TEST_ASSERT_EQUAL_HEX8(0x1F, ds18b20_config(DS18B20_RES_9));
+    TEST_ASSERT_EQUAL_HEX8(0x7F, ds18b20_config(DS18B20_RES_12));
+
+    /* 85 °C, its power-on value: dropped once, unless the last reading was near it. */
+    bool doubted = false;
+    TEST_ASSERT_TRUE(ds18b20_take(25, true, 24, &doubted));
+    TEST_ASSERT_FALSE(ds18b20_take(85, true, 25, &doubted));
+    TEST_ASSERT_TRUE(doubted);
+    TEST_ASSERT_TRUE(ds18b20_take(85, true, 25, &doubted));     /* again in a row: it is 85 °C */
+    TEST_ASSERT_FALSE(doubted);
+    TEST_ASSERT_FALSE(ds18b20_take(85, false, 0, &doubted));    /* a first reading */
+    TEST_ASSERT_TRUE(ds18b20_take(24, false, 0, &doubted));
+    TEST_ASSERT_TRUE(ds18b20_take(85, true, 84.5f, &doubted));  /* rising through it */
+}
+
+void test_ds18b20_program(void)
+{
+    static hw_program p;
+    const uint8_t cfg[] = {
+        MSG_HW_DS18B20, 0, 0, 1, 2, 15, DS18B20_RES_10 | DS18B20_PULLUP,     /* DS18B20 n1, GPIO 15 */
+        MSG_HW_PWM, MSG_FLAG_OUTPUT, 0, 2, 17, 0, 1, 0, 2, 0x03, 0xE8, PWM_DUTY_INPUT, 50, 0, 100, 0, 0, 0, 0, 100, 0x27, 0x10,
+        MSG_HW_GPO, MSG_FLAG_OUTPUT, 0, 3, 4, 0, 1, 1, 5,                   /* GPO n3 on GPIO 5 <- n1's found */
+        MSG_HW_DS18B20, 0, 0, 4, 2, 25, 0,                                   /* GPIO 25: not usable */
+        MSG_HW_DS18B20, 0, 0, 5, 2, 16, 0x08,                                /* an unknown option */
+        MSG_HW_DS18B20, 0, 0, 6, 1, 16,                                      /* no options */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(2, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(3, p.node_count);
+    const prog_node *ds = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_DS18B20, ds->type);
+    TEST_ASSERT_EQUAL_UINT8(15, ds->pin);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 0), ds->out);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 1), ds->out_count);
+    /* A PWM takes its temperature as a fraction of DS18B20_FULL; a GPO reads its found. */
+    TEST_ASSERT_EQUAL_FLOAT(DS18B20_FULL, p.nodes[1].in_full[0]);
+    TEST_ASSERT_EQUAL_UINT8(ds->out_count, p.nodes[2].in[0]);
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "DS18B20 n1 pin 15 10-bit pull-up -> s0 found s1\n"));
+}
+
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
 void test_counter_payload_valid(void)
 {
@@ -1487,6 +2054,14 @@ int main(void)
     RUN_TEST(test_stepper_coils);
     RUN_TEST(test_servo_payload_read);
     RUN_TEST(test_servo_angle_and_pulse);
+    RUN_TEST(test_ds18b20_scratchpad);
+    RUN_TEST(test_ds18b20_program);
+    RUN_TEST(test_neopixel_payload_read);
+    RUN_TEST(test_neopixel_bar);
+    RUN_TEST(test_neopixel_point);
+    RUN_TEST(test_neopixel_point_blends);
+    RUN_TEST(test_neopixel_patch);
+    RUN_TEST(test_neopixel_colour_input_and_switch);
     RUN_TEST(test_feedback_reference);
     RUN_TEST(test_program_counter);
     RUN_TEST(test_program_feedback_loop);

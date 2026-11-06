@@ -100,6 +100,7 @@ input {
 /* A choice field: one button per option, the current one marked. */
 .editable.choice {
     justify-content: flex-start;
+    flex-wrap: wrap;    /* long option names go on to a second line */
     gap: var(--step--3);
 }
 

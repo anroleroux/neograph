@@ -130,7 +130,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     const packets = [];
 
     // ── The demo graph: the button drives the LED; below, a second button starts a
-    // copy of the block "Blink 3", whose loop blinks the light three times ──
+    // copy of the block "Blink 3", whose loop blinks the light three times; at the
+    // bottom a slider drives a 4 × 4 NeoPixel array ──
     let { page, errors } = await open(browser, true);
     const demo = await page.evaluate(async () => {
         const wires = gEdges.map(e => e.start.node.name + '>' + e.end.node.name + (e.feedback ? '~' : '')).join(' ');
@@ -148,7 +149,8 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             after: [copy.outs[0], elements.n5.on, ...parts.filter(n => n instanceof uiLatch || n instanceof uiCounter)
                 .map(n => n instanceof uiCounter ? n.count : n.value)].join() };
     });
-    expect(demo.wires === 'n1>n2 n3>n4 n4>n5' && demo.types === 'button,led,button,block,light' && demo.def === 'Blink 3'
+    expect(demo.wires === 'n1>n2 n3>n4 n4>n5 n10>n11' && demo.types === 'button,led,button,block,light,slider,neopixel'
+        && demo.def === 'Blink 3'
         && demo.inside === 'Start>Latch,Latch>Blink,Blink>Blink,Blink>Counter,Latch>NOT,NOT>Counter,Counter>Latch~'
         && demo.parts === '6,4', 'the demo graph is not as expected: ' + JSON.stringify(demo));
     expect(demo.blinks === 3 && demo.after === '0,false,false,0', 'the demo loop did not blink three times: ' + JSON.stringify(demo));
@@ -222,7 +224,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV, TMP ADC GPI, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1580,6 +1582,181 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [s.pin, s.angleMin, s.angleMax, s.pulseMin, s.pulseMax, s.speed, s.inConns().map(c => c.start.node.name).join()].join();
     });
     expect(servoBack === '6,20,160,600,2340,45,n1', 'a servo restored as ' + servoBack);
+
+    // NeoPixels: an array's settings, then a circle's and a doughnut's, and a point's;
+    // its bar and point light the LEDs src/neopixel.c does (test_neopixel_bar,
+    // test_neopixel_point, test_neopixel_colour_input_and_switch). It takes a number and
+    // an on/off wire. It marshals as the neopixel-config example in PROTOCOL.md, and
+    // restores a point with a colour from its input and both wires.
+    await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
+    await page.locator('#add [title="Add NeoPixels"]').dispatchEvent('click');
+    const neoTail = 'Colour:|Fixed colour:|Preview at:';
+    const arrayRows = 'Label:|GPIO pin:|Layout:|Rows:|Columns:|Wiring:|Brightness (0-255):|Graphic:|Along:|Row:|Direction:|' + neoTail;
+    expect(await keyRows() === arrayRows, 'new NeoPixels do not show an array\'s settings: ' + await keyRows());
+    expect(await page.locator('#settings .neopixel-preview circle').count() === 16, 'the preview does not draw a 4 × 4 array');
+    await choice('Along', 'Column');
+    expect(await keyRows() === arrayRows.replace('Row:', 'Column:'), 'a bar up a column shows ' + await keyRows());
+    await choice('Colour', 'From input');
+    expect(await keyRows() === arrayRows.replace('Row:', 'Column:').replace('Fixed colour:', 'Colour at 0:|Colour at 1:'),
+        'a colour from the input shows ' + await keyRows());
+    await choice('Colour', 'Fixed');
+    await select('Graphic').selectOption('1');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rows:|Columns:|Wiring:|Brightness (0-255):|Graphic:|'
+        + 'Start row:|Start column:|End row:|End column:|' + neoTail, 'a point on an array shows ' + await keyRows());
+    await select('Graphic').selectOption('2');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rows:|Columns:|Wiring:|Brightness (0-255):|Graphic:|'
+        + 'Start row:|Start column:|End row:|End column:|' + neoTail, 'a patch on an array shows ' + await keyRows());
+    await select('Graphic').selectOption('1');
+    await choice('Layout', 'Circle');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rings (LEDs, as wired):|Brightness (0-255):|Graphic:|'
+        + 'Start ring:|Start LED:|End ring:|End LED:|Direction:|' + neoTail, 'a point on a circle shows ' + await keyRows());
+    await select('Graphic').selectOption('0');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|Rings (LEDs, as wired):|Brightness (0-255):|Graphic:|Along:|Direction:|' + neoTail,
+        'a circle across its rings shows ' + await keyRows());
+    await choice('Layout', 'Doughnut');
+    expect(await keyRows() === 'Label:|GPIO pin:|Layout:|LEDs:|Brightness (0-255):|Graphic:|Starts at LED:|Direction:|' + neoTail,
+        'a doughnut shows ' + await keyRows());
+    const neo = await page.evaluate(() => {
+        const s = selected;
+        const lit = (f, on) => s.render(f, on).map((c, i) => c.some(v => v) ? i : null).filter(i => i !== null).join(' ');
+        const path = () => [0, 0.25, 0.5, 0.75, 1].map(f => s.pointLed(f)).join(' ');
+        const shows = [];
+        // Bars.
+        s.setLayout(NEOPIXEL_DOUGHNUT); s.setRingLeds('12'); s.setPosition('11'); s.colour = [10, 20, 30]; s.brightness = 255;
+        shows.push(lit(0.25));
+        s.reverse = true; shows.push(lit(0.25)); s.reverse = false;
+        s.setLayout(NEOPIXEL_CIRCLE); s.setRings('8, 4, 1'); s.setAlong(NEOPIXEL_BAR_COLUMN);
+        shows.push(lit(0.5), s.render(0.5)[8].join());
+        s.setLayout(NEOPIXEL_ARRAY); s.setRows('4'); s.setCols('5'); s.zigzag = true; s.setAlong(NEOPIXEL_BAR_ROW); s.setPosition('2');
+        shows.push(lit(0.4));
+        s.zigzag = false; s.setAlong(NEOPIXEL_BAR_COLUMN); s.setPosition('3');
+        shows.push(lit(0.5), lit(0.5, false) || 'off');
+        // Points.
+        s.setGraphic(NEOPIXEL_GFX_POINT); s.setRows('5');
+        s.setPlace('from', 0, '3'); s.setPlace('from', 1, '1'); s.setPlace('to', 0, '3'); s.setPlace('to', 1, '5');
+        shows.push(path());
+        s.setPlace('from', 0, '5'); s.setPlace('to', 0, '1');
+        shows.push(path());
+        s.setLayout(NEOPIXEL_DOUGHNUT); s.setRingLeds('8');
+        s.setPlace('from', 1, '3'); s.setPlace('to', 1, '7'); s.reverse = true;
+        shows.push(path());
+        s.reverse = false; s.setPlace('from', 1, '7');
+        shows.push(path());
+        const blend = (f) => s.render(f).map((c, i) => c.some(v => v) ? `${i}:${c[1]}` : null).filter(Boolean).join(' ');
+        shows.push(s.pointSteps() + ' ' + blend(0.9375));    // once round: between LED 5 and 6, half each
+        s.setLayout(NEOPIXEL_CIRCLE);
+        s.from = [2, 0]; s.to = [0, 2];
+        shows.push(path(), s.pointSteps() + ' ' + blend(0.25));
+        // Patches: an array's rectangle, a doughnut's arc either way round, a circle's sector.
+        s.setGraphic(NEOPIXEL_GFX_PATCH); s.reverse = false;
+        s.setLayout(NEOPIXEL_ARRAY); s.setRows('5'); s.setCols('5'); s.from = [1, 1]; s.to = [2, 3];
+        shows.push(lit(0.5));
+        s.setLayout(NEOPIXEL_DOUGHNUT); s.from = [0, 6]; s.to = [0, 1];
+        shows.push(lit(0.5));
+        s.reverse = true; shows.push(lit(0.5)); s.reverse = false;
+        s.setLayout(NEOPIXEL_CIRCLE); s.from = [1, 0]; s.to = [0, 2];
+        shows.push(lit(0.5));
+        s.colourInput = true; s.colour = [0, 200, 0]; s.colourAt1 = [200, 0, 0];
+        shows.push(s.render(0.5)[8].join());
+        s.colourInput = false;
+        // A colour from the input: green 200 at 0 to red 200 at 1.
+        s.setGraphic(NEOPIXEL_GFX_BAR); s.setLayout(NEOPIXEL_ARRAY); s.setRows('1'); s.setCols('4'); s.setAlong(NEOPIXEL_BAR_ROW);
+        s.colourInput = true; s.colour = [0, 200, 0]; s.colourAt1 = [200, 0, 0];
+        shows.push(s.render(0.5)[0].join(), s.render(0.25)[0].join());
+        s.colourInput = false;
+
+        s.setRows('8'); s.setCols('8');
+        const rejected = [s.setRows('0'), s.setCols('33'), s.setPosition('9'), s.setBrightness('256'), s.setColour('red'),
+            s.setRings('300'), s.setRings('1 1 1 1 1 1 1 1 1'), s.setRingLeds('256'), s.setPin('25'),
+            s.setPlace('from', 0, '9'), s.setPlace('to', 1, '0'), s.setGraphic(3)].every(r => r === false);
+        // A number and an on/off wire: a second of either replaces the first; a plot's
+        // can't come in, nor can a button's on the number.
+        const slider = addNode(MSG_UI_SLIDER), button = addNode(MSG_UI_BUTTON), button2 = addNode(MSG_UI_BUTTON);
+        const slider2 = addNode(MSG_UI_SLIDER);
+        createEdge(slider2.name, s.name);
+        createEdge(button2.name, s.name);
+        const both = !!createEdge(slider.name, s.name) && !!createEdge(button.name, s.name);
+        const wired = both && s.inConns().length === 2 && s.valueConn().start.node === slider && s.enableConn().start.node === button;
+        const pay = s.marshal().slice(5);
+        const enableRef = pay.slice(3, 6).join() === [0, button.id, 0].join();
+        s.setAlong(NEOPIXEL_BAR_ROW); s.setPosition('1'); s.reverse = false;
+        s.setColour('#00ff00'); s.setBrightness('40');
+        const ex = s.marshal().slice(5);
+        ex.splice(0, 6, 0, 1, 0, 0, 0, 0);     // as in the example: NeoPixels n2 <- slider n1, no on/off
+        ex[6] = 16;
+        saveGraph();
+        return { shows: shows.join('|'), rejected, wired, enableRef, pay: ex.map(b => b.toString(16).padStart(2, '0')).join('') };
+    });
+    packets.push(...await sent(page));
+    expect(neo.shows === '0 10 11|8 9 10|8 9 10 11 12|5,10,15|8 9|12 17|off'
+        + '|10 11 12 13 14|20 16 12 8 4|2 1 0 7 6|6 0 2 4 6|8 5:10 6:10|12 8 9 2 2|2 9:10 12:10|6 7 8 11 12 13|0 1 6 7|1 2 3 4 5 6|0 1 2 8 9|100,100,0|100,100,0|50,150,0', 'the graphics lit ' + neo.shows);
+    expect(neo.rejected, 'NeoPixels took settings out of range');
+    expect(neo.wired, 'NeoPixels did not take one number and one on/off wire');
+    expect(neo.enableRef, 'NeoPixels did not save their on/off wire');
+    expect(neo.pay === '000100' + '000000' + '10000028' + '020808' + '0006' + '000000' + '00ff00', 'NeoPixels marshal as ' + neo.pay);
+    const neoBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x12, 0, 0, 1, 1, 0,
+            0x10, 0, 0, 3, 0,
+            0x26, 1, 0, 2, 25, 0, 1, 0, 0, 3, 0, 7, NEOPIXEL_DOUGHNUT, 0, 99, 1, 12,
+            NEOPIXEL_GFX_POINT, 11, 0, 3, 0, 9, NEOPIXEL_GFX_REVERSE | NEOPIXEL_GFX_COLOUR_INPUT, 255, 128, 0, 0, 0, 255,
+        ])));
+        const s = elements.n2;
+        return [s.pin, s.layout, s.ringLeds, s.brightness, s.graphic, s.from.join(':'), s.to.join(':'), s.reverse,
+            s.colourInput, s.colourHex(), s.colourHex(true), s.valueConn()?.start.node.name, s.enableConn()?.start.node.name].join();
+    });
+    expect(neoBack === '7,2,12,99,1,0:3,0:9,true,true,#ff8000,#0000ff,n1,n3', 'NeoPixels restored as ' + neoBack);
+
+    // A DS18B20: its pin, resolution and pull-up; its temperature wires into a number
+    // input, its Found into an on/off; its tile shows the device's readings. It
+    // marshals as the ds18b20-config example in PROTOCOL.md, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a DS18B20 temperature sensor"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|GPIO pin:|Resolution:|Pull-up:|Wire from:|Command view:',
+        'a new DS18B20 does not show its settings: ' + await keyRows());
+    expect(await page.locator('#settings .setting-note').textContent() === '12 bits: 0.0625 °C steps, a reading every 750 ms',
+        'a DS18B20 at 12 bits says ' + await page.locator('#settings .setting-note').textContent());
+    await choice('Resolution', '10');
+    expect(await page.locator('#settings .setting-note').textContent() === '10 bits: 0.25 °C steps, a reading every 188 ms',
+        'a DS18B20 at 10 bits says ' + await page.locator('#settings .setting-note').textContent());
+    const ds = await page.evaluate(() => {
+        const s = selected;
+        const rejected = [s.setPin('29'), s.setResolution(4), s.setWireOutput(2)].every(r => r === false);
+        const cmp = addNode(MSG_LOGIC_COMPARE), led = addNode(MSG_HW_LED);
+        s.setWireOutput(0);
+        const wired = !!createEdge(s.name, cmp.name) && createEdge(s.name, led.name) === null
+            && (s.setWireOutput(1), !!createEdge(s.name, led.name)) && createEdge(s.name, cmp.name) === null;
+        s.shown = true;
+        buildCommandInterface();
+        const tile = () => s.tileState.textContent;
+        const tiles = [tile()];
+        receiveTelemetry(`sig ${s.id} 0 23.4375`);
+        receiveTelemetry(`sig ${s.id} 1 1`);
+        tiles.push(tile(), String(s.outputValue(0)), String(s.outputValue(1)));
+        receiveTelemetry(`sig ${s.id} 1 0`);
+        tiles.push(tile());
+        const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join('');
+        s.pullup = true;
+        const pullup = s.marshal()[6];
+        saveGraph();
+        return { rejected, wired, tiles: tiles.join('|'), pay, pullup, pin: s.pin };
+    });
+    packets.push(...await sent(page));
+    expect(ds.rejected, 'a DS18B20 took settings out of range');
+    expect(ds.wired, 'a DS18B20\'s outputs did not wire by type');
+    expect(ds.tiles === '–|23.4 °C|23.4375|1|No sensor', 'a DS18B20\'s tile showed ' + ds.tiles);
+    expect(ds.pay === ds.pin.toString(16).padStart(2, '0') + '01', 'a DS18B20 marshals as ' + ds.pay);
+    expect(ds.pullup === (0x04 | 1), 'a DS18B20 with its own pull-up marshals options ' + ds.pullup);
+    const dsBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x33, MSG_FLAG_SHOWN, 0, 1, 2, 22, DS18B20_RES_11 | DS18B20_PULLUP,
+            0x20, 1, 0, 2, 3, 0, 1, 1,
+        ])));
+        const s = elements.n1, led = elements.n2;
+        return [s.pin, s.resolution, s.pullup, s.shown, led.inConns().map(c => c.start.node.name + ':' + c.start.output).join()].join();
+    });
+    expect(dsBack === '22,2,true,true,n1:1', 'a DS18B20 restored as ' + dsBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

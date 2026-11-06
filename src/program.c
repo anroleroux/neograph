@@ -194,6 +194,7 @@ static float signal_full(const hw_program *p, uint8_t s) {
     switch (p->signals[s].type) {
     case MSG_HW_ADC: return PROG_ADC_VOLTS;
     case MSG_HW_CORE: return CORE_TEMP_FULL;
+    case MSG_HW_DS18B20: return p->signals[s].output == 0 ? DS18B20_FULL : 1;  // °C, or found: 0 or 1
     case MSG_LOGIC_COUNTER:
         for (uint8_t i = 0; i < p->node_count; i++) {
             if (p->nodes[i].out_count == s) return (float)p->nodes[i].preset;
@@ -327,6 +328,21 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             }
             break;
 
+        case MSG_HW_DS18B20: {
+            // Two signals: its temperature, and whether the sensor answers.
+            if (itr.len != 2 || !pin_usable(itr.pay[0]) || (itr.pay[1] & ~(DS18B20_RES_MASK | DS18B20_PULLUP))) break;
+            uint8_t found;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((found = add_signal(p, itr.id, 1, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->out = s;
+                n->out_count = found;
+                n->pin = itr.pay[0];
+                n->options = itr.pay[1];
+            }
+            break;
+        }
+
         default:
             // A logic element's signal, for the elements that read it; its node
             // comes after the inputs.
@@ -445,6 +461,19 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_NEOPIXEL: {
+            neopixel_payload px;
+            if (!neopixel_payload_read(itr.pay, itr.len, itr.flags, &px)) break;
+            if (!(n = add_node(p, itr.type, itr.id))) break;
+            n->in_count = 2;
+            n->in[0] = ref_signal(p, px.source);
+            n->in[1] = ref_signal(p, px.enable);
+            n->in_full[0] = signal_full(p, n->in[0]);
+            n->pin = px.pin;
+            n->px = px;
+            break;
+        }
+
         case MSG_HW_STEPPER: {
             stepper_payload sp;
             if (!stepper_payload_read(itr.pay, itr.len, itr.flags, &sp)) break;
@@ -477,6 +506,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_CORE: return "core";
     case MSG_HW_GPI: return "gpi";
     case MSG_HW_ADC: return "adc";
+    case MSG_HW_DS18B20: return "ds18b20";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
     case MSG_LOGIC_OR: return "or";
@@ -536,6 +566,13 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         case MSG_HW_CORE: put(&t, "CORE n%u -> ", n->id); put_signal(&t, n->out); break;
         case MSG_HW_ADC: put(&t, "ADC n%u channel %u -> ", n->id, n->pin); put_signal(&t, n->out); break;
         case MSG_HW_GPI: put(&t, "GPI n%u pin %u options %02X -> ", n->id, n->pin, n->options); put_signal(&t, n->out); break;
+        case MSG_HW_DS18B20:
+            put(&t, "DS18B20 n%u pin %u %u-bit%s -> ", n->id, n->pin, 9 + (n->options & DS18B20_RES_MASK),
+                n->options & DS18B20_PULLUP ? " pull-up" : "");
+            put_signal(&t, n->out);
+            put(&t, " found ");
+            put_signal(&t, n->out_count);
+            break;
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);
@@ -624,6 +661,37 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->in[0]);
             put(&t, " / %.4g", (double)n->in_full[0]);
             break;
+        case MSG_HW_NEOPIXEL: {
+            const neopixel_payload *px = &n->px;
+            put(&t, "NEOPIXEL n%u pin %u ", n->id, n->pin);
+            if (px->layout == NEOPIXEL_ARRAY) {
+                put(&t, "array %ux%u%s", px->size[0], px->size[1], px->options & NEOPIXEL_ZIGZAG ? " zigzag" : "");
+            } else if (px->layout == NEOPIXEL_CIRCLE) {
+                put(&t, "circle");
+                for (uint8_t k = 0; k < px->size_len; k++) put(&t, "%s%u", k ? "+" : " ", px->size[k]);
+            } else {
+                put(&t, "doughnut %u", px->size[0]);
+            }
+            put(&t, " brightness %u ", px->brightness);
+            if (px->graphic == NEOPIXEL_GFX_POINT || px->graphic == NEOPIXEL_GFX_PATCH) {
+                put(&t, "%s %u,%u-%u,%u", px->graphic == NEOPIXEL_GFX_POINT ? "point" : "patch",
+                    px->from[0], px->from[1], px->to[0], px->to[1]);
+            } else {
+                put(&t, "bar ");
+                if (px->layout == NEOPIXEL_ARRAY) put(&t, "%s %u", px->along == NEOPIXEL_BAR_ROW ? "row" : "column", px->position);
+                else if (px->layout == NEOPIXEL_CIRCLE && px->along == NEOPIXEL_BAR_COLUMN) put(&t, "outwards");
+                else put(&t, "%s %u", px->layout == NEOPIXEL_CIRCLE ? "ring" : "from", px->position);
+            }
+            put(&t, "%s colour %02X%02X%02X", px->gfx_options & NEOPIXEL_GFX_REVERSE ? " reverse" : "",
+                px->colour[0][0], px->colour[0][1], px->colour[0][2]);
+            if (px->gfx_options & NEOPIXEL_GFX_COLOUR_INPUT)
+                put(&t, "-%02X%02X%02X", px->colour[1][0], px->colour[1][1], px->colour[1][2]);
+            put(&t, " <- ");
+            put_signal(&t, n->in[0]);
+            put(&t, " / %.4g on <- ", (double)n->in_full[0]);
+            put_signal(&t, n->in[1]);
+            break;
+        }
         default: put(&t, "? n%u", n->id); break;
         }
         put(&t, "\n");

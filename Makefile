@@ -80,7 +80,7 @@ TEST_CFLAGS = -std=c11 -Wall -Wextra -Werror -DUNIT_TEST -Isrc -Itests
 test_runner: src/config/config_iterator.c tests/test_config_iterator.c tests/unity.c
 	gcc $(TEST_CFLAGS) $^ -o $@
 
-test_protocol: src/config/config_iterator.c src/program.c src/stepper.c src/servo.c tests/test_protocol.c tests/unity.c tests/protocol_examples.h src/protocol.h src/program.h src/stepper.h src/servo.h
+test_protocol: src/config/config_iterator.c src/program.c src/stepper.c src/servo.c src/neopixel.c src/ds18b20.c tests/test_protocol.c tests/unity.c tests/protocol_examples.h src/protocol.h src/program.h src/stepper.h src/servo.h src/neopixel.h src/ds18b20.h
 	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@ -lm
 
 check_packets: src/config/config_iterator.c src/program.c tests/check_packets.c src/protocol.h src/program.h

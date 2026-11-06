@@ -22,7 +22,7 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 // sources had several outputs.
 const MSG_FLAG_OUTPUT        = 0x01;
 
-// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input) or
+// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20) or
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
@@ -56,9 +56,11 @@ const MSG_HW_PWM             = 0x22;
 const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_STEPPER         = 0x24;  // a stepper motor on four pins, through a ULN2003
 const MSG_HW_SERVO           = 0x25;  // a hobby servo, such as an SG90, on a PWM pin
+const MSG_HW_NEOPIXEL        = 0x26;  // NeoPixels (WS2812): an array, circle or doughnut, showing a graphic
 const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
+const MSG_HW_DS18B20         = 0x33;  // a DS18B20 temperature sensor on a 1-Wire pin; two outputs
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -136,6 +138,17 @@ const PIN_USABLE_MASK        = 0x1C7FFFFF;
 const pinUsable = (pin) => Number.isInteger(pin) && pin >= 0 && pin < 32 && (PIN_USABLE_MASK >> pin & 1) === 1;
 const USABLE_PINS = Array.from({ length: 32 }, (_, pin) => pin).filter(pinUsable);
 
+// DS18B20 temperature sensor (MSG_HW_DS18B20) payload byte 0: its GPIO pin, the 1-Wire
+// data line. Byte 1: options: bits 0-1 its resolution (DS18B20_RES_), bit 2 the pin's
+// internal pull-up. Outputs: its temperature in °C (0), whether the sensor answers (1).
+const DS18B20_RES_MASK       = 0x03;
+const DS18B20_RES_9          = 0x00;  // 0.5 °C steps, a reading every 94 ms
+const DS18B20_RES_10         = 0x01;  // 0.25 °C, 188 ms
+const DS18B20_RES_11         = 0x02;  // 0.125 °C, 375 ms
+const DS18B20_RES_12         = 0x03;  // 0.0625 °C, 750 ms
+const DS18B20_PULLUP         = 0x04;
+const DS18B20_FULL           = 100;   // °C: its full scale, for an output that takes a fraction
+
 // ADC input (MSG_HW_ADC) payload byte 0: the channel, 0 to ADC_CHANNELS - 1, on GPIO
 // ADC_PIN_FIRST + channel. ADC3, on GPIO 29, is the WiFi chip's clock on the Pico 2 W.
 const ADC_CHANNELS           = 3;
@@ -195,6 +208,27 @@ const SERVO_ANGLE_MAX        = 180;   // degrees
 const SERVO_PULSE_MIN        = 100;   // µs, the shortest pulse it may be set to
 const SERVO_PULSE_MAX        = 3000;  // µs, the longest
 const SERVO_SPEED_MAX        = 3600;  // °/s, the highest speed limit; 0 = none
+
+// NeoPixel (MSG_HW_NEOPIXEL) payload: a chain of WS2812 LEDs on one pin, laid out as an
+// array, a circle or a doughnut, showing a graphic of its input while its on/off input
+// is on (or not wired).
+const NEOPIXEL_ARRAY         = 0x00;  // layout: rows × columns; LED 0 at the top left, along the top row
+const NEOPIXEL_CIRCLE        = 0x01;  // layout: 1 to NEOPIXEL_RINGS_MAX rings, in the order they are wired
+const NEOPIXEL_DOUGHNUT      = 0x02;  // layout: one ring of LEDs
+const NEOPIXEL_ZIGZAG        = 0x01;  // options bit 0, an array: every other row runs back, right to left
+const NEOPIXEL_RINGS_MAX     = 8;     // a circle's rings
+const NEOPIXEL_LEDS_MAX      = 256;   // LEDs on one node
+const NEOPIXEL_GFX_BAR       = 0x00;  // graphic: a bar level indicator
+const NEOPIXEL_GFX_POINT     = 0x01;  // graphic: one LED, moving from a start to an end as its input goes 0 to 1
+const NEOPIXEL_GFX_PATCH     = 0x02;  // graphic: every LED from a start to an end, lit; its input may set its colour
+const NEOPIXEL_GFX_REVERSE   = 0x01;  // graphic options bit 0: it runs the other way
+const NEOPIXEL_GFX_COLOUR_INPUT = 0x02;  // graphic options bit 1: its colour goes from a colour at 0 to one at 1
+const NEOPIXEL_BAR_LEN       = 6;     // a bar's settings: along, position, options, then its colour
+const NEOPIXEL_POINT_LEN     = 8;     // a point's settings: its start and end, options, then its colour
+const NEOPIXEL_PATCH_LEN     = 8;     // a patch's settings: its start and end corners, options, then its colour
+const NEOPIXEL_COLOUR_LEN    = 3;     // red, green, blue; a second colour with NEOPIXEL_GFX_COLOUR_INPUT
+const NEOPIXEL_BAR_ROW       = 0x00;  // a bar along an array's row; around a circle's ring; around a doughnut
+const NEOPIXEL_BAR_COLUMN    = 0x01;  // a bar up an array's column; across a circle's rings, from the centre out
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;
