@@ -15,6 +15,7 @@
 {{adc-js}}:ui/content/components/adc.js
 {{gpi-js}}:ui/content/components/gpi.js
 {{ds18b20-js}}:ui/content/components/ds18b20.js
+{{encoder-js}}:ui/content/components/encoder.js
 {{keyboard-js}}:ui/content/components/keyboard.js
 {{logic-js}}:ui/content/components/logic.js
 {{sub-js}}:ui/content/components/sub.js

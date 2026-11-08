@@ -22,7 +22,8 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 // sources had several outputs.
 const MSG_FLAG_OUTPUT        = 0x01;
 
-// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20) or
+// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
+// rotary encoder) or
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
@@ -61,6 +62,7 @@ const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
 const MSG_HW_DS18B20         = 0x33;  // a DS18B20 temperature sensor on a 1-Wire pin; two outputs
+const MSG_HW_ENCODER         = 0x34;  // a rotary encoder and its push switch; two outputs
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -148,6 +150,20 @@ const DS18B20_RES_11         = 0x02;  // 0.125 °C, 375 ms
 const DS18B20_RES_12         = 0x03;  // 0.0625 °C, 750 ms
 const DS18B20_PULLUP         = 0x04;
 const DS18B20_FULL           = 100;   // °C: its full scale, for an output that takes a fraction
+
+// Rotary encoder (MSG_HW_ENCODER) payload: the GPIO of its A (CLK), B (DT) and push
+// switch (SW, or ENCODER_NO_BUTTON), its options, then its steps (2 bytes, BE). Options:
+// bits 0-1 its transitions a click (ENCODER_DETENT_), bit 2 it counts the other way,
+// bit 3 it wraps past its ends. Outputs: its position, 0 to its steps (0), pressed (1).
+const ENCODER_PAYLOAD_LEN    = 6;
+const ENCODER_NO_BUTTON      = 0xFF;
+const ENCODER_DETENT_MASK    = 0x03;
+const ENCODER_DETENT_4       = 0x00;  // a whole cycle of its pins a click: most encoders, a KY-040
+const ENCODER_DETENT_2       = 0x01;  // half a cycle a click
+const ENCODER_DETENT_1       = 0x02;  // each change of a pin; or an encoder without clicks
+const ENCODER_REVERSE        = 0x04;
+const ENCODER_WRAP           = 0x08;
+const ENCODER_STEPS_MAX      = 1000;
 
 // ADC input (MSG_HW_ADC) payload byte 0: the channel, 0 to ADC_CHANNELS - 1, on GPIO
 // ADC_PIN_FIRST + channel. ADC3, on GPIO 29, is the WiFi chip's clock on the Pico 2 W.

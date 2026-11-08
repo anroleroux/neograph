@@ -5,7 +5,8 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_ and SUB_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
+ * ENCODER_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -36,7 +37,8 @@
    sources had several outputs. */
 #define MSG_FLAG_OUTPUT         0x01
 
-/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20) or
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
+   rotary encoder) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
@@ -71,6 +73,7 @@
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 #define MSG_HW_DS18B20          0x33    /* a DS18B20 temperature sensor on a 1-Wire pin; two outputs */
+#define MSG_HW_ENCODER          0x34    /* a rotary encoder and its push switch; two outputs */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
    source itself, with one output, 0: boolean, or floating for a scale, min or max. A
@@ -198,6 +201,25 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define DS18B20_PULLUP          0x04
 #define DS18B20_FULL            100     /* °C: its full scale, for an output that takes a fraction */
 
+/* Rotary encoder (MSG_HW_ENCODER), such as a KY-040 or an EC11, payload: byte 0 the GPIO
+   of its A (CLK) pin, byte 1 of its B (DT) pin, byte 2 of its push switch (SW), or
+   ENCODER_NO_BUTTON; three usable pins that differ. Byte 3: options. Bits 0-1: the
+   transitions of its two pins a click (ENCODER_DETENT_), bit 2 (ENCODER_REVERSE): it
+   counts the other way, bit 3 (ENCODER_WRAP): past its ends it goes on from the other.
+   Bytes 4-5: its steps, big endian, 1 to ENCODER_STEPS_MAX: its position goes from 0 to
+   its steps (wrapping, to its steps - 1). Two outputs: its position, in clicks (0,
+   floating; its full scale is its steps), and whether its switch is pressed (1,
+   boolean). */
+#define ENCODER_PAYLOAD_LEN     6
+#define ENCODER_NO_BUTTON       0xFF
+#define ENCODER_DETENT_MASK     0x03
+#define ENCODER_DETENT_4        0x00    /* a whole cycle of its pins a click: most encoders, a KY-040 */
+#define ENCODER_DETENT_2        0x01    /* half a cycle a click */
+#define ENCODER_DETENT_1        0x02    /* each change of a pin; or an encoder without clicks */
+#define ENCODER_REVERSE         0x04
+#define ENCODER_WRAP            0x08
+#define ENCODER_STEPS_MAX       1000
+
 /* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
    (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
    float, big endian. An AND or OR: 1 to LOGIC_INPUTS_MAX source references. A NOT: one.
@@ -287,6 +309,18 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define NEOPIXEL_BAR_COLUMN     0x01    /* a bar up an array's column; across a circle's rings, from the centre out */
 
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
+
+/* Whether a rotary encoder payload is one the device runs: its length, its A and B on
+   usable pins, its switch on one or ENCODER_NO_BUTTON, the three apart, known options
+   and transitions a click, and 1 to ENCODER_STEPS_MAX steps. */
+static inline int encoder_payload_valid(const uint8_t *pay, uint8_t len) {
+    if (len != ENCODER_PAYLOAD_LEN || !pin_usable(pay[0]) || !pin_usable(pay[1]) || pay[0] == pay[1]) return 0;
+    if (pay[2] != ENCODER_NO_BUTTON && (!pin_usable(pay[2]) || pay[2] == pay[0] || pay[2] == pay[1])) return 0;
+    if (pay[3] & ~(ENCODER_DETENT_MASK | ENCODER_REVERSE | ENCODER_WRAP)) return 0;
+    if ((pay[3] & ENCODER_DETENT_MASK) > ENCODER_DETENT_1) return 0;
+    uint16_t steps = (uint16_t)(pay[4] << 8 | pay[5]);
+    return steps >= 1 && steps <= ENCODER_STEPS_MAX;
+}
 
 /* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which
    closes a loop. Logic reads it as the last scan left it. Bits 0-6 are the output. */

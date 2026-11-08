@@ -236,7 +236,8 @@ Core 0 sends the most recently connected client WebSocket text frames:
 - **In the UI.** A `sig` frame goes to the node `nI`. A hardware input or logic
   element hands the value to the nodes wired to it: a [core temperature](#core-temperature)
   in °C, a [DS18B20](#ds18b20-temperature-sensors) its temperature in °C (output 0) and
-  whether it answers (output 1), an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
+  whether it answers (output 1), a [rotary encoder](#rotary-encoders) its position in
+  clicks (output 0) and whether it is pressed (output 1), an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
   [logic](#logic) on from 0.5. Other nodes, such as a button or slider, ignore theirs,
   and so does an element the page doesn't have. The UI ignores `uptime N`.
 
@@ -248,6 +249,7 @@ sig 6 1 0.502               # 2D slider n6, Y: 0.502
 sig 4 1 2                   # counter n4, its count: 2
 sig 7 0 22.44               # DS18B20 n7: 22.44 °C (4 significant digits)
 sig 7 1 1                   # DS18B20 n7: found
+sig 8 0 12                  # rotary encoder n8: 12 clicks
 ```
 
 ### Limits
@@ -361,6 +363,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
 | `33` | `MSG_HW_DS18B20` | HW input: a DS18B20 temperature sensor on a 1-Wire pin; two outputs | Implemented |
+| `34` | `MSG_HW_ENCODER` | HW input: a rotary encoder and its push switch; two outputs | Implemented |
 | `40` | `MSG_LOGIC_COMPARE` | Logic: a floating input above or below a threshold | Implemented |
 | `41` | `MSG_LOGIC_AND` | Logic: on while every input is on | Implemented |
 | `42` | `MSG_LOGIC_OR` | Logic: on while any input is on | Implemented |
@@ -399,6 +402,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `30` Core temperature | 0 | None: the chip has one sensor. See [Core temperature](#core-temperature). |
 | `31` GPIO input | 2 | Byte 0: the GPIO pin, a [usable](#gpio-pins) one (UI default 3). Byte 1: options; bits 0–1 (`GPI_PULL_MASK`) the pin's pull, `GPI_PULL_NONE` (0), `GPI_PULL_UP` (1) or `GPI_PULL_DOWN` (2, UI default); bit 2 (`GPI_INVERT`): 0 = on while the pin is high (UI default), 1 = on while it is low. Other bits are 0. See [GPIO inputs](#gpio-inputs). |
 | `33` DS18B20 | 2 | Byte 0: the GPIO pin of its data line (DQ), a [usable](#gpio-pins) one (UI default 15). Byte 1: options; bits 0–1 (`DS18B20_RES_MASK`) its resolution, `DS18B20_RES_9` (0) to `DS18B20_RES_12` (3, UI default); bit 2 (`DS18B20_PULLUP`): the pin's internal pull-up on (UI default off: a 4.7 kΩ resistor). Other bits are 0. See [DS18B20 temperature sensors](#ds18b20-temperature-sensors). |
+| `34` Rotary encoder | 6 (`ENCODER_PAYLOAD_LEN`) | Byte 0: the GPIO of its A (CLK) pin (UI default 6); byte 1: of its B (DT) pin (UI default 7); byte 2: of its push switch (SW, UI default 8), or `ENCODER_NO_BUTTON` (`FF`) for none: [usable](#gpio-pins) pins that differ. Byte 3: options; bits 0–1 (`ENCODER_DETENT_MASK`) its pins' transitions a click, `ENCODER_DETENT_4` (0, UI default), `ENCODER_DETENT_2` (1) or `ENCODER_DETENT_1` (2); bit 2 (`ENCODER_REVERSE`): it counts the other way; bit 3 (`ENCODER_WRAP`): past its ends it goes on from the other. Other bits are 0. Bytes 4–5: its steps, big endian, 1 to `ENCODER_STEPS_MAX` (1000; UI default 20). See [Rotary encoders](#rotary-encoders). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -506,8 +510,8 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset |
+| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -515,7 +519,7 @@ ADC or core temperature drives a PWM on the device and a plot in the browser, an
 GPIO input an LED, GPO or USB keyboard on the device and a light in the browser. A PWM
 maps a floating value onto its range as a fraction of the source's full scale: 1 for
 a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature,
-`DS18B20_FULL` (100) °C for a DS18B20,
+`DS18B20_FULL` (100) °C for a DS18B20, its steps for a rotary encoder's position,
 for a min or max that of its first wired input, and for a counter's count its preset.
 The UI only draws wires between matching types, and drops mismatched source references
 when it restores a config (configs saved before types were checked may hold them).
@@ -582,7 +586,7 @@ When a config arrives, the UI rebuilds the graph from it:
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
   `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `30` core temperature, `31` GPIO input,
-  `32` ADC, `33` DS18B20, the logic `40`–`4C`
+  `32` ADC, `33` DS18B20, `34` rotary encoder, the logic `40`–`4C`
   and a block's copy `60`) becomes a node with the message's ID. Messages marked
   `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
   definition, which is restored first from its `A3` and `A4` messages (see
@@ -590,7 +594,7 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a rotary encoder its pins, steps and options (pins another node has keep its own), a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
@@ -656,7 +660,7 @@ s0 n1.0 button = 0
 
 ### Hardware input tiles
 
-A hardware input (core temperature, GPIO input, ADC, DS18B20) or a [logic](#logic) element shows
+A hardware input (core temperature, GPIO input, ADC, DS18B20, rotary encoder) or a [logic](#logic) element shows
 a tile in the Command view only if its settings say so: "Command view: Show | Hide", Hide by default. A light or
 plot wired to it shows its values either way. The choice is saved as `MSG_FLAG_SHOWN`
 in its message's flags; a message without it, such as one saved before the choice
@@ -834,6 +838,62 @@ on above 30 °C, back off below 29 °C, and the onboard LED shows that it is fou
                 41 F0 00 00  3F 80 00 00        #   30 °C, hysteresis 1 °C
 21 01 00 03 04  00 02 00 01                     # GPO n3 ← n2, GPIO 1
 20 01 00 04 03  00 01 01                        # LED n4 ← n1's found (output 1)
+```
+
+### Rotary encoders
+
+A rotary encoder node (`34`) reads a rotary encoder, such as a KY-040 module or a bare
+EC11: a knob that turns without end, in clicks, with two contacts, A and B, that open
+and close a quarter of a cycle apart, and often a push switch. It is a source with two
+outputs: **its position** in clicks (output 0, floating, unit `clicks`), and
+**pressed** (output 1, boolean): on while its switch is held. The Command view can
+show it on a tile (see [Hardware input tiles](#hardware-input-tiles)): `5 of 20`, with
+`, pressed` while it is.
+
+**Wiring.** A (CLK) and B (DT) to two pins, the switch (SW) to a third or to none, `+`
+to 3.3 V and GND to GND. Each pin's internal pull-up is on: a contact or the switch
+closing pulls its pin low. A KY-040 has 10 kΩ pull-ups on A and B to its `+`, and often
+none on its switch; powered from 5 V, it would pull the pins to 5 V.
+
+**Its position** goes from 0 to its steps: each click one way (A changing first, from
+rest; clockwise on a KY-040) adds 1, each the other way takes 1 off; `ENCODER_REVERSE`
+swaps them. At its ends it stops, or with `ENCODER_WRAP` goes on from the other, and
+runs 0 to its steps − 1: a knob of 20 clicks a turn with 20 steps comes back to 0 each
+turn. It starts at 0, and **a save keeps it**, within the new steps: clamped, or wrapped.
+A PWM, servo or NeoPixels wired to it take it as a fraction of its steps.
+
+**A click.** Its pins' states, A then B, go `11 → 01 → 00 → 10 → 11` one way, the
+other way back:
+
+| `ENCODER_DETENT_` | Transitions a click | For |
+|---|---|---|
+| `_4` (0, UI default) | 4: a whole cycle, rest to rest (`11`) | most encoders: a KY-040, an EC11 |
+| `_2` (1) | 2: half a cycle, resting at `11` or `00` | an encoder that rests at `00` too: with `_4` it counts every other click |
+| `_1` (2) | 1: each change of a pin | an encoder without clicks |
+
+With `_4` and `_2`, a click counts when the pins come to rest, after at least half a
+click's transitions one way (`encoder_decode`): a bouncing contact, which goes to and
+fro, nets out, and an edge it missed (both pins changed at once, which counts 0) still
+clicks.
+
+**On the device.** Its A and B pins can change faster than the 10 ms scan, so core 1
+takes each of their edges, rising and falling, with an interrupt (`IO_IRQ_BANK0`, a
+handler shared with core 0's): the handler acknowledges them, reads both pins and
+decodes the change. Each scan adds the clicks since the last to its position. Its
+switch is read each scan: a state held for 3 reads in a row, as a [GPIO
+input](#gpio-inputs)'s, becomes pressed (on while the pin is low). Without a switch,
+pressed stays off. A program runs at most 8 encoders (`ENCODERS_MAX`); more are skipped.
+
+An encoder `n1` on GPIO 6 and 7, its switch on 8, 20 steps, its tile shown: its
+position turns servo `n2` on GPIO 9 across its 180° in 20 clicks, and the onboard LED
+shows when it is pressed:
+
+```hex example=encoder-config
+0A 00 24                                        # Config, 36 bytes
+34 02 00 01 06  06 07 08 00 00 14               # encoder n1, tile shown: A GPIO 6, B 7, SW 8, 20 steps
+25 01 00 02 0C  00 01 00 09 00 B4               # servo n2 ← n1's position, GPIO 9, 0° at 0, 180° at 1
+                01 F4 09 C4 00 00               #   500 µs at 0°, 2500 µs at 180°, no speed limit
+20 01 00 03 03  00 01 01                        # LED n3 ← n1's pressed (output 1)
 ```
 
 ### 2D sliders
@@ -1570,14 +1630,16 @@ Every source in the config has its signals, wired or not:
 | `31` GPIO input | 1 | 0 off, 1 on | the pin when it is set up |
 | `32` ADC | 1 | volts, 0 to 3.3 | 0, then its first reading |
 | `33` DS18B20 | 2: its temperature (output 0), found (output 1) | °C; 0 or 1 | 0, then its first reading; as in the program core 1 ran |
+| `34` rotary encoder | 2: its position (output 0), pressed (output 1) | clicks, 0 to its steps; 0 or 1 | its position as in the program core 1 ran, within its steps, or 0; pressed 0 |
 
 - **The browser sets a UI source's** (button, slider, 2D slider) with a
   [command](#01-command): each byte becomes byte ÷ 255.
 - **Core 1 sets a hardware input's** from the hardware, and a logic element's from
   its inputs, each scan.
-- **A new program keeps the UI sources' values,** and a DS18B20's: a signal of the
-  same element and output in the program core 1 ran takes its value, so saving the
-  graph doesn't move a slider's outputs, or drop a reading until the next. A source new to the graph starts as in the table.
+- **A new program keeps the UI sources' values,** a DS18B20's and a rotary encoder's
+  position: a signal of the same element and output in the program core 1 ran takes its
+  value, so saving the graph doesn't move a slider's outputs or a knob's position, or
+  drop a reading until the next. A source new to the graph starts as in the table.
 - **Core 0 reads every signal** for telemetry (see
   [Telemetry text frames](#telemetry-text-frames)).
 
@@ -1593,6 +1655,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `31` GPIO input | its pin | its signal | See [GPIO inputs](#gpio-inputs) |
 | `30` core temperature | the chip's sensor | its signal | See [Core temperature](#core-temperature) |
 | `33` DS18B20 | its pin, 1-Wire | its two signals: its temperature, found | See [DS18B20 temperature sensors](#ds18b20-temperature-sensors) |
+| `34` rotary encoder | its A, B and switch pins | its two signals: its position, pressed | See [Rotary encoders](#rotary-encoders) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
 | `41` AND, `42` OR | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `43` NOT, `44` delay, `48` pulse, `49` blink, `4A` toggle | 1 signal | its signal | See [Logic](#logic) |
@@ -1620,7 +1683,8 @@ of the config; then the **logic**, each after the logic it reads; then the
 - **Left out:** the elements core 1 doesn't run (plots, lights, labels, positions,
   wires, networking), messages of the wrong length (the [payloads](#control-payloads)
   give the lengths), an ADC channel over 2, a DS18B20 on a pin that isn't usable or
-  with an unknown option, a compare with a threshold or hysteresis
+  with an unknown option, a rotary encoder `encoder_payload_valid` refuses (see
+  [Rotary encoders](#rotary-encoders)), a compare with a threshold or hysteresis
   that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
   of its range, a scale whose ranges aren't finite numbers or whose input range is
   empty, a counter preset out of its range, a stepper `stepper_payload_read` refuses
@@ -1689,6 +1753,19 @@ DS18B20 n1 pin 15 12-bit -> s0 found s1
 COMPARE n2 above 30 hysteresis 1 <- s0 -> s2
 GPO n3 pin 1 <- s2
 LED n4 <- s1
+```
+
+For the [encoder-config example](#rotary-encoders): its A and B pins, its switch's
+(`no button` without one), its transitions a click, its steps (and ` reverse`, ` wrap`
+with those options), its position's signal, and `pressed` its pressed's. The servo
+takes its position as a fraction of its 20 steps:
+
+```program example=encoder-config
+s0 n1.0 encoder = 0
+s1 n1.1 encoder = 0
+ENCODER n1 pins 6 7 button 8 4/click steps 20 -> s0 pressed s1
+SERVO n2 pin 9 angle 0-180 pulse 500-2500 us speed 0 <- s0 / 20
+LED n3 <- s1
 ```
 
 For the [slider-2d-config example](#2d-sliders): X and Y start at the slider's home,
@@ -1877,6 +1954,8 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - a GPIO input takes its pin, sets its pull, and reads it for its signal;
    - a DS18B20 takes its pin as an input with its output level 0, its pull-up on or
      off, and is configured at its first scan;
+   - a rotary encoder takes its two or three pins, all or none, as inputs with their
+     pull-ups on, and core 1 takes the edges of A and B with an interrupt;
    - a GPO takes its pin as an output; a PWM takes its pin, and starts its slice at
      the first scan; a servo takes its pin, and starts its slice at 50 Hz at the
      first scan; a stepper takes its four pins as outputs, and holds its coils
@@ -1901,6 +1980,9 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - **DS18B20:** one step of reading it, about 2 ms at most: a command, a wait, or 3
      bytes of its scratchpad; a reading checked good becomes its signals (see
      [DS18B20 temperature sensors](#ds18b20-temperature-sensors)).
+   - **Rotary encoder:** the clicks its interrupt counted since the last scan move its
+     position; its switch is read, and a state that differs for 3 reads in a row
+     becomes pressed (see [Rotary encoders](#rotary-encoders)).
 3. **The logic**, in program order, writes its signals from the signals it reads
    (see [Logic](#logic)).
 4. **The outputs**, in program order, each from the signals it reads, when the state

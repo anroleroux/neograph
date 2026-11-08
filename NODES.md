@@ -13,7 +13,7 @@ the TMP button in the HWI group.
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
-| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS |
+| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
 | **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
@@ -409,6 +409,49 @@ Things to know:
 - **If it stops answering,** Found goes off after three failed reads (a second or two),
   the temperature keeps its last reading, and the device keeps looking for it.
 - **After a save** it keeps its reading until the next one.
+
+### Rotary encoder: `HWI-ENC`
+
+| | |
+|---|---|
+| Category | Hardware input |
+| Outputs | **Position**: number, in clicks, 0 to its Steps; **Pressed**: on/off, on while the knob is pushed in |
+| Default label | Encoder |
+
+A rotary encoder, such as a KY-040 module or an EC11: a knob that turns without end, in
+clicks, and pushes in as a switch. Each click one way adds 1 to its position, each the
+other way takes 1 off. The device counts every click, however fast it is turned. The
+offline demo turns it slowly to and fro.
+
+It has two outputs. Pick the one the next wire leaves from in **Wire from**, and each
+wire is labelled with it:
+
+- **Position** goes to anything that takes a number: a servo, PWM or NeoPixels, which
+  take it as a fraction of Steps (with 20 steps, 20 clicks sweep a servo across), a
+  compare, a scale or a plot.
+- **Pressed** goes to anything that takes on/off: a toggle (push to turn something on
+  and off), a counter, an LED or a light.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| A (CLK) pin | GPIO 0–22, 26–28, not used by another node | 6, or the lowest free pin | The pin its A contact (CLK) is on. |
+| B (DT) pin | as A, not A's | 7 | The pin its B contact (DT) is on. |
+| Switch (SW) pin | None, or as A, not A's or B's | 8 | The pin its push switch (SW) is on. With None, Pressed stays off. |
+| Steps | 1–1000 | 20 | The top of its position. |
+| A click is | Full cycle, Half cycle, Each edge | Full cycle | How many changes of its contacts make a click. Full cycle suits most encoders (a KY-040, an EC11); if it counts only every other click, pick Half cycle; Each edge for an encoder without clicks. |
+| At the ends | Stop, Wrap | Stop | Stop holds it at 0 and at Steps. Wrap goes on from the other end, so it runs 0 to Steps − 1: a 20-click knob with 20 steps comes back to 0 each turn. |
+| Direction | Normal, Reversed | Normal | Normal counts up clockwise on a KY-040. Reversed counts the other way. |
+| Wire from | Position, Pressed | Position | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile with its position, such as "5 of 20", and ", pressed" while it is. |
+
+Things to know:
+
+- **Wiring:** CLK and DT to the A and B pins, SW to the switch pin, `+` to 3.3 V and GND
+  to GND. Don't power it from 5 V: a KY-040's resistors would pull the pins to 5 V. The
+  device turns on each pin's pull-up, so a bare encoder needs no resistors: its common
+  pin, and the switch's other side, go to GND.
+- **It starts at 0,** and a save keeps its position (within the new Steps).
+- **Up to 8 encoders** in a graph.
 
 ---
 
@@ -842,8 +885,8 @@ for a longer kick, or to a Counter to count the ticks.
 
 | From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT |
 |---|---|---|---|---|
-| BTN, GPI | ✓ | | | ✓ |
-| SLD, XY (X or Y), ADC, TMP | | ✓ | ✓ | |
+| BTN, GPI, DS (Found), ENC (Pressed) | ✓ | | | ✓ |
+| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position) | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
 | SCL, MIN, MAX, CNT (Count) | | ✓ | ✓ | |
 

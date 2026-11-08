@@ -188,13 +188,20 @@ static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
 // The value of a source's signal that drives an output to its max, such as a
 // PWM's: 1 for a slider (its values are 0 to 1) or a scale, 3.3 V for an ADC,
 // CORE_TEMP_FULL °C for the core temperature, for a min or max that of what it
-// picks from, and for a counter's count its preset.
+// picks from, for a counter's count its preset, and for an encoder's position its
+// steps.
 static float signal_full(const hw_program *p, uint8_t s) {
     if (s == PROG_NO_SIGNAL) return 1;
     switch (p->signals[s].type) {
     case MSG_HW_ADC: return PROG_ADC_VOLTS;
     case MSG_HW_CORE: return CORE_TEMP_FULL;
     case MSG_HW_DS18B20: return p->signals[s].output == 0 ? DS18B20_FULL : 1;  // °C, or found: 0 or 1
+    case MSG_HW_ENCODER:
+        // Its position: its steps; pressed: 0 or 1.
+        for (uint8_t i = 0; i < p->node_count; i++) {
+            if (p->nodes[i].type == MSG_HW_ENCODER && p->nodes[i].out == s) return (float)p->nodes[i].enc_steps;
+        }
+        return 1;
     case MSG_LOGIC_COUNTER:
         for (uint8_t i = 0; i < p->node_count; i++) {
             if (p->nodes[i].out_count == s) return (float)p->nodes[i].preset;
@@ -339,6 +346,23 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
                 n->out_count = found;
                 n->pin = itr.pay[0];
                 n->options = itr.pay[1];
+            }
+            break;
+        }
+
+        case MSG_HW_ENCODER: {
+            // Two signals: its position, and whether its switch is pressed.
+            if (!encoder_payload_valid(itr.pay, itr.len)) break;
+            uint8_t pressed;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((pressed = add_signal(p, itr.id, 1, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->out = s;
+                n->out_count = pressed;
+                memcpy(n->enc_pins, itr.pay, sizeof n->enc_pins);
+                n->pin = itr.pay[0];
+                n->options = itr.pay[3];
+                n->enc_steps = (uint16_t)(itr.pay[4] << 8 | itr.pay[5]);
             }
             break;
         }
@@ -507,6 +531,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_GPI: return "gpi";
     case MSG_HW_ADC: return "adc";
     case MSG_HW_DS18B20: return "ds18b20";
+    case MSG_HW_ENCODER: return "encoder";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
     case MSG_LOGIC_OR: return "or";
@@ -573,6 +598,18 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put(&t, " found ");
             put_signal(&t, n->out_count);
             break;
+        case MSG_HW_ENCODER: {
+            static const char *const detents[] = { "4", "2", "1" };
+            put(&t, "ENCODER n%u pins %u %u ", n->id, n->enc_pins[0], n->enc_pins[1]);
+            if (n->enc_pins[2] == ENCODER_NO_BUTTON) put(&t, "no button");
+            else put(&t, "button %u", n->enc_pins[2]);
+            put(&t, " %s/click steps %u%s%s -> ", detents[n->options & ENCODER_DETENT_MASK], n->enc_steps,
+                n->options & ENCODER_REVERSE ? " reverse" : "", n->options & ENCODER_WRAP ? " wrap" : "");
+            put_signal(&t, n->out);
+            put(&t, " pressed ");
+            put_signal(&t, n->out_count);
+            break;
+        }
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);

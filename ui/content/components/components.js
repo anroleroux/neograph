@@ -32,6 +32,8 @@
 
 /* {{ds18b20-js}} */
 
+/* {{encoder-js}} */
+
 /* {{keyboard-js}} */
 
 /* {{logic-js}} */

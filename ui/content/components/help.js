@@ -56,6 +56,12 @@ const NODE_HELP = {
         "Resolution: 9 bits gives 0.5 °C steps, a reading every 94 ms; 12 bits 0.0625 °C every 750 ms. Its temperature is good from −55 to +125 °C. Wired into a PWM or servo, it counts as a fraction of 100 °C.",
         "If the sensor stops answering, Found goes off after three failed reads, and the temperature keeps its last reading.",
     ],
+    encoder: [
+        "A rotary encoder, such as a KY-040 or an EC11: a knob that turns without end, in clicks, and often pushes in as a switch. It has two outputs: Position (a number, 0 to its Steps), and Pressed (on/off), on while the knob is pushed in. Pick the one the next wire leaves from in Wire from.",
+        "Wire it: CLK (A) and DT (B) to two pins, SW to a third (or None), + to 3.3 V and GND to GND. Don't power a KY-040 from 5 V: its pins would then be pulled to 5 V. The device turns on each pin's pull-up.",
+        "Each click moves Position by 1, up to Steps; At the ends Stop holds it at 0 and at Steps, Wrap goes round from Steps − 1 back to 0, for a knob that turns freely. Wired into a PWM, servo or NeoPixels, it counts as a fraction of Steps: 20 steps sweeps a servo across in 20 clicks. If it counts the wrong way, set Direction to Reversed.",
+        "A click is: Full cycle for most encoders (a KY-040, an EC11); if it counts only every other click, Half cycle; Each edge for an encoder without clicks. A save keeps its position.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",

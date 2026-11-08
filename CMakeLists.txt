@@ -22,6 +22,7 @@ add_executable(twitcher
     src/servo.c
     src/neopixel.c
     src/ds18b20.c
+    src/encoder.c
     src/keyboard.c
     src/usb_descriptors.c
     src/networking/dhcpserver.c

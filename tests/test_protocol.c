@@ -9,6 +9,7 @@
 #include "protocol.h"
 #include "program.h"
 #include "ds18b20.h"
+#include "encoder.h"
 #include "neopixel.h"
 #include "servo.h"
 #include "stepper.h"
@@ -353,8 +354,10 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
     if (src.id == 0) return;
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
-                             || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || program_logic_floating(type), ex->name);
-    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);   /* a DS18B20's temperature */
+                             || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
+                             || program_logic_floating(type), ex->name);
+    /* A DS18B20's temperature, an encoder's position: their output 0. */
+    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
@@ -382,9 +385,12 @@ void test_wires_join_matching_types(void)
                     msg_ref src = through_block(ex, msg_ref_at(it.pay + k * r, it.flags));
                     uint8_t type = element_type(ex, src.id);
                     if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI || type == MSG_HW_DS18B20
+                                                         || type == MSG_HW_ENCODER
                                                          || (program_logic(type) && !program_logic_floating(type)), ex->name);
-                    /* A DS18B20's found is its output 1; the others' only boolean output is 0. */
-                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 ? 1 : 0, src.output, ex->name);
+                    /* A DS18B20's found, an encoder's pressed, is its output 1; the others' only
+                       boolean output is 0. */
+                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER ? 1 : 0,
+                                                    src.output, ex->name);
                 }
             } else if (floating_in) {
                 for (uint8_t k = 0; k < refs; k++) assert_floating_hw(ex, msg_ref_at(it.pay + k * r, it.flags));
@@ -423,6 +429,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_DS18B20 & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ENCODER & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
@@ -1806,6 +1813,98 @@ void test_ds18b20_program(void)
     TEST_ASSERT_NOT_NULL(strstr(text, "DS18B20 n1 pin 15 10-bit pull-up -> s0 found s1\n"));
 }
 
+/* ── Rotary encoders ──────────────────────────────────────────────────── */
+
+/* Feed a decoder its pins' states in turn (A in bit 1, B in bit 0); the clicks they make. */
+static int32_t encoder_feed(encoder_decoder *d, const uint8_t *ab, int n, uint8_t detent)
+{
+    int32_t clicks = 0;
+    for (int i = 0; i < n; i++) clicks += encoder_decode(d, ab[i], detent);
+    return clicks;
+}
+
+void test_encoder_decode(void)
+{
+    /* From rest (both high), A falls first: clockwise on a KY-040, +1. */
+    static const uint8_t cw[] = { 1, 0, 2, 3 }, ccw[] = { 2, 0, 1, 3 };
+    encoder_decoder d;
+    encoder_start(&d, 3);
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, cw, 4, ENCODER_DETENT_4));
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, cw, 4, ENCODER_DETENT_4));
+    TEST_ASSERT_EQUAL_INT32(-1, encoder_feed(&d, ccw, 4, ENCODER_DETENT_4));
+    /* Only once it rests: three transitions are no click yet. */
+    TEST_ASSERT_EQUAL_INT32(0, encoder_feed(&d, cw, 3, ENCODER_DETENT_4));
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, cw + 3, 1, ENCODER_DETENT_4));
+
+    /* A bouncing contact goes to and fro: it nets out, and back at rest is no click. */
+    static const uint8_t bounce[] = { 1, 3, 1, 3, 1, 3 };
+    TEST_ASSERT_EQUAL_INT32(0, encoder_feed(&d, bounce, 6, ENCODER_DETENT_4));
+    /* Half way and back: none. */
+    static const uint8_t back[] = { 1, 0, 1, 3 };
+    TEST_ASSERT_EQUAL_INT32(0, encoder_feed(&d, back, 4, ENCODER_DETENT_4));
+    /* A missed edge (both pins at once counts 0) still clicks: 3 → 1 → 2 → 3 is +1 0 +1. */
+    static const uint8_t missed[] = { 1, 2, 3 };
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, missed, 3, ENCODER_DETENT_4));
+
+    /* Half a cycle a click: it rests at 00 too. */
+    encoder_start(&d, 3);
+    TEST_ASSERT_EQUAL_INT32(2, encoder_feed(&d, cw, 4, ENCODER_DETENT_2));
+    TEST_ASSERT_EQUAL_INT32(-2, encoder_feed(&d, ccw, 4, ENCODER_DETENT_2));
+    /* Each edge: every transition. */
+    TEST_ASSERT_EQUAL_INT32(4, encoder_feed(&d, cw, 4, ENCODER_DETENT_1));
+    TEST_ASSERT_EQUAL_INT32(-4, encoder_feed(&d, ccw, 4, ENCODER_DETENT_1));
+    TEST_ASSERT_EQUAL_INT8(0, encoder_decode(&d, 3, ENCODER_DETENT_1));    /* no change */
+    TEST_ASSERT_EQUAL_INT8(0, encoder_decode(&d, 0, ENCODER_DETENT_1));    /* both pins */
+
+    /* Its position: clamped to 0 to its steps, or wrapped round 0 to steps - 1. */
+    TEST_ASSERT_EQUAL_INT32(5, encoder_position(3, 2, 20, false));
+    TEST_ASSERT_EQUAL_INT32(0, encoder_position(1, -3, 20, false));
+    TEST_ASSERT_EQUAL_INT32(20, encoder_position(19, 4, 20, false));
+    TEST_ASSERT_EQUAL_INT32(15, encoder_position(30, 0, 15, false));    /* fewer steps after a save */
+    TEST_ASSERT_EQUAL_INT32(1, encoder_position(19, 2, 20, true));
+    TEST_ASSERT_EQUAL_INT32(18, encoder_position(1, -3, 20, true));
+    TEST_ASSERT_EQUAL_INT32(0, encoder_position(19, 1, 20, true));
+    TEST_ASSERT_EQUAL_INT32(19, encoder_position(0, -41, 20, true));
+    TEST_ASSERT_EQUAL_INT32(0, encoder_position(7, 3, 1, true));
+}
+
+void test_encoder_program(void)
+{
+    static hw_program p;
+    const uint8_t cfg[] = {
+        MSG_HW_ENCODER, 0, 0, 1, 6, 6, 7, 8, ENCODER_WRAP | ENCODER_DETENT_2, 0, 24,     /* n1: 24 steps */
+        MSG_HW_SERVO, MSG_FLAG_OUTPUT, 0, 2, 12, 0, 1, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
+        MSG_HW_GPO, MSG_FLAG_OUTPUT, 0, 3, 4, 0, 1, 1, 5,                   /* GPO n3 on GPIO 5 <- n1's pressed */
+        MSG_HW_ENCODER, 0, 0, 4, 6, 10, 11, ENCODER_NO_BUTTON, ENCODER_REVERSE, 0x03, 0xE8,  /* no switch, 1000 */
+        MSG_HW_ENCODER, 0, 0, 5, 6, 12, 12, 13, 0, 0, 20,                    /* A and B on one pin */
+        MSG_HW_ENCODER, 0, 0, 6, 6, 12, 13, 12, 0, 0, 20,                    /* the switch on A */
+        MSG_HW_ENCODER, 0, 0, 7, 6, 12, 13, 25, 0, 0, 20,                    /* GPIO 25: not usable */
+        MSG_HW_ENCODER, 0, 0, 8, 6, 12, 13, 14, 0x03, 0, 20,                 /* no such detent */
+        MSG_HW_ENCODER, 0, 0, 9, 6, 12, 13, 14, 0x10, 0, 20,                 /* an unknown option */
+        MSG_HW_ENCODER, 0, 0, 10, 6, 12, 13, 14, 0, 0, 0,                    /* no steps */
+        MSG_HW_ENCODER, 0, 0, 11, 6, 12, 13, 14, 0, 0x03, 0xE9,              /* over ENCODER_STEPS_MAX */
+        MSG_HW_ENCODER, 0, 0, 12, 5, 12, 13, 14, 0, 0,                       /* too short */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(4, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(4, p.node_count);
+    const prog_node *enc = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_ENCODER, enc->type);
+    TEST_ASSERT_EQUAL_UINT8(6, enc->pin);
+    TEST_ASSERT_EQUAL_UINT8(8, enc->enc_pins[2]);
+    TEST_ASSERT_EQUAL_UINT16(24, enc->enc_steps);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 0), enc->out);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 1), enc->out_count);
+    TEST_ASSERT_EQUAL_UINT16(1000, p.nodes[1].enc_steps);
+    /* A servo takes its position as a fraction of its steps; a GPO reads its pressed. */
+    TEST_ASSERT_EQUAL_FLOAT(24, p.nodes[2].in_full[0]);
+    TEST_ASSERT_EQUAL_UINT8(enc->out_count, p.nodes[3].in[0]);
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "ENCODER n1 pins 6 7 button 8 2/click steps 24 wrap -> s0 pressed s1\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "ENCODER n4 pins 10 11 no button 4/click steps 1000 reverse -> s2 pressed s3\n"));
+}
+
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
 void test_counter_payload_valid(void)
 {
@@ -2056,6 +2155,8 @@ int main(void)
     RUN_TEST(test_servo_angle_and_pulse);
     RUN_TEST(test_ds18b20_scratchpad);
     RUN_TEST(test_ds18b20_program);
+    RUN_TEST(test_encoder_decode);
+    RUN_TEST(test_encoder_program);
     RUN_TEST(test_neopixel_payload_read);
     RUN_TEST(test_neopixel_bar);
     RUN_TEST(test_neopixel_point);

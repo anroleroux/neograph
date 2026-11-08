@@ -46,9 +46,11 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
 }
 
 /* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
-   count, a DS18B20's temperature and found, one for the others. */
+   count, a DS18B20's temperature and found, an encoder's position and pressed, one for
+   the others. */
 static uint8_t outputs_of(uint8_t type) {
-    return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20 ? 2 : 1;
+    return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20
+        || type == MSG_HW_ENCODER ? 2 : 1;
 }
 
 /* Whether a message holds source references, which the UI writes with their outputs. */
@@ -64,8 +66,9 @@ static bool has_refs(uint8_t type) {
    may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
                                    MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
-                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20, 0 };
-static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20,
+                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20,
+                                   MSG_HW_ENCODER, 0 };
+static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20, MSG_HW_ENCODER,
                                     MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, 0 };
 
 /* What a reference to a block's output stands for, as the device reads it
@@ -117,6 +120,8 @@ static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_
     if (type == MSG_LOGIC_COUNTER && src.output != (types == BOOLEAN ? 0 : 1)) { fail(what); return; }
     /* A DS18B20's temperature (0) is floating, its found (1) boolean. */
     if (type == MSG_HW_DS18B20 && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
+    /* An encoder's position (0) is floating, its pressed (1) boolean. */
+    if (type == MSG_HW_ENCODER && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
     for (; *types; types++) if (type == *types) return;
     fail(what);
 }
@@ -177,6 +182,9 @@ static void check_config(const uint8_t *p, size_t len) {
             if (it.len != 2) fail("DS18B20 message is not 2 bytes; the device would skip it");
             else if (!pin_usable(it.pay[0])) fail("DS18B20 pin is not in PIN_USABLE_MASK");
             else if (it.pay[1] & ~(DS18B20_RES_MASK | DS18B20_PULLUP)) fail("DS18B20 options have unknown bits");
+            break;
+        case MSG_HW_ENCODER:
+            if (!encoder_payload_valid(it.pay, it.len)) fail("encoder message is not one the device runs");
             break;
         case MSG_HW_ADC:
             if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
@@ -405,7 +413,7 @@ int main(int argc, char **argv) {
         while (it.next(&it))
             if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN | MSG_FLAG_PART)) fail("a message's flags set an unknown bit");
             else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
-                     && it.type != MSG_HW_DS18B20
+                     && it.type != MSG_HW_DS18B20 && it.type != MSG_HW_ENCODER
                      && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_LAST))
                 fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");

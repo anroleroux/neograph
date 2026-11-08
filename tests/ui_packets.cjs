@@ -224,7 +224,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1757,6 +1757,67 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [s.pin, s.resolution, s.pullup, s.shown, led.inConns().map(c => c.start.node.name + ':' + c.start.output).join()].join();
     });
     expect(dsBack === '22,2,true,true,n1:1', 'a DS18B20 restored as ' + dsBack);
+
+    // A rotary encoder: its three pins, steps and options; its position wires into a
+    // number input, its Pressed into an on/off; its tile shows the device's readings.
+    // It marshals as the encoder-config example in PROTOCOL.md, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a rotary encoder"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|A (CLK) pin:|B (DT) pin:|Switch (SW) pin:|Steps:|A click is:|At the ends:|Direction:|Wire from:|Command view:',
+        'a new encoder does not show its settings: ' + await keyRows());
+    await choice('A click is', 'Half cycle');
+    await choice('At the ends', 'Wrap');
+    await choice('Direction', 'Reversed');
+    const enc = await page.evaluate(() => {
+        const s = selected;
+        const pins = [...s.pins];
+        const rejected = [s.setPin(0, s.pins[1]), s.setPin(1, '29'), s.setPin(0, 'none'), s.setSteps(0),
+            s.setSteps(ENCODER_STEPS_MAX + 1), s.setSteps('2.5'), s.setDetent(3), s.setWireOutput(2)].every(r => r === false)
+            && pins.join() === s.pins.join();
+        const cmp = addNode(MSG_LOGIC_COMPARE), led = addNode(MSG_HW_LED);
+        s.setWireOutput(0);
+        const wired = !!createEdge(s.name, cmp.name) && createEdge(s.name, led.name) === null
+            && (s.setWireOutput(1), !!createEdge(s.name, led.name)) && createEdge(s.name, cmp.name) === null;
+        s.setSteps('24');
+        s.shown = true;
+        buildCommandInterface();
+        const tile = () => s.tileState.textContent;
+        const tiles = [tile()];
+        receiveTelemetry(`sig ${s.id} 0 5`);
+        tiles.push(tile());
+        receiveTelemetry(`sig ${s.id} 1 1`);
+        tiles.push(tile(), String(s.outputValue(0)), String(s.outputValue(1)));
+        const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        s.setPin(2, 'none');
+        const none = [s.marshal()[7], s.usedPins().length, s.outputValue(1)].join();
+        s.setPin(2, pins[2]);
+        saveGraph();
+        return { rejected, wired, tiles: tiles.join('|'), pay, none, pins: pins.join() };
+    });
+    packets.push(...await sent(page));
+    expect(enc.rejected, 'an encoder took settings out of range');
+    expect(enc.wired, 'an encoder\'s outputs did not wire by type');
+    expect(enc.tiles === '–|5 of 24|5 of 24, pressed|5|1', 'an encoder\'s tile showed ' + enc.tiles);
+    const [ea, eb, esw] = enc.pins.split(',').map(Number);
+    const h = (b) => b.toString(16).padStart(2, '0');
+    expect(enc.pay === [ea, eb, esw, 0x01 | 0x04 | 0x08, 0, 24].map(h).join(' '), 'an encoder marshals as ' + enc.pay);
+    expect(enc.none === '255,2,', 'an encoder without a switch marshals and reads as ' + enc.none);
+    const encBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x34, MSG_FLAG_SHOWN, 0, 1, 6, 6, 7, 8, 0x08, 0, 24,
+            0x25, 1, 0, 2, 12, 0, 1, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
+            0x20, 1, 0, 3, 3, 0, 1, 1,
+            0x34, 0, 0, 4, 6, 10, 10, 11, 0, 0, 20,
+        ])));
+        const s = elements.n1, led = elements.n3, bad = elements.n4;
+        return [s.pins.join(':'), s.steps, s.detent, s.wrap, s.reverse, s.shown,
+            led.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            elements.n2.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            bad.pins.includes(10) && bad.pins.includes(11) ? 'kept' : bad.pins.join(':')].join();
+    });
+    expect(encBack.startsWith('6:7:8,24,0,true,false,true,n1:1,n1:0,'), 'an encoder restored as ' + encBack);
+    expect(!encBack.endsWith('kept'), 'an encoder took A and B on one pin: ' + encBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {
