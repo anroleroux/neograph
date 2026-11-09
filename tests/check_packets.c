@@ -102,7 +102,7 @@ static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE,
                                    MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20,
                                    MSG_HW_ENCODER, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20, MSG_HW_ENCODER,
-                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, 0 };
+                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, MSG_LOGIC_SINE, 0 };
 
 /* What a reference to a block's output stands for, as the device reads it
    (resolve_ref in src/program.c): the reference in the block's table. */
@@ -235,10 +235,12 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_LOGIC_BLINK:
         case MSG_LOGIC_TOGGLE:
         case MSG_LOGIC_LATCH:
-        case MSG_LOGIC_COUNTER: {
+        case MSG_LOGIC_COUNTER:
+        case MSG_LOGIC_SINE: {
             /* program_compile runs only logic logic_payload_valid accepts */
             if (!logic_payload_valid(it.type, it.pay, it.len, it.flags)) { fail("logic payload is not one the device runs; it would skip it"); break; }
-            bool floating_in = it.type == MSG_LOGIC_COMPARE || program_logic_floating(it.type);
+            /* A sine is floating out, but its input runs it: boolean. */
+            bool floating_in = it.type == MSG_LOGIC_COMPARE || (program_logic_floating(it.type) && it.type != MSG_LOGIC_SINE);
             uint8_t refs = it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR || it.type == MSG_LOGIC_MIN
                 || it.type == MSG_LOGIC_MAX ? it.len / r : it.type == MSG_LOGIC_LATCH || it.type == MSG_LOGIC_COUNTER ? 2 : 1;
             for (uint8_t k = 0; k < refs; k++) {

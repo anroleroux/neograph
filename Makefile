@@ -84,7 +84,7 @@ test_protocol: src/config/config_iterator.c src/program.c src/stepper.c src/serv
 	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@ -lm
 
 check_packets: src/config/config_iterator.c src/program.c tests/check_packets.c src/protocol.h src/program.h
-	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@
+	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@ -lm
 
 test_ws_frame: src/networking/ws_frame.c tests/test_ws_frame.c tests/unity.c src/networking/ws_frame.h
 	gcc $(TEST_CFLAGS) $(filter %.c,$^) -o $@

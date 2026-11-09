@@ -17,7 +17,7 @@ the TMP button in the HWI group.
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
 | **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
-| **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX |
+| **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX, SIN |
 | **LGC** | Logic: decisions the device makes | AND, OR, NOT, TGL, LCH, CNT |
 | **SUB** | Blocks: logic you define once and place many times | NEW, then one per block; in a block, IN, OUT |
 
@@ -729,7 +729,7 @@ it blinks all the time.
 
 Logic that works on numbers: a slider's 0 to 1, an ADC's volts, the core
 temperature's °C, a counter's count, or another analog node's output. A compare turns
-a number into on/off; a scale, min and max give a number. These are logic nodes, run
+a number into on/off; a scale, min and max give a number, and a sine makes one. These are logic nodes, run
 by the device every 10 ms like those in [LGC](#lgc-logic), with the same Command view
 setting.
 
@@ -802,6 +802,36 @@ The highest of its wired inputs, such as the hottest of several readings. With
 nothing wired in, 0.
 
 No settings of its own.
+
+### Sine: `ANL-SIN`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One on/off, or none |
+| Output | Number |
+| Default label | Sine |
+
+A smooth wave: it swings from its offset − amplitude up to offset + amplitude and back
+once every period, starting at its offset and rising. The defaults swing from 0 to 1
+every 2 s, which sweeps a servo or PWM from end to end, or makes NeoPixels breathe
+(with Colour From input, or a bar). The node runs in the browser too, so a plot wired to
+it moves without a device.
+
+It runs while its on/off input is on, or all the time with nothing wired in. When the
+input goes off it rests at its offset, and starts from the beginning of its wave when it
+comes back on.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Period (s) | 0.02 s to a day | 2 | How long one wave takes. |
+| Amplitude | Any number | 0.5 | How far it swings either side of its offset. Below 0, it falls first. |
+| Offset | Any number | 0.5 | The middle of the wave, where it starts and where it rests while off. |
+| Command view | Show, Hide | Hide | A tile with its value. |
+
+Under the settings it says what that makes, for example "From 0 to 1 and back every
+2 s". The device works it out every 10 ms scan, so a period under a few tenths of a
+second comes out in coarse steps.
 
 ---
 
@@ -907,12 +937,12 @@ for a longer kick, or to a Counter to count the ticks.
 
 ## Which node takes which
 
-| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT |
+| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT, SIN |
 |---|---|---|---|---|
 | BTN, GPI, DS (Found), ENC (Pressed) | ✓ | | | ✓ |
 | SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position) | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
-| SCL, MIN, MAX, CNT (Count) | | ✓ | ✓ | |
+| SCL, MIN, MAX, SIN, CNT (Count) | | ✓ | ✓ | |
 
 A block's copy takes, on each input, and gives, on each output, what the block's IN or
 OUT says: on/off like a button, or a number like a slider.

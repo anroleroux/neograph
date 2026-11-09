@@ -175,6 +175,7 @@ const NODE_CLASSES = {
     [MSG_LOGIC_MAX]: uiMax,
     [MSG_LOGIC_PULSE]: uiPulse,
     [MSG_LOGIC_BLINK]: uiBlink,
+    [MSG_LOGIC_SINE]: uiSine,
     [MSG_LOGIC_TOGGLE]: uiToggle,
     [MSG_LOGIC_LATCH]: uiLatch,
     [MSG_LOGIC_COUNTER]: uiCounter,

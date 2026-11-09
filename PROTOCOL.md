@@ -274,7 +274,7 @@ Every packet payload except `0D` is a sequence of messages:
 | Byte | Field | Notes |
 |---|---|---|
 | 0 | Message type | Which kind of element; see [Element types](#element-types) |
-| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4C`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Bit 2 `MSG_FLAG_PART`: logic that is a part of a copy of a [block](#blocks); the device runs it as any logic, and the UI skips it when it restores the graph. Other bits are 0. |
+| 1 | Flags | Bit 0 `MSG_FLAG_OUTPUT`: the payload's [source references](#source-references) name an output. Bit 1 `MSG_FLAG_SHOWN`: a hardware input (`30` core temperature, `31` GPIO input, `32` ADC) or a logic element (`40`–`4D`) shows a tile in the Command view; the device ignores it (see [Hardware input tiles](#hardware-input-tiles)). Bit 2 `MSG_FLAG_PART`: logic that is a part of a copy of a [block](#blocks); the device runs it as any logic, and the UI skips it when it restores the graph. Other bits are 0. |
 | 2–3 | Element ID | Big endian |
 | 4 | Payload length | Bytes after this header, 0–255 |
 | 5… | Payload | Depends on the type |
@@ -335,7 +335,7 @@ Control types use bits 4 to 6 of the type byte:
 | 0 | 1 |       subtype         |   logic elements
 +---+---+-----------------------+
 L (MSG_LOGIC_BIT, 0x40): 1 = logic element: runs on the device, reads sources, and is a source
-                         (`MSG_LOGIC_LAST`, 0x4C, is the last defined)
+                         (`MSG_LOGIC_LAST`, 0x4D, is the last defined)
 H (MSG_HW_BIT, 0x20):    0 = UI element, 1 = hardware element
 I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 ```
@@ -377,6 +377,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `4A` | `MSG_LOGIC_TOGGLE` | Logic: turns over each time its input goes on | Implemented |
 | `4B` | `MSG_LOGIC_LATCH` | Logic: on once set, off once reset | Implemented |
 | `4C` | `MSG_LOGIC_COUNTER` | Logic: counts its input going on, up to a preset; two outputs, done and its count | Implemented |
+| `4D` | `MSG_LOGIC_SINE` | Logic: a sine wave, floating, while its input is on | Implemented |
 | `60` | `MSG_SUB` | A copy of a [block](#blocks); the device runs its parts, not it | Implemented |
 | `61` | `MSG_SUB_INPUT` | In a block's definition: an input | Implemented |
 | `62` | `MSG_SUB_OUTPUT` | In a block's definition: an output | Implemented |
@@ -418,6 +419,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `4A` Toggle | 3 | Bytes 0–2: source reference |
 | `4B` Latch | 6 | Bytes 0–2: its set source reference · bytes 3–5: its reset source reference (each 0 = not connected) |
 | `4C` Counter | 10 | Bytes 0–2: its count source reference · bytes 3–5: its reset source reference (each 0 = not connected) · bytes 6–9: its preset, a 32-bit big-endian number, 1 to `COUNTER_MAX` (1000000; UI default 3). See [Logic](#logic). |
+| `4D` Sine | 15 | Bytes 0–2: source reference, boolean (0: it always runs) · bytes 3–6: its period, milliseconds, `SINE_PERIOD_MIN_MS` (20) to `DELAY_MAX_MS` (UI default 2000) · bytes 7–10: its amplitude · bytes 11–14: its offset, each a 32-bit big-endian float, finite (UI defaults 0.5 and 0.5). See [Sine waves](#sine-waves). |
 | `60` Block | 5–53 | Byte 0: its definition's ID · bytes 1–2: the ID of its first part · byte 3: its inputs, 0 to `SUB_PORTS_MAX` (8) · byte 4: its outputs, 0 to 8 · then a source reference for each input · then, for each output, the source reference it stands for. Always with `MSG_FLAG_OUTPUT`. See [Blocks](#blocks). |
 | `61` Block input | 2 | In a definition only. Byte 0: its type, `SUB_TYPE_BOOL` (0) or `SUB_TYPE_FLOAT` (1) · byte 1: its index among the definition's inputs |
 | `62` Block output | 5 | In a definition only. Bytes 0–2: its source reference · byte 3: its type · byte 4: its index among the definition's outputs |
@@ -510,9 +512,9 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
+| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4D` logic | 0 or 1 (`00` / `FF`) |
 | NeoPixel data | `26` NeoPixels' data line out (output 0) | `26` NeoPixels' data line in (after their settings) | What its chain draws on its LEDs; see [NeoPixel chains](#neopixel-chains) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1), `4D` sine | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -587,7 +589,7 @@ When a config arrives, the UI rebuilds the graph from it:
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
   `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `30` core temperature, `31` GPIO input,
-  `32` ADC, `33` DS18B20, `34` rotary encoder, the logic `40`–`4C`
+  `32` ADC, `33` DS18B20, `34` rotary encoder, the logic `40`–`4D`
   and a block's copy `60`) becomes a node with the message's ID. Messages marked
   `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
   definition, which is restored first from its `A3` and `A4` messages (see
@@ -946,10 +948,10 @@ duty cycle from its X and frequency from its Y:
 
 ### Logic
 
-Logic elements (`40`–`4C`) make control decisions on the device: core 1 runs them in
+Logic elements (`40`–`4D`) make control decisions on the device: core 1 runs them in
 its scan, every 10 ms, with or without a browser. Each reads one or more sources and
 is a source itself, with one output: **boolean** (an LED, GPO, USB keyboard, light or
-other logic can be wired to it) or, for a scale, min or max, **floating** (a PWM,
+other logic can be wired to it) or, for a scale, min, max or sine, **floating** (a PWM,
 plot, compare or other floating logic can). A counter has two: done (0, boolean) and
 its count (1, floating).
 
@@ -971,6 +973,7 @@ its count (1, floating).
 | `45` Scale | 1 floating source | Its input mapped from the input's from–to onto the output's from–to: 30–60 onto 0–1 turns 45 into 0.5. Either range may run downwards. With `SCALE_CLAMP` the output stays within its range |
 | `46` Min, `47` Max | 1 to 4 floating sources | The least or greatest of its wired inputs, in their unit; with none wired, 0 |
 | `4C` Counter, its count (output 1) | a count and a reset source | How many times its count input has gone on, up to its preset, where it stops; while its reset input is on, 0, whatever count is |
+| `4D` Sine | 1 boolean source, or none | While its input is on (always, with none wired): its offset + its amplitude × sin(2π × *t* ÷ its period); off, its offset. See [Sine waves](#sine-waves) |
 
 - **A compare's hysteresis.** Above 40 with a hysteresis of 1 goes on when its input
   rises past 40, and off only when it falls below 39; below 40 goes on under 40 and
@@ -1106,6 +1109,36 @@ them. The counter is reset while the latch is off, so each press counts from 0:
 20 01 00 06 03  00 03 00                        # LED n6 ← n3
 ```
 
+#### Sine waves
+
+A sine (`4D`) makes a smooth wave: a floating value, its **offset** plus its
+**amplitude** times the sine of how far it is through its **period**, so it swings from
+offset − amplitude to offset + amplitude and back once each period, starting at its
+offset and rising (a negative amplitude falls first). The UI's defaults, offset 0.5 and
+amplitude 0.5 every 2 s, swing from 0 to 1: a PWM, servo or NeoPixels wired to it take
+it as a fraction of 1, as a slider's, so it sweeps them across their whole range.
+
+- **Its input runs it.** While its boolean input is on, or with nothing wired in, it
+  runs. Off, it is its offset, and when it goes on again it starts from the beginning
+  of its wave.
+- **On the device** core 1 works it out each scan (`program_logic_step`): *t* goes up
+  10 ms a scan, back to 0 at its period, so a period of 20 ms (`SINE_PERIOD_MIN_MS`) is
+  two scans. It starts at *t* = 0 when the program starts, at each save.
+- **In the browser** the node works it out every 50 ms while it runs, so plots and
+  lights move without a device; once the device reports it, its values are shown.
+
+A sine `n1` with nothing wired in, sweeping servo `n2` on GPIO 9 from 0° to 180° and
+back every 4 s:
+
+```hex example=sine-config
+0A 00 25                                        # Config, 37 bytes
+4D 01 00 01 0F  00 00 00                        # sine n1, no input: it always runs
+                00 00 0F A0                     #   period 4000 ms
+                3F 00 00 00  3F 00 00 00        #   amplitude 0.5, offset 0.5: 0 to 1
+25 01 00 02 0C  00 01 00 09 00 B4               # servo n2 ← n1, GPIO 9, 0° at 0, 180° at 1
+                01 F4 09 C4 00 00               #   500 µs at 0°, 2500 µs at 180°, no speed limit
+```
+
 ### Blocks
 
 A **block** is a graph of logic defined once and placed any number of times, like a
@@ -1114,7 +1147,7 @@ view, with **input** and **output ports** (`61`, `62`) where its copies' wires c
 and go out; each port is on/off or a number. A **copy** (`60`) is a node in the main
 graph with the definition's inputs and outputs.
 
-- **What a definition holds:** logic (`40`–`4C`) and ports, with their labels,
+- **What a definition holds:** logic (`40`–`4D`) and ports, with their labels,
   positions and wire shapes. Hardware and UI elements stay in the main graph, and a
   definition holds no copy of a block.
 - **How it is saved:** the definition's name (`A3`), then each of its messages,
@@ -1678,7 +1711,7 @@ Every source in the config has its signals, wired or not:
 | `12` slider | 1 | 0 to 1 | 0 |
 | `13` 2D slider | 2: X (output 0), Y (output 1) | 0 to 1 each | its [home](#2d-sliders) |
 | `30` core temperature | 1 | °C | the latest temperature |
-| `40`–`4C` [logic](#logic) | 1; a counter 2: done (output 0), its count (output 1) | 0 off, 1 on; a scale, min or max its value; a counter's count | 0, then its state at the first scan |
+| `40`–`4D` [logic](#logic) | 1; a counter 2: done (output 0), its count (output 1) | 0 off, 1 on; a scale, min, max or sine its value; a counter's count | 0, then its state at the first scan |
 | `31` GPIO input | 1 | 0 off, 1 on | the pin when it is set up |
 | `32` ADC | 1 | volts, 0 to 3.3 | 0, then its first reading |
 | `33` DS18B20 | 2: its temperature (output 0), found (output 1) | °C; 0 or 1 | 0, then its first reading; as in the program core 1 ran |
@@ -1715,6 +1748,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `46` min, `47` max | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `4B` latch | 2 signals: set, reset | its signal | See [Logic](#logic) |
 | `4C` counter | 2 signals: count, reset | its two signals: done, its count | See [Logic](#logic) |
+| `4D` sine | 1 signal | its signal | See [Sine waves](#sine-waves) |
 | `20` LED | 1 signal | the onboard LED, through core 0 | On from 0.5 |
 | `21` GPO | 1 signal | its pin | High from 0.5 |
 | `22` PWM | 2 signals: duty, frequency | its pin | See [PWM outputs](#pwm-outputs) |
@@ -1954,6 +1988,15 @@ BLINK n3 on 250 off 250 <- s1 -> s2
 NOT n5 <- s1 -> s5
 COUNTER n4 preset 3 count s2 reset s5 -> s3 s4
 LED n6 <- s2
+```
+
+For the [sine-config example](#sine-waves): its period, amplitude and offset, and the
+signal that runs it (`-`: none, so it always runs):
+
+```program example=sine-config
+s0 n1.0 sine = 0
+SINE n1 period 4000 amplitude 0.5 offset 0.5 <- - -> s0
+SERVO n2 pin 9 angle 0-180 pulse 500-2500 us speed 0 <- s0 / 1
 ```
 
 For the [block-config example](#blocks): the definition and the copy are left out;

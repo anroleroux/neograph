@@ -224,7 +224,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1885,6 +1885,62 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(encBack.startsWith('6:7:8,24,0,true,false,true,n1:1,n1:0,'), 'an encoder restored as ' + encBack);
     expect(!encBack.endsWith('kept'), 'an encoder took A and B on one pin: ' + encBack);
+
+    // A sine: an on/off wire in runs it, a number wire leaves it; the browser runs the
+    // wave, from its offset; off, it rests at its offset. It marshals as the sine-config
+    // example's layout in PROTOCOL.md, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a sine wave"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|Period (s):|Amplitude:|Offset:|Command view:',
+        'a new sine does not show its settings: ' + await keyRows());
+    expect(await page.locator('#settings .setting-note').textContent() === 'From 0 to 1 and back every 2 s',
+        'a new sine says ' + await page.locator('#settings .setting-note').textContent());
+    const sine = await page.evaluate(async () => {
+        const s = selected;
+        const rejected = [s.setPeriod('0.01'), s.setPeriod('x'), s.setAmplitude('inf'), s.setOffset('')]
+            .every(r => r === false) && s.periodMs === 2000;
+        const btn = addNode(MSG_UI_BUTTON), sld = addNode(MSG_UI_SLIDER), pwm = addNode(MSG_HW_PWM), led = addNode(MSG_HW_LED);
+        const wired = createEdge(sld.name, s.name) === null && createEdge(s.name, led.name) === null
+            && !!createEdge(s.name, pwm.name) && !!createEdge(btn.name, s.name);
+        // Off (the button is off): its offset.
+        const off = s.outputValue(0);
+        btn.handleClick();                                  // on
+        s.setPeriod('0.4');
+        const seen = [];
+        for (let i = 0; i < 8; i++) { await new Promise(r => setTimeout(r, 60)); seen.push(s.outputValue(0)); }
+        const moved = new Set(seen.map(v => v.toFixed(3))).size > 3 && seen.every(v => v >= 0 && v <= 1);
+        btn.handleClick();                                  // off
+        await new Promise(r => setTimeout(r, 120));
+        const rested = s.outputValue(0);
+        s.setPeriod('2'); s.setAmplitude('100'); s.setOffset('0');
+        const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        saveGraph();
+        s.remove();
+        return { rejected, wired, off, moved, rested, pay, btn: btn.id };
+    });
+    packets.push(...await sent(page));
+    expect(sine.rejected, 'a sine took settings out of range');
+    expect(sine.wired, 'a sine did not take an on/off wire in, and give a number out');
+    expect(sine.off === 0.5, 'a sine that is off is at ' + sine.off);
+    expect(sine.moved, 'a running sine did not move between 0 and 1');
+    expect(sine.rested === 0.5, 'a sine turned off rested at ' + sine.rested);
+    expect(sine.pay === `00 ${sine.btn.toString(16).padStart(2, '0')} 00 00 00 07 d0 42 c8 00 00 00 00 00 00`,
+        'a sine marshals as ' + sine.pay);
+    const sineBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x10, 0, 0, 1, 0,
+            0x4D, MSG_FLAG_OUTPUT, 0, 2, 15, 0, 1, 0, 0, 0, 0x03, 0xE8, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0,
+            0x25, 1, 0, 3, 12, 0, 2, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
+            0x4D, MSG_FLAG_OUTPUT, 0, 4, 15, 0, 0, 0, 0, 0, 0, 10, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0,   // too short a period
+        ])));
+        const s = elements.n2, bad = elements.n4;
+        const back = [s.periodMs, s.amplitude, s.offset, s.inConns()[0]?.start.node.name,
+            elements.n3.inConns()[0]?.start.node.name, bad.periodMs].join();
+        Object.values(elements).forEach(e => e.remove());
+        return back;
+    });
+    expect(sineBack === '1000,0.5,0.5,n1,n2,2000', 'a sine restored as ' + sineBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

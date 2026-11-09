@@ -18,7 +18,7 @@
  *     inputs (ADC, GPIO input, core temperature, DS18B20, rotary encoder), which
  *     write a signal (a DS18B20 or an encoder two); then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
- *     latch, counter), which reads signals and writes its own, each after the
+ *     latch, counter, sine), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
  *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
  *     servo, NeoPixels), which read one or two. NeoPixel nodes may be chained, each
@@ -60,8 +60,10 @@ typedef struct {
     uint8_t duty, duty_min, duty_max;       // a PWM, percent
     uint16_t freq, freq_min, freq_max;      // a PWM, Hz
     float threshold, hysteresis;            // a compare
-    float scale[4];                         // a scale: the input's from and to, the output's from and to
-    uint32_t on_ms, off_ms;                 // a delay's delays; a pulse's time on; a blink's times on and off
+    float scale[4];                         // a scale: the input's from and to, the output's from and to;
+                                            // a sine: its amplitude, then its offset
+    uint32_t on_ms, off_ms;                 // a delay's delays; a pulse's time on; a blink's times on and off;
+                                            // a sine's period
     uint32_t preset;                        // a counter
     uint8_t coil_pins[STEPPER_PINS];        // a stepper: the GPIO of IN1 to IN4
     uint16_t steps_rev;                     // a stepper: full steps per revolution
@@ -82,7 +84,8 @@ typedef struct {
 // What a logic node keeps from one scan to the next, besides its output.
 typedef struct {
     uint32_t held_ms;       // delay: how long its input has differed from its output;
-                            // pulse, blink: how long it has been in its state
+                            // pulse, blink: how long it has been in its state; sine: how far
+                            // through its period it is
     bool in_was;            // pulse, toggle, counter: its input at the last scan; blink: whether it was blinking
     uint32_t count;         // counter: its count, 0 to its preset
 } prog_logic_state;

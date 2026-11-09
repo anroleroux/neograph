@@ -117,6 +117,10 @@ const NODE_HELP = {
     max: [
         "The highest of up to 4 number inputs, such as the hottest of several readings, in the unit of the first. With none wired, 0.",
     ],
+    sine: [
+        "A smooth wave, a number: its offset plus its amplitude times the sine of the time, going round once each period. With offset 0.5 and amplitude 0.5 it swings from 0 to 1, which sweeps a servo or PWM from end to end, or breathes NeoPixels.",
+        "It runs while its on/off input is on, or always with nothing wired in. When the input goes off it rests at its offset, and starts from the beginning when it comes on again. The device runs it every 10 ms scan, so the shortest period is 0.02 s.",
+    ],
     pulse: [
         "Turns on for its time each time its input goes on, however long the input stays on. Going on again while on starts the time again.",
         "Use it to give a relay or buzzer a fixed-length kick from a button press. An input already on when the graph starts doesn't count.",

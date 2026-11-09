@@ -69,7 +69,7 @@
      PLT LGT
      KEY
      DLY PLS BLK
-     CMP SCL MIN MAX
+     CMP SCL MIN MAX SIN
      AND OR NOT TGL LCH   (logic: rows 4 and 5)
      CNT
      NEW B1 B2 …          (blocks: a new one, and a copy of each; in a block, IN OUT)

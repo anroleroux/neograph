@@ -373,7 +373,7 @@ void test_wires_join_matching_types(void)
         messages(&it, ex);
         while (it.next(&it)) {
             bool floating_in = it.type == MSG_LOGIC_COMPARE || it.type == MSG_HW_STEPPER || it.type == MSG_HW_SERVO
-                || program_logic_floating(it.type);
+                || (program_logic_floating(it.type) && it.type != MSG_LOGIC_SINE);   /* a sine's input is on/off */
             bool boolean_in = it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD
                 || it.type == MSG_UI_INDICATOR || (program_logic(it.type) && !floating_in);
             uint8_t r = msg_ref_len(it.flags);
@@ -1892,6 +1892,61 @@ void test_ds18b20_program(void)
     TEST_ASSERT_NOT_NULL(strstr(text, "DS18B20 n1 pin 15 10-bit pull-up -> s0 found s1\n"));
 }
 
+/* ── Sine ─────────────────────────────────────────────────────────────── */
+
+void test_sine(void)
+{
+    static hw_program p;
+    /* Sine n2 <- button n1: a 40 ms period (4 scans), amplitude 2, offset 1. */
+    const uint8_t cfg[] = {
+        MSG_UI_BUTTON, 0, 0, 1, 0,
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 2, 15, 0, 1, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0,
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 3, 15, 0, 0, 0, 0, 0, 0, 19, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0,   /* too short */
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 4, 15, 0, 0, 0, 0, 0, 0, 40, 0x7F, 0xC0, 0, 0, 0, 0, 0, 0,     /* NaN amplitude */
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 5, 11, 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0,                    /* no offset */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(2, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(1, p.node_count);
+    TEST_ASSERT_TRUE(program_logic_floating(MSG_LOGIC_SINE));
+    const prog_node *n = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_LOGIC_SINE, n->type);
+    TEST_ASSERT_EQUAL_UINT32(40, n->on_ms);
+
+    /* Off: its offset. On: from its offset, up to offset + amplitude a quarter period
+       on, back, down to offset - amplitude, and round again. */
+    prog_logic_state st;
+    program_logic_start(&p, n, &st);
+    float out = 0;
+    out = program_logic_step(&p, n, out, &st, 10);
+    TEST_ASSERT_EQUAL_FLOAT(1, out);
+    p.signals[0].value = 1;
+    const float wave[] = { 1, 3, 1, -1, 1, 3 };
+    for (int i = 0; i < 6; i++) {
+        out = program_logic_step(&p, n, out, &st, 10);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, wave[i], out);
+    }
+    /* Off again: its offset; on, it starts from the beginning. */
+    p.signals[0].value = 0;
+    TEST_ASSERT_EQUAL_FLOAT(1, program_logic_step(&p, n, out, &st, 10));
+    p.signals[0].value = 1;
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1, program_logic_step(&p, n, out, &st, 10));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 3, program_logic_step(&p, n, out, &st, 10));
+
+    char text[256];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "SINE n2 period 40 amplitude 2 offset 1 <- s0 -> s1\n"));
+
+    /* With nothing wired in it always runs. */
+    const uint8_t free_running[] = {
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 1, 15, 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0,
+    };
+    program_compile(free_running, sizeof free_running, &p);
+    program_logic_start(&p, &p.nodes[0], &st);
+    program_logic_step(&p, &p.nodes[0], 0, &st, 10);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 3, program_logic_step(&p, &p.nodes[0], 0, &st, 10));
+}
+
 /* ── Rotary encoders ──────────────────────────────────────────────────── */
 
 /* Feed a decoder its pins' states in turn (A in bit 1, B in bit 0); the clicks they make. */
@@ -2234,6 +2289,7 @@ int main(void)
     RUN_TEST(test_servo_angle_and_pulse);
     RUN_TEST(test_ds18b20_scratchpad);
     RUN_TEST(test_ds18b20_program);
+    RUN_TEST(test_sine);
     RUN_TEST(test_encoder_decode);
     RUN_TEST(test_encoder_program);
     RUN_TEST(test_neopixel_payload_read);

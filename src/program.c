@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,7 +12,7 @@ bool program_logic(uint8_t type) {
 }
 
 bool program_logic_floating(uint8_t type) {
-    return type == MSG_LOGIC_SCALE || type == MSG_LOGIC_MIN || type == MSG_LOGIC_MAX;
+    return type == MSG_LOGIC_SCALE || type == MSG_LOGIC_MIN || type == MSG_LOGIC_MAX || type == MSG_LOGIC_SINE;
 }
 
 bool program_ui_source(uint8_t type) {
@@ -49,7 +50,10 @@ void program_logic_start(const hw_program *p, const prog_node *n, prog_logic_sta
 // on (or with none wired), starts on, then turns over after each time on or off.
 // A toggle turns over each time its input goes on. A latch goes on when set and
 // off when reset, and reset wins. A counter counts its count input going on, up to
-// its preset, and is on (done) at its preset; reset sets it back to 0, and wins.
+// its preset, and is on (done) at its preset; reset sets it back to 0, and wins. A
+// sine, while its input is on (or with none wired), is its offset plus its amplitude
+// times the sine of how far it is through its period, starting at 0; off, it is its
+// offset, and starts again from 0 when it goes on.
 float program_logic_step(const hw_program *p, const prog_node *n, float out, prog_logic_state *st, uint32_t dt_ms) {
     bool on = out >= 0.5f;
     switch (n->type) {
@@ -157,6 +161,18 @@ float program_logic_step(const hw_program *p, const prog_node *n, float out, pro
         if (signal_on(p, n->in[1])) st->count = 0;
         else if (rose && st->count < n->preset) st->count++;
         return st->count >= n->preset;
+    }
+
+    case MSG_LOGIC_SINE: {
+        // on_ms: its period; scale[0] its amplitude, scale[1] its offset; held_ms how far
+        // through its period it is.
+        if (n->in[0] != PROG_NO_SIGNAL && !signal_on(p, n->in[0])) {
+            st->held_ms = 0;
+            return n->scale[1];
+        }
+        float y = n->scale[1] + n->scale[0] * sinf(6.2831853f * (float)st->held_ms / (float)n->on_ms);
+        st->held_ms = (st->held_ms + dt_ms) % n->on_ms;
+        return y;
     }
 
     default:
@@ -436,6 +452,10 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             n->off_ms = msg_u32_at(itr.pay + r + 4);
         } else if (itr.type == MSG_LOGIC_PULSE) {
             n->on_ms = msg_u32_at(itr.pay + r);
+        } else if (itr.type == MSG_LOGIC_SINE) {
+            n->on_ms = msg_u32_at(itr.pay + r);
+            n->scale[0] = msg_float_at(itr.pay + r + 4);
+            n->scale[1] = msg_float_at(itr.pay + r + 8);
         } else if (itr.type == MSG_LOGIC_SCALE) {
             n->options = itr.pay[r];
             for (int i = 0; i < 4; i++) n->scale[i] = msg_float_at(itr.pay + r + 1 + 4 * i);
@@ -574,6 +594,7 @@ static const char *type_name(uint8_t type) {
     case MSG_LOGIC_TOGGLE: return "toggle";
     case MSG_LOGIC_LATCH: return "latch";
     case MSG_LOGIC_COUNTER: return "counter";
+    case MSG_LOGIC_SINE: return "sine";
     default: return "?";
     }
 }
@@ -692,6 +713,13 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->out);
             put(&t, " ");
             put_signal(&t, n->out_count);
+            break;
+        case MSG_LOGIC_SINE:
+            put(&t, "SINE n%u period %lu amplitude %.4g offset %.4g <- ", n->id, (unsigned long)n->on_ms,
+                (double)n->scale[0], (double)n->scale[1]);
+            put_input(&t, n, 0);
+            put(&t, " -> ");
+            put_signal(&t, n->out);
             break;
         case MSG_LOGIC_DELAY:
             put(&t, "DELAY n%u on %lu off %lu <- ", n->id, (unsigned long)n->on_ms, (unsigned long)n->off_ms);

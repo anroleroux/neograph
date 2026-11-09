@@ -6,7 +6,7 @@
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
  * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
- * ENCODER_ and SUB_ constants are mirrored in
+ * ENCODER_, SINE_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -76,7 +76,7 @@
 #define MSG_HW_ENCODER          0x34    /* a rotary encoder and its push switch; two outputs */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
-   source itself, with one output, 0: boolean, or floating for a scale, min or max. A
+   source itself, with one output, 0: boolean, or floating for a scale, min, max or sine. A
    counter has two: done (0, boolean) and its count (1, floating). */
 #define MSG_LOGIC_BIT           0x40
 #define MSG_LOGIC_COMPARE       0x40    /* a floating input above or below a threshold */
@@ -92,7 +92,8 @@
 #define MSG_LOGIC_TOGGLE        0x4A    /* turns over each time its input goes on */
 #define MSG_LOGIC_LATCH         0x4B    /* on once set, off once reset; reset wins */
 #define MSG_LOGIC_COUNTER       0x4C    /* counts its input going on, up to a preset; two outputs */
-#define MSG_LOGIC_LAST          0x4C    /* the last logic type: MSG_LOGIC_COUNTER */
+#define MSG_LOGIC_SINE          0x4D    /* floating: a sine wave, while its input is on */
+#define MSG_LOGIC_LAST          0x4D    /* the last logic type: MSG_LOGIC_SINE */
 
 /* Blocks (subroutines): a graph of logic defined once (MSG_SUB_DEF, MSG_SUB_PART) and
    placed any number of times (MSG_SUB). The device runs each copy's parts
@@ -232,13 +233,16 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    blinks), then its time on and time off, each 1 to DELAY_MAX_MS. A toggle: a source
    reference. A latch: its set source reference, then its reset one. A counter: its
    count source reference, its reset one, then its preset, a 32-bit big-endian number,
-   1 to COUNTER_MAX. */
+   1 to COUNTER_MAX. A sine (MSG_LOGIC_SINE): a source reference (0: it always runs),
+   then its period, a 32-bit big-endian number of milliseconds, SINE_PERIOD_MIN_MS to
+   DELAY_MAX_MS, then its amplitude and its offset, each a finite 32-bit big-endian float. */
 #define COMPARE_ABOVE           0x00    /* on above the threshold; off below it less the hysteresis */
 #define COMPARE_BELOW           0x01    /* on below the threshold; off above it plus the hysteresis */
 #define LOGIC_INPUTS_MAX        4
 #define DELAY_MAX_MS            86400000    /* a day */
 #define SCALE_CLAMP             0x01    /* options bit 0: keep the output within its range */
 #define COUNTER_MAX             1000000 /* the highest preset */
+#define SINE_PERIOD_MIN_MS      20      /* a sine's shortest period: two scans */
 
 /* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
    options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
@@ -640,6 +644,11 @@ static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t 
     case MSG_LOGIC_BLINK:
         return len == r + 8 && msg_u32_at(pay + r) >= 1 && msg_u32_at(pay + r) <= DELAY_MAX_MS
             && msg_u32_at(pay + r + 4) >= 1 && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
+    case MSG_LOGIC_SINE: {
+        if (len != r + 12 || msg_u32_at(pay + r) < SINE_PERIOD_MIN_MS || msg_u32_at(pay + r) > DELAY_MAX_MS) return 0;
+        float amplitude = msg_float_at(pay + r + 4), offset = msg_float_at(pay + r + 8);
+        return amplitude - amplitude == 0 && offset - offset == 0;     /* finite */
+    }
     case MSG_LOGIC_SCALE: {
         if (len != r + 17 || (pay[r] & ~SCALE_CLAMP)) return 0;
         float k[4];
