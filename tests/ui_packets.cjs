@@ -224,7 +224,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC, PLT LGT, KEY, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1892,14 +1892,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
     await page.locator('#add [title="Add a sine wave"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|Period (s):|Amplitude:|Offset:|Command view:',
+    expect(await keyRows() === 'Label:|Period (s):|Amplitude:|Offset:|Phase (°):|Command view:',
         'a new sine does not show its settings: ' + await keyRows());
     expect(await page.locator('#settings .setting-note').textContent() === 'From 0 to 1 and back every 2 s',
         'a new sine says ' + await page.locator('#settings .setting-note').textContent());
     const sine = await page.evaluate(async () => {
         const s = selected;
-        const rejected = [s.setPeriod('0.01'), s.setPeriod('x'), s.setAmplitude('inf'), s.setOffset('')]
-            .every(r => r === false) && s.periodMs === 2000;
+        const rejected = [s.setPeriod('0.01'), s.setPeriod('x'), s.setAmplitude('inf'), s.setOffset(''),
+            s.setPhase('361'), s.setPhase('-400')].every(r => r === false) && s.periodMs === 2000 && s.phase === 0;
         const btn = addNode(MSG_UI_BUTTON), sld = addNode(MSG_UI_SLIDER), pwm = addNode(MSG_HW_PWM), led = addNode(MSG_HW_LED);
         const wired = createEdge(sld.name, s.name) === null && createEdge(s.name, led.name) === null
             && !!createEdge(s.name, pwm.name) && !!createEdge(btn.name, s.name);
@@ -1913,11 +1913,14 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         btn.handleClick();                                  // off
         await new Promise(r => setTimeout(r, 120));
         const rested = s.outputValue(0);
+        // A phase of 90°: off, it rests at its top, where it starts.
+        s.setPhase('90');
+        const phased = [s.outputValue(0), s.swing()].join('|');
         s.setPeriod('2'); s.setAmplitude('100'); s.setOffset('0');
         const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join(' ');
         saveGraph();
         s.remove();
-        return { rejected, wired, off, moved, rested, pay, btn: btn.id };
+        return { rejected, wired, off, moved, rested, phased, pay, btn: btn.id };
     });
     packets.push(...await sent(page));
     expect(sine.rejected, 'a sine took settings out of range');
@@ -1925,22 +1928,77 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(sine.off === 0.5, 'a sine that is off is at ' + sine.off);
     expect(sine.moved, 'a running sine did not move between 0 and 1');
     expect(sine.rested === 0.5, 'a sine turned off rested at ' + sine.rested);
-    expect(sine.pay === `00 ${sine.btn.toString(16).padStart(2, '0')} 00 00 00 07 d0 42 c8 00 00 00 00 00 00`,
+    expect(sine.phased === '1|From 0 to 1 and back every 0.4 s, starting at 1', 'a sine with a phase of 90° showed ' + sine.phased);
+    expect(sine.pay === `00 ${sine.btn.toString(16).padStart(2, '0')} 00 00 00 07 d0 42 c8 00 00 00 00 00 00 42 b4 00 00`,
         'a sine marshals as ' + sine.pay);
     const sineBack = await page.evaluate(() => {
         restoreGraph(configMessages(Uint8Array.from([
             0x10, 0, 0, 1, 0,
-            0x4D, MSG_FLAG_OUTPUT, 0, 2, 15, 0, 1, 0, 0, 0, 0x03, 0xE8, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0,
+            0x4D, MSG_FLAG_OUTPUT, 0, 2, 19, 0, 1, 0, 0, 0, 0x03, 0xE8, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0, 0x43, 0x34, 0, 0,
             0x25, 1, 0, 3, 12, 0, 2, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
             0x4D, MSG_FLAG_OUTPUT, 0, 4, 15, 0, 0, 0, 0, 0, 0, 10, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0,   // too short a period
+            0x4D, MSG_FLAG_OUTPUT, 0, 5, 15, 0, 0, 0, 0, 0, 0x03, 0xE8, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0, // saved before phases
         ])));
         const s = elements.n2, bad = elements.n4;
-        const back = [s.periodMs, s.amplitude, s.offset, s.inConns()[0]?.start.node.name,
-            elements.n3.inConns()[0]?.start.node.name, bad.periodMs].join();
+        const back = [s.periodMs, s.amplitude, s.offset, s.phase, s.inConns()[0]?.start.node.name,
+            elements.n3.inConns()[0]?.start.node.name, bad.periodMs, elements.n5.periodMs, elements.n5.phase].join();
         Object.values(elements).forEach(e => e.remove());
         return back;
     });
-    expect(sineBack === '1000,0.5,0.5,n1,n2,2000', 'a sine restored as ' + sineBack);
+    expect(sineBack === '1000,0.5,0.5,180,n1,n2,2000,1000,0', 'a sine restored as ' + sineBack);
+
+    // A clock: three number outputs, wired by Wire from; setting the time sends the
+    // device a clock command (checked by check_packets), and sets every clock node in
+    // the browser; the device's reports, while fresh, are what it shows. It saves with
+    // no payload, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="tm"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a clock"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|Hours:|Minutes:|Seconds:|Wire from:|Command view:',
+        'a new clock does not show its settings: ' + await keyRows());
+    // Type the hour into its field, as a user would.
+    await page.locator('#settings .editable', { has: page.locator('.label:text-is("Hours:")') })
+        .locator('svg').first().dispatchEvent('click');
+    await page.locator('#settings .editable input').fill('7');
+    await page.locator('#settings .editable input').press('Enter');
+    await page.evaluate(() => { document.body.scrollLeft = 0; });
+    const clock = await page.evaluate(async () => {
+        const c = selected, typed = c.now()[0];                 // the hour typed in
+        const other = addNode(MSG_HW_CLOCK);
+        c.setPart(0, 8);
+        const set = [typed, c.now()[0], other.now()[0]].join(); // one clock: setting either sets both
+        const rejected = [c.setTime(24, 0, 0), c.setTime(0, 60, 0), c.setTime(0, 0, 60), c.setTime('x', 0, 0), c.setPart(1, 99)]
+            .every(r => r === false) && c.now()[0] === 8;
+        other.remove();
+        c.setTime(23, 59, 59);
+        await new Promise(r => setTimeout(r, 1300));
+        const rolled = c.now().join(':');                       // past midnight
+        const cmp = addNode(MSG_LOGIC_COMPARE), plot = addNode(MSG_UI_GRAPH), led = addNode(MSG_HW_LED);
+        c.setWireOutput(2);
+        const wired = !!createEdge(c.name, cmp.name) && !!createEdge(c.name, plot.name) && createEdge(c.name, led.name) === null
+            && cmp.inConns()[0].start.output === 2 && c.setWireOutput(3) === false;
+        receiveTelemetry(`sig ${c.id} 0 12`); receiveTelemetry(`sig ${c.id} 1 34`); receiveTelemetry(`sig ${c.id} 2 56`);
+        c.shown = true;
+        buildCommandInterface();
+        const shown = [c.reading(), c.tileState.textContent, String(c.outputValue(1)), c.gElm.children[1].textContent].join('|');
+        const pay = c.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ');
+        saveGraph();
+        return { set, rejected, rolled, wired, shown, pay, id: c.id };
+    });
+    packets.push(...await sent(page));
+    expect(clock.set === '7,8,8', 'setting one clock did not set them all: ' + clock.set);
+    expect(clock.rejected, 'a clock took a time that is not a time of day');
+    expect(clock.rolled === '0:0:0' || clock.rolled === '0:0:1', 'a clock did not go round midnight: ' + clock.rolled);
+    expect(clock.wired, 'a clock\'s outputs did not wire as numbers');
+    expect(clock.shown === '12:34:56|12:34:56|34|12:34:56', 'a clock showed ' + clock.shown);
+    expect(clock.pay === `35 02 00 ${clock.id.toString(16).padStart(2, '0')} 00`, 'a clock marshals as ' + clock.pay);
+    const clockBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([0x35, MSG_FLAG_SHOWN, 0, 1, 0, 0x40, 1, 0, 2, 12, 0, 1, 1, 0,
+            0x41, 0xF0, 0, 0, 0x3F, 0x80, 0, 0])));
+        const c = elements.n1;
+        return [c instanceof uiClock, c.shown, elements.n2.inConns()[0]?.start.output].join();
+    });
+    expect(clockBack === 'true,true,1', 'a clock restored as ' + clockBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

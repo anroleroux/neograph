@@ -16,7 +16,7 @@ the TMP button in the HWI group.
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
-| **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
+| **TM** | Time: logic that waits, or runs for a set time; the clock | DLY, PLS, BLK, CLK |
 | **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX, SIN |
 | **LGC** | Logic: decisions the device makes | AND, OR, NOT, TGL, LCH, CNT |
 | **SUB** | Blocks: logic you define once and place many times | NEW, then one per block; in a block, IN, OUT |
@@ -666,7 +666,8 @@ settings to change that. Each wire leaving it is labelled Done or Count.
 Logic that works with time: it waits, or runs for a set time. These are logic nodes,
 run by the device every 10 ms like those in [LGC](#lgc-logic), with the same
 Command view setting; they have a group of their own in the add menu. Times are in
-seconds, to the millisecond, up to a day.
+seconds, to the millisecond, up to a day. The group also has the device's clock, the
+time of day.
 
 ### Delay: `TM-DLY`
 
@@ -722,6 +723,38 @@ it blinks all the time.
 |---|---|---|---|
 | Time on (s) | 0.001 to 86400 | 0.5 | How long each flash is on. |
 | Time off (s) | 0.001 to 86400 | 0.5 | How long it is off between flashes. |
+
+### Clock: `TM-CLK`
+
+| | |
+|---|---|
+| Category | Hardware input: the device's clock |
+| Outputs | **Hour**: number, 0–23; **Minute**: number, 0–59; **Second**: number, 0–59. Each a whole number |
+| Default label | Clock |
+
+The device's time of day. Pick the output the next wire leaves from in **Wire from**,
+and each wire is labelled with it. Wire the hour into a compare to switch a lamp on in
+the evening (above 17: from 18:00), the minute into a plot, or the second into a servo
+to sweep it once a minute. A servo, PWM or NeoPixels take the hour as a fraction of 24,
+a minute or second as a fraction of 60.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Hours, Minutes, Seconds | 0–23, 0–59, 0–59 | The time now | Type a part of the time to set it; the other parts stay as they are. |
+| Set to this computer's time | (a button) | | Sets the clock to the time on the computer, to the second. |
+| Wire from | Hour, Minute, Second | Hour | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile with the time, such as 07:30:00. |
+
+Things to know:
+
+- **One clock.** The device has a single clock; every clock node shows the same time,
+  and setting any of them sets it.
+- **Setting it takes effect at once** on the device, without saving the graph, and
+  saving doesn't change it: the time isn't saved with the graph.
+- **No battery.** When the device powers up, its clock starts at 00:00:00 and counts
+  from there until you set it.
+- **Without a device** (or before it reports) the node keeps time in the browser, from
+  the computer's clock or the time you last set, and the node shows it.
 
 ---
 
@@ -819,18 +852,19 @@ every 2 s, which sweeps a servo or PWM from end to end, or makes NeoPixels breat
 it moves without a device.
 
 It runs while its on/off input is on, or all the time with nothing wired in. When the
-input goes off it rests at its offset, and starts from the beginning of its wave when it
-comes back on.
+input goes off it rests where it starts (its offset, with phase 0), and starts from the
+beginning of its wave when it comes back on.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
 | Period (s) | 0.02 s to a day | 2 | How long one wave takes. |
 | Amplitude | Any number | 0.5 | How far it swings either side of its offset. Below 0, it falls first. |
-| Offset | Any number | 0.5 | The middle of the wave, where it starts and where it rests while off. |
+| Offset | Any number | 0.5 | The middle of the wave: where it starts, and rests while off, with phase 0. |
+| Phase (°) | −360 to 360 | 0 | Where on the wave it starts, and rests while off: 90 at its top, 180 on its way down through its offset, 270 at its bottom. Two sines with one period, at 0 and 90, trace a circle. |
 | Command view | Show, Hide | Hide | A tile with its value. |
 
 Under the settings it says what that makes, for example "From 0 to 1 and back every
-2 s". The device works it out every 10 ms scan, so a period under a few tenths of a
+2 s", and with a phase where it starts. The device works it out every 10 ms scan, so a period under a few tenths of a
 second comes out in coarse steps.
 
 ---
@@ -942,7 +976,7 @@ for a longer kick, or to a Counter to count the ticks.
 | BTN, GPI, DS (Found), ENC (Pressed) | ✓ | | | ✓ |
 | SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position) | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
-| SCL, MIN, MAX, SIN, CNT (Count) | | ✓ | ✓ | |
+| SCL, MIN, MAX, SIN, CNT (Count), CLK (Hour, Minute or Second) | | ✓ | ✓ | |
 
 A block's copy takes, on each input, and gives, on each output, what the block's IN or
 OUT says: on/off like a button, or a number like a slider.

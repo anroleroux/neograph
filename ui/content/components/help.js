@@ -117,9 +117,14 @@ const NODE_HELP = {
     max: [
         "The highest of up to 4 number inputs, such as the hottest of several readings, in the unit of the first. With none wired, 0.",
     ],
+    clock: [
+        "The device's clock: the time of day as three numbers, Hour (0 to 23), Minute and Second (0 to 59), each a whole number. Pick the one the next wire leaves from in Wire from. Compare an hour with a threshold to switch a light on in the evening; wire Second into a servo to sweep it each minute (it takes an hour as a fraction of 24, a minute or second of 60).",
+        "Set the time with Hours, Minutes and Seconds, or Set to this computer's time: it is set on the device at once, not saved with the graph. The device has one clock, so every clock node shows the same time. It has no battery: after power-up it counts from 00:00:00 until you set it.",
+    ],
     sine: [
         "A smooth wave, a number: its offset plus its amplitude times the sine of the time, going round once each period. With offset 0.5 and amplitude 0.5 it swings from 0 to 1, which sweeps a servo or PWM from end to end, or breathes NeoPixels.",
-        "It runs while its on/off input is on, or always with nothing wired in. When the input goes off it rests at its offset, and starts from the beginning when it comes on again. The device runs it every 10 ms scan, so the shortest period is 0.02 s.",
+        "It runs while its on/off input is on, or always with nothing wired in. When the input goes off it rests where it starts, and starts from the beginning when it comes on again. The device runs it every 10 ms scan, so the shortest period is 0.02 s.",
+        "Phase shifts where on the wave it starts, in degrees: 90 starts at its top, 180 on its way down, 270 at its bottom. Two sines a quarter period apart (0 and 90) trace a circle.",
     ],
     pulse: [
         "Turns on for its time each time its input goes on, however long the input stays on. Going on again while on starts the time again.",

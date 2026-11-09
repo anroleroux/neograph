@@ -15,8 +15,8 @@
  *     value, a 2D slider's X and Y, an ADC, a GPIO input, the core temperature,
  *     a DS18B20, a rotary encoder, a logic element), as a float in the source's own unit;
  *   - nodes: the elements core 1 runs, in the order it runs them: the hardware
- *     inputs (ADC, GPIO input, core temperature, DS18B20, rotary encoder), which
- *     write a signal (a DS18B20 or an encoder two); then the
+ *     inputs (ADC, GPIO input, core temperature, DS18B20, rotary encoder, clock), which
+ *     write a signal (a DS18B20 or an encoder two, a clock three); then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
  *     latch, counter, sine), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
@@ -48,7 +48,8 @@ typedef struct {
     uint8_t pin;            // GPO, PWM, GPIO input, DS18B20: its GPIO; ADC: its channel; an encoder: its A
     uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options;
                             // stepper: STEPPER_ options; an encoder: ENCODER_ options
-    uint8_t out;            // an input or logic: the signal it writes
+    uint8_t out;            // an input or logic: the signal it writes; a clock: its hour's, then its
+                            // minute's and second's follow
     uint8_t out_count;      // a counter: the signal of its count, its output 1; a DS18B20: of found, its output 1;
                             // an encoder: of pressed, its output 1
     uint8_t in_count;       // the signals it reads

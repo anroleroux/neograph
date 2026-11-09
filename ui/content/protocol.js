@@ -23,7 +23,7 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 const MSG_FLAG_OUTPUT        = 0x01;
 
 // Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
-// rotary encoder) or
+// rotary encoder, clock) or
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
@@ -63,6 +63,7 @@ const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
 const MSG_HW_DS18B20         = 0x33;  // a DS18B20 temperature sensor on a 1-Wire pin; two outputs
 const MSG_HW_ENCODER         = 0x34;  // a rotary encoder and its push switch; two outputs
+const MSG_HW_CLOCK           = 0x35;  // the device's clock, a time of day: hour, minute, second
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -165,6 +166,14 @@ const ENCODER_DETENT_1       = 0x02;  // each change of a pin; or an encoder wit
 const ENCODER_REVERSE        = 0x04;
 const ENCODER_WRAP           = 0x08;
 const ENCODER_STEPS_MAX      = 1000;
+
+// Clock (MSG_HW_CLOCK): no payload; the device has one clock, which every clock node
+// reads. Outputs: its hour (0), minute (1) and second (2), whole numbers. A command from
+// a clock sets it: CLOCK_SET_LEN bytes, the hour, minute and second.
+const CLOCK_HOURS            = 24;
+const CLOCK_MINUTES          = 60;
+const CLOCK_SECONDS          = 60;
+const CLOCK_SET_LEN          = 3;
 
 // ADC input (MSG_HW_ADC) payload byte 0: the channel, 0 to ADC_CHANNELS - 1, on GPIO
 // ADC_PIN_FIRST + channel. ADC3, on GPIO 29, is the WiFi chip's clock on the Pico 2 W.

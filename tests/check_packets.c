@@ -82,6 +82,7 @@ static void check_under(const uint8_t *p, size_t len, uint16_t id, const neopixe
    count, a DS18B20's temperature and found, an encoder's position and pressed, one for
    the others. */
 static uint8_t outputs_of(uint8_t type) {
+    if (type == MSG_HW_CLOCK) return 3;     /* its hour, minute and second */
     return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20
         || type == MSG_HW_ENCODER ? 2 : 1;
 }
@@ -101,7 +102,7 @@ static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE,
                                    MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
                                    MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20,
                                    MSG_HW_ENCODER, 0 };
-static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20, MSG_HW_ENCODER,
+static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20, MSG_HW_ENCODER, MSG_HW_CLOCK,
                                     MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, MSG_LOGIC_SINE, 0 };
 
 /* What a reference to a block's output stands for, as the device reads it
@@ -218,6 +219,9 @@ static void check_config(const uint8_t *p, size_t len) {
             break;
         case MSG_HW_ENCODER:
             if (!encoder_payload_valid(it.pay, it.len)) fail("encoder message is not one the device runs");
+            break;
+        case MSG_HW_CLOCK:
+            if (it.len != 0) fail("clock message has a payload; the device would skip it");
             break;
         case MSG_HW_ADC:
             if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
@@ -368,6 +372,13 @@ static void check_command(const uint8_t *p, size_t len) {
     config_element_iterator it;
     config_element_iterator_init(&it, p + 3, len - 3);
     while (it.next(&it)) {
+        /* A clock's sets the device's clock: its hour, minute and second. */
+        if (it.type == MSG_HW_CLOCK) {
+            if (it.len != CLOCK_SET_LEN) fail("clock command is not an hour, a minute and a second");
+            else if (it.pay[0] >= CLOCK_HOURS || it.pay[1] >= CLOCK_MINUTES || it.pay[2] >= CLOCK_SECONDS)
+                fail("clock command is not a time of day; the device would ignore it");
+            continue;
+        }
         if ((it.type & (MSG_HW_BIT | MSG_INPUT_BIT)) != MSG_INPUT_BIT) fail("command from an element that is not a UI input");
         /* handle_packet sends one action word per payload byte: a value for each output */
         if (it.len != outputs_of(it.type)) fail("command payload is not one byte per output of its element");
@@ -449,7 +460,7 @@ int main(int argc, char **argv) {
         while (it.next(&it))
             if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN | MSG_FLAG_PART)) fail("a message's flags set an unknown bit");
             else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
-                     && it.type != MSG_HW_DS18B20 && it.type != MSG_HW_ENCODER
+                     && it.type != MSG_HW_DS18B20 && it.type != MSG_HW_ENCODER && it.type != MSG_HW_CLOCK
                      && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_LAST))
                 fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");

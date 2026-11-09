@@ -221,7 +221,13 @@ static void handle_packet(uint8_t *payload, size_t length) {
         config_element_iterator_init(&itr, payload+3, data_length);
 
         // One action word per payload byte: byte i is the new value of the element's output i.
+        // A clock's sets the device's clock instead: its hour, minute and second.
         while (itr.next(&itr)) {
+            if (itr.type == MSG_HW_CLOCK) {
+                if (itr.len == CLOCK_SET_LEN && clock_set(itr.pay[0], itr.pay[1], itr.pay[2]))
+                    printf("clock set to %02u:%02u:%02u\n", itr.pay[0], itr.pay[1], itr.pay[2]);
+                continue;
+            }
             for (uint8_t i = 0; i < itr.len && i < FIFO_OUTPUTS_MAX; i++) {
                 printf("command from element %u, output %u, value %u: sending to core 1\n", itr.id, i, itr.pay[i]);
                 push_to_core1(fifo_action_word(itr.id, i, itr.pay[i]));

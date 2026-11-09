@@ -10,6 +10,7 @@
 #include "program.h"
 #include "ds18b20.h"
 #include "encoder.h"
+#include "clock.h"
 #include "neopixel.h"
 #include "servo.h"
 #include "stepper.h"
@@ -355,9 +356,9 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
                              || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
-                             || program_logic_floating(type), ex->name);
-    /* A DS18B20's temperature, an encoder's position: their output 0. */
-    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);
+                             || type == MSG_HW_CLOCK || program_logic_floating(type), ex->name);
+    /* A DS18B20's temperature, an encoder's position: their output 0; a clock's three. */
+    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : type == MSG_HW_CLOCK ? 3 : 1), ex->name);
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
@@ -430,6 +431,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_DS18B20 & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ENCODER & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_CLOCK & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
@@ -1935,7 +1937,23 @@ void test_sine(void)
 
     char text[256];
     program_describe(&p, text, sizeof text);
-    TEST_ASSERT_NOT_NULL(strstr(text, "SINE n2 period 40 amplitude 2 offset 1 <- s0 -> s1\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "SINE n2 period 40 amplitude 2 offset 1 phase 0 <- s0 -> s1\n"));
+
+    /* A phase of 90°: it starts, and rests, at its top; one saved with its phase. */
+    const uint8_t phased[] = {
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 1, 19, 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0, 0x42, 0xB4, 0, 0,
+    };
+    TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_SINE, phased + 5, 19, MSG_FLAG_OUTPUT));
+    program_compile(phased, sizeof phased, &p);
+    TEST_ASSERT_EQUAL_FLOAT(90, p.nodes[0].scale[2]);
+    program_logic_start(&p, &p.nodes[0], &st);
+    const float shifted[] = { 3, 1, -1, 1, 3 };
+    for (int i = 0; i < 5; i++)
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, shifted[i], program_logic_step(&p, &p.nodes[0], 0, &st, 10));
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "SINE n1 period 40 amplitude 2 offset 1 phase 90 <- - -> s0\n"));
+    const uint8_t phase_nan[] = { 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0, 0x7F, 0xC0, 0, 0 };
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_SINE, phase_nan, 19, MSG_FLAG_OUTPUT));
 
     /* With nothing wired in it always runs. */
     const uint8_t free_running[] = {
@@ -1945,6 +1963,51 @@ void test_sine(void)
     program_logic_start(&p, &p.nodes[0], &st);
     program_logic_step(&p, &p.nodes[0], 0, &st, 10);
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 3, program_logic_step(&p, &p.nodes[0], 0, &st, 10));
+}
+
+/* ── The clock ────────────────────────────────────────────────────────── */
+
+void test_clock(void)
+{
+    uint8_t parts[3];
+    clock_parts(0, parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 0, 0, 0 }), parts, 3);
+    clock_parts((13 * 3600 + 5 * 60 + 9) * 1000u + 999, parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 13, 5, 9 }), parts, 3);
+    clock_parts(CLOCK_DAY_MS - 1, parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 23, 59, 59 }), parts, 3);
+
+    /* Set at a timer count of 10 days and 5 s: then that time, and on from there, round
+       midnight. */
+    uint64_t now = 10ull * CLOCK_DAY_MS + 5000;
+    uint32_t offset = 0;
+    TEST_ASSERT_TRUE(clock_offset_for(now, 23, 59, 58, &offset));
+    TEST_ASSERT_EQUAL_UINT32((23 * 3600 + 59 * 60 + 58) * 1000u, clock_time_of_day(now, offset));
+    clock_parts(clock_time_of_day(now + 3000, offset), parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 0, 0, 1 }), parts, 3);
+    TEST_ASSERT_FALSE(clock_offset_for(now, 24, 0, 0, &offset));
+    TEST_ASSERT_FALSE(clock_offset_for(now, 0, 60, 0, &offset));
+    TEST_ASSERT_FALSE(clock_offset_for(now, 0, 0, 60, &offset));
+    TEST_ASSERT_EQUAL_UINT32((23 * 3600 + 59 * 60 + 58) * 1000u, clock_time_of_day(now, offset));   /* left */
+
+    /* A clock node: three signals in a row; a PWM takes its hour as a fraction of 24. */
+    static hw_program p;
+    const uint8_t cfg[] = {
+        MSG_HW_CLOCK, MSG_FLAG_SHOWN, 0, 1, 0,
+        MSG_HW_PWM, MSG_FLAG_OUTPUT, 0, 2, 17, 0, 1, 0, 2, 0x03, 0xE8, PWM_DUTY_INPUT | PWM_FREQ_INPUT, 50, 0, 100,
+        0, 1, 2, 0, 100, 0x27, 0x10,                                         /* duty <- its hour, freq <- its second */
+        MSG_HW_CLOCK, 0, 0, 3, 1, 0,                                         /* a payload: skipped */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(3, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(2, p.node_count);
+    TEST_ASSERT_EQUAL_UINT8(0, p.nodes[0].out);
+    TEST_ASSERT_EQUAL_UINT8(2, program_signal(&p, 1, 2));
+    TEST_ASSERT_EQUAL_FLOAT(CLOCK_HOURS, p.nodes[1].in_full[0]);
+    TEST_ASSERT_EQUAL_FLOAT(CLOCK_SECONDS, p.nodes[1].in_full[1]);
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "CLOCK n1 -> s0 s1 s2\n"));
 }
 
 /* ── Rotary encoders ──────────────────────────────────────────────────── */
@@ -2290,6 +2353,7 @@ int main(void)
     RUN_TEST(test_ds18b20_scratchpad);
     RUN_TEST(test_ds18b20_program);
     RUN_TEST(test_sine);
+    RUN_TEST(test_clock);
     RUN_TEST(test_encoder_decode);
     RUN_TEST(test_encoder_program);
     RUN_TEST(test_neopixel_payload_read);

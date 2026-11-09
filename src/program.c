@@ -52,8 +52,8 @@ void program_logic_start(const hw_program *p, const prog_node *n, prog_logic_sta
 // off when reset, and reset wins. A counter counts its count input going on, up to
 // its preset, and is on (done) at its preset; reset sets it back to 0, and wins. A
 // sine, while its input is on (or with none wired), is its offset plus its amplitude
-// times the sine of how far it is through its period, starting at 0; off, it is its
-// offset, and starts again from 0 when it goes on.
+// times the sine of how far it is through its period, starting at its phase; off, it
+// rests where it starts, and starts again from there when it goes on.
 float program_logic_step(const hw_program *p, const prog_node *n, float out, prog_logic_state *st, uint32_t dt_ms) {
     bool on = out >= 0.5f;
     switch (n->type) {
@@ -164,13 +164,15 @@ float program_logic_step(const hw_program *p, const prog_node *n, float out, pro
     }
 
     case MSG_LOGIC_SINE: {
-        // on_ms: its period; scale[0] its amplitude, scale[1] its offset; held_ms how far
-        // through its period it is.
+        // on_ms: its period; scale[0] its amplitude, scale[1] its offset, scale[2] its
+        // phase in degrees; held_ms how far through its period it is. Off, it rests where
+        // it starts.
         if (n->in[0] != PROG_NO_SIGNAL && !signal_on(p, n->in[0])) {
             st->held_ms = 0;
-            return n->scale[1];
+            return n->scale[1] + n->scale[0] * sinf(n->scale[2] * 0.017453293f);
         }
-        float y = n->scale[1] + n->scale[0] * sinf(6.2831853f * (float)st->held_ms / (float)n->on_ms);
+        float y = n->scale[1] + n->scale[0] * sinf(6.2831853f * (float)st->held_ms / (float)n->on_ms
+                                                   + n->scale[2] * 0.017453293f);
         st->held_ms = (st->held_ms + dt_ms) % n->on_ms;
         return y;
     }
@@ -212,6 +214,7 @@ static float signal_full(const hw_program *p, uint8_t s) {
     switch (p->signals[s].type) {
     case MSG_HW_ADC: return PROG_ADC_VOLTS;
     case MSG_HW_CORE: return CORE_TEMP_FULL;
+    case MSG_HW_CLOCK: return p->signals[s].output == 0 ? CLOCK_HOURS : CLOCK_MINUTES;   // 24 h; 60 min or s
     case MSG_HW_DS18B20: return p->signals[s].output == 0 ? DS18B20_FULL : 1;  // °C, or found: 0 or 1
     case MSG_HW_ENCODER:
         // Its position: its steps; pressed: 0 or 1.
@@ -360,6 +363,15 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             if ((n = add_node(p, itr.type, itr.id))) n->out = s;
             break;
 
+        case MSG_HW_CLOCK: {
+            // Three signals, in a row: its hour, minute and second.
+            if (itr.len != 0) break;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if (add_signal(p, itr.id, 1, itr.type, 0) != s + 1 || add_signal(p, itr.id, 2, itr.type, 0) != s + 2) break;
+            if ((n = add_node(p, itr.type, itr.id))) n->out = s;
+            break;
+        }
+
         case MSG_HW_GPI:
             if (itr.len != 2) break;
             if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
@@ -456,6 +468,7 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             n->on_ms = msg_u32_at(itr.pay + r);
             n->scale[0] = msg_float_at(itr.pay + r + 4);
             n->scale[1] = msg_float_at(itr.pay + r + 8);
+            n->scale[2] = itr.len == r + 16 ? msg_float_at(itr.pay + r + 12) : 0;
         } else if (itr.type == MSG_LOGIC_SCALE) {
             n->options = itr.pay[r];
             for (int i = 0; i < 4; i++) n->scale[i] = msg_float_at(itr.pay + r + 1 + 4 * i);
@@ -581,6 +594,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_ADC: return "adc";
     case MSG_HW_DS18B20: return "ds18b20";
     case MSG_HW_ENCODER: return "encoder";
+    case MSG_HW_CLOCK: return "clock";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
     case MSG_LOGIC_OR: return "or";
@@ -639,6 +653,14 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         const prog_node *n = &p->nodes[i];
         switch (n->type) {
         case MSG_HW_CORE: put(&t, "CORE n%u -> ", n->id); put_signal(&t, n->out); break;
+        case MSG_HW_CLOCK:
+            put(&t, "CLOCK n%u -> ", n->id);
+            put_signal(&t, n->out);
+            put(&t, " ");
+            put_signal(&t, (uint8_t)(n->out + 1));
+            put(&t, " ");
+            put_signal(&t, (uint8_t)(n->out + 2));
+            break;
         case MSG_HW_ADC: put(&t, "ADC n%u channel %u -> ", n->id, n->pin); put_signal(&t, n->out); break;
         case MSG_HW_GPI: put(&t, "GPI n%u pin %u options %02X -> ", n->id, n->pin, n->options); put_signal(&t, n->out); break;
         case MSG_HW_DS18B20:
@@ -715,8 +737,8 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->out_count);
             break;
         case MSG_LOGIC_SINE:
-            put(&t, "SINE n%u period %lu amplitude %.4g offset %.4g <- ", n->id, (unsigned long)n->on_ms,
-                (double)n->scale[0], (double)n->scale[1]);
+            put(&t, "SINE n%u period %lu amplitude %.4g offset %.4g phase %.4g <- ", n->id, (unsigned long)n->on_ms,
+                (double)n->scale[0], (double)n->scale[1], (double)n->scale[2]);
             put_input(&t, n, 0);
             put(&t, " -> ");
             put_signal(&t, n->out);

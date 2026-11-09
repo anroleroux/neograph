@@ -11,6 +11,7 @@
 #include "hardware/pio.h"
 #include "hardware/irq.h"
 
+#include "clock.h"
 #include "ds18b20.h"
 #include "encoder.h"
 #include "hwman.h"
@@ -64,6 +65,25 @@ static void core_temp_sample(void) {
     else core_temp.celsius += (sample - core_temp.celsius) / TEMP_FILTER;
     core_temp.sampled = true;
     if (fabsf(core_temp.celsius - core_temp.value) >= TEMP_DEADBAND) core_temp.value = core_temp.celsius;
+}
+
+// ── The clock ──
+// One time of day for the device (MSG_HW_CLOCK): the milliseconds the timer has counted
+// since boot, plus clock_offset_ms, a day round. It starts at 00:00:00 at boot; core 0
+// sets it (clock_set), and core 1 reads it for the clock nodes' signals each scan. The
+// offset is one 32-bit word, so core 1 never reads half of a new one.
+static volatile uint32_t clock_offset_ms = 0;
+
+bool clock_set(uint8_t h, uint8_t m, uint8_t s) {
+    uint32_t offset;
+    if (!clock_offset_for(time_us_64() / 1000, h, m, s, &offset)) return false;
+    clock_offset_ms = offset;
+    __dmb();
+    return true;
+}
+
+static uint32_t clock_now(void) {
+    return clock_time_of_day(time_us_64() / 1000, clock_offset_ms);
 }
 
 // ── ADC inputs ──
@@ -946,6 +966,13 @@ static void scan(uint32_t count) {
         case MSG_HW_DS18B20:
             ds18b20_step(p, n, st);
             break;
+
+        case MSG_HW_CLOCK: {
+            uint8_t parts[3];
+            clock_parts(clock_now(), parts);
+            for (uint8_t k = 0; k < 3; k++) p->signals[n->out + k].value = parts[k];
+            break;
+        }
 
         case MSG_HW_ENCODER:
             encoder_scan(p, n, st);

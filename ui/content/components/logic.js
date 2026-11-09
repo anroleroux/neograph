@@ -598,9 +598,9 @@ class uiBlink extends uiLogic {
 // How often the browser works a running sine out again.
 const SINE_BROWSER_MS = 50;
 
-// A sine: a wave, its offset plus its amplitude × sin(2π × time ÷ its period), while
-// its boolean source is on, or with nothing wired in always. Off, it is its offset,
-// and starts from the beginning again when it goes on. A floating source: as is, from
+// A sine: a wave, its offset plus its amplitude × sin(2π × time ÷ its period + its
+// phase), while its boolean source is on, or with nothing wired in always. Off, it
+// rests where it starts, and starts from the beginning again when it goes on. A floating source: as is, from
 // 0 to 1, for a PWM, servo or NeoPixels.
 class uiSine extends uiLogic {
     constructor(x = 0, y = 0) {
@@ -609,14 +609,15 @@ class uiSine extends uiLogic {
         this.periodMs = 2000;
         this.amplitude = 0.5;
         this.offset = 0.5;          // so it swings from 0 to 1
+        this.phase = 0;             // degrees: where on its wave it starts
         this.started = null;        // when it started running, by performance.now(); null while off
         this.evaluate();
     }
 
-    // Its value now, from when it started.
-    wave() {
-        const t = (performance.now() - this.started) % this.periodMs;
-        return this.offset + this.amplitude * Math.sin(2 * Math.PI * t / this.periodMs);
+    // Its value `ms` into its wave (by default now, from when it started).
+    wave(ms = performance.now() - this.started) {
+        const t = ms % this.periodMs;
+        return this.offset + this.amplitude * Math.sin(2 * Math.PI * t / this.periodMs + this.phase * Math.PI / 180);
     }
 
     compute() {
@@ -625,7 +626,7 @@ class uiSine extends uiLogic {
             clearInterval(this.timer);
             this.timer = null;
             this.started = null;
-            return this.offset;
+            return this.wave(0);
         }
         if (this.started === null) {
             this.started = performance.now();
@@ -661,6 +662,14 @@ class uiSine extends uiLogic {
         this.evaluate();
     }
 
+    // Degrees, -360 to 360: 90 starts at its top, 180 falling, 270 at its bottom.
+    setPhase(v) {
+        v = uiCompare.parse(v);
+        if (v === null || v < -360 || v > 360) return false;
+        this.phase = v;
+        this.evaluate();
+    }
+
     logicSettings(settings) {
         settings.appendChild(editableSetting('Period (s)', () => String(this.periodMs / 1000),
             (v) => this.setPeriod(v) ?? this.createSettings(), {type: 'number', min: SINE_PERIOD_MIN_MS / 1000, step: 'any'}));
@@ -668,33 +677,40 @@ class uiSine extends uiLogic {
             (v) => this.setAmplitude(v) ?? this.createSettings(), {type: 'number', step: 'any'}));
         settings.appendChild(editableSetting('Offset', () => showFloat(this.offset),
             (v) => this.setOffset(v) ?? this.createSettings(), {type: 'number', step: 'any'}));
+        settings.appendChild(editableSetting('Phase (°)', () => showFloat(this.phase),
+            (v) => this.setPhase(v) ?? this.createSettings(), {type: 'number', min: -360, max: 360, step: 'any'}));
         const note = document.createElement('p');
         note.className = 'setting-note';
         note.textContent = this.swing();
         settings.appendChild(note);
     }
 
-    // What it does, in words: "From 0 to 1 and back every 2 s".
+    // What it does, in words: "From 0 to 1 and back every 2 s", and with a phase where
+    // it starts.
     swing() {
         const lo = this.offset - Math.abs(this.amplitude), hi = this.offset + Math.abs(this.amplitude);
-        return `From ${showFloat(lo)} to ${showFloat(hi)} and back every ${this.periodMs / 1000} s`;
+        const start = this.phase ? `, starting at ${showFloat(Number(this.wave(0).toFixed(4)))}` : '';
+        return `From ${showFloat(lo)} to ${showFloat(hi)} and back every ${this.periodMs / 1000} s${start}`;
     }
 
-    // Its source, its period in milliseconds, then its amplitude and offset.
+    // Its source, its period in milliseconds, then its amplitude, offset and phase.
     marshal() {
         return this.message([...this.sourceRef(), ...uint32Bytes(this.periodMs),
-            ...float32Bytes(this.amplitude), ...float32Bytes(this.offset)]);
+            ...float32Bytes(this.amplitude), ...float32Bytes(this.offset), ...float32Bytes(this.phase)]);
     }
 
     // From a saved payload after its source reference, at r; one the device wouldn't
     // run keeps the defaults.
+    // A sine saved before it had a phase has phase 0.
     restore(pay, r, len) {
-        if (len !== r + 12) return;
+        if (len !== r + 12 && len !== r + 16) return;
         const ms = uint32At(pay, r), amplitude = float32At(pay, r + 4), offset = float32At(pay, r + 8);
-        if (ms < SINE_PERIOD_MIN_MS || ms > DELAY_MAX_MS || !Number.isFinite(amplitude) || !Number.isFinite(offset)) return;
+        const phase = len === r + 16 ? float32At(pay, r + 12) : 0;
+        if (ms < SINE_PERIOD_MIN_MS || ms > DELAY_MAX_MS || ![amplitude, offset, phase].every(Number.isFinite)) return;
         this.periodMs = ms;
         this.amplitude = amplitude;
         this.offset = offset;
+        this.phase = phase;
         this.evaluate();
     }
 

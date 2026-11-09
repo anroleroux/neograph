@@ -6,7 +6,7 @@
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
  * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
- * ENCODER_, SINE_ and SUB_ constants are mirrored in
+ * ENCODER_, SINE_, CLOCK_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -38,7 +38,7 @@
 #define MSG_FLAG_OUTPUT         0x01
 
 /* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
-   rotary encoder) or
+   rotary encoder, clock) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
@@ -74,6 +74,7 @@
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 #define MSG_HW_DS18B20          0x33    /* a DS18B20 temperature sensor on a 1-Wire pin; two outputs */
 #define MSG_HW_ENCODER          0x34    /* a rotary encoder and its push switch; two outputs */
+#define MSG_HW_CLOCK            0x35    /* the device's clock, a time of day: hour, minute, second */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
    source itself, with one output, 0: boolean, or floating for a scale, min, max or sine. A
@@ -221,6 +222,16 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ENCODER_WRAP            0x08
 #define ENCODER_STEPS_MAX       1000
 
+/* Clock (MSG_HW_CLOCK): no payload; the device has one clock, a time of day, which every
+   clock node reads. Three outputs, each a whole number: its hour (0, 0 to 23), its minute
+   (1) and its second (2), 0 to 59; on the device they drive outputs from 0 to CLOCK_HOURS,
+   CLOCK_MINUTES and CLOCK_SECONDS. A command (PKT_COMMAND) from a clock sets the clock:
+   CLOCK_SET_LEN bytes, the hour, minute and second, now. */
+#define CLOCK_HOURS             24
+#define CLOCK_MINUTES           60
+#define CLOCK_SECONDS           60
+#define CLOCK_SET_LEN           3
+
 /* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
    (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
    float, big endian. An AND or OR: 1 to LOGIC_INPUTS_MAX source references. A NOT: one.
@@ -235,7 +246,8 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    count source reference, its reset one, then its preset, a 32-bit big-endian number,
    1 to COUNTER_MAX. A sine (MSG_LOGIC_SINE): a source reference (0: it always runs),
    then its period, a 32-bit big-endian number of milliseconds, SINE_PERIOD_MIN_MS to
-   DELAY_MAX_MS, then its amplitude and its offset, each a finite 32-bit big-endian float. */
+   DELAY_MAX_MS, then its amplitude, its offset and its phase in degrees, each a finite
+   32-bit big-endian float; one saved without its phase has phase 0. */
 #define COMPARE_ABOVE           0x00    /* on above the threshold; off below it less the hysteresis */
 #define COMPARE_BELOW           0x01    /* on below the threshold; off above it plus the hysteresis */
 #define LOGIC_INPUTS_MAX        4
@@ -645,9 +657,11 @@ static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t 
         return len == r + 8 && msg_u32_at(pay + r) >= 1 && msg_u32_at(pay + r) <= DELAY_MAX_MS
             && msg_u32_at(pay + r + 4) >= 1 && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
     case MSG_LOGIC_SINE: {
-        if (len != r + 12 || msg_u32_at(pay + r) < SINE_PERIOD_MIN_MS || msg_u32_at(pay + r) > DELAY_MAX_MS) return 0;
+        if ((len != r + 12 && len != r + 16) || msg_u32_at(pay + r) < SINE_PERIOD_MIN_MS
+            || msg_u32_at(pay + r) > DELAY_MAX_MS) return 0;
         float amplitude = msg_float_at(pay + r + 4), offset = msg_float_at(pay + r + 8);
-        return amplitude - amplitude == 0 && offset - offset == 0;     /* finite */
+        float phase = len == r + 16 ? msg_float_at(pay + r + 12) : 0;
+        return amplitude - amplitude == 0 && offset - offset == 0 && phase - phase == 0;     /* finite */
     }
     case MSG_LOGIC_SCALE: {
         if (len != r + 17 || (pay[r] & ~SCALE_CLAMP)) return 0;
