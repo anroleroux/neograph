@@ -264,6 +264,11 @@ err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     // Associate per-client state with this client PCB
     tcp_arg(client_pcb, clientstate);
 
+    // Send each small frame at once. With Nagle's algorithm on, telemetry frames
+    // wait while an earlier one is unacknowledged, so one lost WiFi packet holds
+    // them all until it is sent again, and the browser gets them in a burst.
+    tcp_nagle_disable(client_pcb);
+
     // tcp_sent(client_pcb, tcp_server_sent);
     tcp_recv(client_pcb, tcp_server_recv);
     // tcp_poll(client_pcb, tcp_server_poll, POLL_TIME_S * 2);
