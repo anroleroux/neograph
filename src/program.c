@@ -180,7 +180,8 @@ static uint8_t add_signal(hw_program *p, uint16_t id, uint8_t output, uint8_t ty
 static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
     if (p->node_count == PROG_NODES_MAX) return NULL;
     prog_node *n = &p->nodes[p->node_count++];
-    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL, .out_count = PROG_NO_SIGNAL, .in_full = { 1, 1 } };
+    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL, .out_count = PROG_NO_SIGNAL, .in_full = { 1, 1 },
+                      .px_under = PROG_NO_NODE };
     memset(n->in, PROG_NO_SIGNAL, sizeof n->in);
     return n;
 }
@@ -279,6 +280,33 @@ static void order_logic(hw_program *p, uint8_t first) {
         prog_node n = p->nodes[pick];
         memmove(&p->nodes[placed + 1], &p->nodes[placed], (pick - placed) * sizeof n);
         p->nodes[placed] = n;
+    }
+}
+
+// Whether two NeoPixel nodes' LEDs are the same: their layout, size and wiring.
+static bool same_strip(const neopixel_payload *a, const neopixel_payload *b) {
+    return a->layout == b->layout && a->options == b->options && a->size_len == b->size_len
+        && !memcmp(a->size, b->size, a->size_len);
+}
+
+// Join the NeoPixel nodes into chains: each draws over the node on its data line in,
+// which then feeds it rather than driving its pin. A data line in is left unjoined if
+// it names no NeoPixel node, one with other LEDs (layout, size or wiring), one that
+// already feeds another (in program order, the first wins), or one that, through its
+// own data line in, would come back to it.
+static void link_neopixels(hw_program *p) {
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        prog_node *n = &p->nodes[i];
+        if (n->type != MSG_HW_NEOPIXEL || !n->px.under.id) continue;
+        uint8_t j = 0;
+        while (j < p->node_count && !(p->nodes[j].type == MSG_HW_NEOPIXEL && p->nodes[j].id == n->px.under.id)) j++;
+        if (j == p->node_count || j == i || p->nodes[j].px_feeds || !same_strip(&n->px, &p->nodes[j].px)) continue;
+        bool loop = false;
+        for (uint8_t k = j, steps = 0; k != PROG_NO_NODE && steps <= p->node_count; k = p->nodes[k].px_under, steps++)
+            if (k == i) loop = true;
+        if (loop) continue;
+        n->px_under = j;
+        p->nodes[j].px_feeds = true;
     }
 }
 
@@ -518,6 +546,7 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
     }
+    link_neopixels(p);
 }
 
 // ── Description ──
@@ -727,6 +756,8 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->in[0]);
             put(&t, " / %.4g on <- ", (double)n->in_full[0]);
             put_signal(&t, n->in[1]);
+            if (n->px_under != PROG_NO_NODE) put(&t, " over n%u", p->nodes[n->px_under].id);
+            if (n->px_feeds) put(&t, " feeds");
             break;
         }
         default: put(&t, "? n%u", n->id); break;

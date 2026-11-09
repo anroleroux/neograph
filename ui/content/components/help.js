@@ -49,6 +49,7 @@ const NODE_HELP = {
         "Point is a dot moving from its start at 0 to its end at 1, gliding between LEDs (it lights the two it is between, each as much as it is near it): on an array in a straight line, any way across; on a circle or doughnut around (and from ring to ring), the way Direction says. The same LED at both ends goes once round.",
         "Patch lights a fixed area from its start to its end: a rectangle on an array (start and end are opposite corners), an arc on a doughnut, a sector on a circle. The number doesn't move it; with Colour From input it sets its colour.",
         "Colour: Fixed, or From input, which blends from Colour at 0 to Colour at 1 as the input rises. Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
+        "Chain NeoPixels nodes to show several graphics on one set of LEDs: wire one node to another, and the second draws over what the first drew (the Data wire). Later nodes override earlier ones; a node that is off draws nothing, so what is under it shows. The last node, whose Data goes nowhere, drives the LEDs. The chain shares its pin, layout and size: set them on any node.",
     ],
     ds18b20: [
         "A DS18B20 digital temperature sensor on one pin, read by the device about every 0.1 to 0.75 s. It has two outputs: °C, the temperature (a number), and Found (on/off), on while the sensor answers. Pick the one the next wire leaves from in Wire from.",

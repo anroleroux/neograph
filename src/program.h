@@ -21,7 +21,8 @@
  *     latch, counter), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
  *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
- *     servo, NeoPixels), which read one or two.
+ *     servo, NeoPixels), which read one or two. NeoPixel nodes may be chained, each
+ *     drawing over the one on its data line in; the last drives the LEDs.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
  * while it runs a program; core 0 reads them for telemetry.
@@ -31,6 +32,7 @@
 #define PROG_NODES_MAX      64
 #define PROG_NODE_INPUTS    LOGIC_INPUTS_MAX    /* the most signals a node reads: an AND's or OR's */
 #define PROG_NO_SIGNAL      0xFF    /* a node input wired to nothing: it reads 0 */
+#define PROG_NO_NODE        0xFF    /* a NeoPixel node with nothing on its data line in */
 #define PROG_ADC_VOLTS      3.3f    /* an ADC signal at ADC_RAW_FULL */
 
 typedef struct {
@@ -69,6 +71,10 @@ typedef struct {
     uint16_t pulse_min, pulse_max;          // a servo: µs at 0° and at SERVO_ANGLE_MAX°
     uint16_t slew;                          // a servo: °/s it turns at most, 0 = no limit
     neopixel_payload px;                    // NeoPixels: their layout, size and graphic (its source is in[0])
+    uint8_t px_under;                       // NeoPixels: the node (its index) on its data line in, which it draws
+                                            // over; PROG_NO_NODE: none
+    bool px_feeds;                          // NeoPixels: its data line out goes to another, which draws over it;
+                                            // it doesn't drive its pin
     uint8_t enc_pins[3];                    // an encoder: the GPIO of A, B and its switch (ENCODER_NO_BUTTON: none)
     uint16_t enc_steps;                     // an encoder: its position's top, its full scale
 } prog_node;

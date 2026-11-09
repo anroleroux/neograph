@@ -311,6 +311,7 @@ class uiComponents {
     takesType(source, output = source.actNum) {
         if (!source.outputs.length) return false;
         const out = source.outputs[output];
+        if (out?.type === 'pixels') return false;     // a NeoPixel data line: only into NeoPixels
         return !!out && (out.type === this.inputs[0].type || !!source.typeFromWire?.() || !!this.typeFromWire?.())
             && !(out.browserOnly && this.tc & MSG_HW_BIT);
     }

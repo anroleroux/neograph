@@ -45,6 +45,39 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
     return 0;
 }
 
+/* The NeoPixel payload of element `id`; 0 if it has none, or one the device wouldn't run. */
+static int neopixel_of(const uint8_t *p, size_t len, uint16_t id, neopixel_payload *px) {
+    config_element_iterator it;
+    config_element_iterator_init(&it, p + 3, len - 3);
+    while (it.next(&it))
+        if (it.type == MSG_HW_NEOPIXEL && it.id == id) return neopixel_payload_read(it.pay, it.len, it.flags, px);
+    return 0;
+}
+
+/* A NeoPixel node's data line in, as the UI writes it: another NeoPixel node's data line
+   out (its output 0, not a feedback wire), with the same LEDs (layout, size and wiring),
+   which feeds no other, and not leading back to this one. */
+static void check_under(const uint8_t *p, size_t len, uint16_t id, const neopixel_payload *px) {
+    neopixel_payload up;
+    if (!neopixel_of(p, len, px->under.id, &up)) { fail("NeoPixels' data line in names no NeoPixel node"); return; }
+    if (px->under.output != 0 || px->under.feedback) fail("NeoPixels' data line in is not another's output 0");
+    if (up.layout != px->layout || up.options != px->options || up.size_len != px->size_len
+        || memcmp(up.size, px->size, px->size_len)) fail("chained NeoPixels have different LEDs");
+    config_element_iterator it;
+    config_element_iterator_init(&it, p + 3, len - 3);
+    int feeds = 0;
+    neopixel_payload other;
+    while (it.next(&it))
+        if (it.type == MSG_HW_NEOPIXEL && neopixel_payload_read(it.pay, it.len, it.flags, &other)
+            && other.under.id == px->under.id) feeds++;
+    if (feeds > 1) fail("a NeoPixel node's data line out goes to more than one");
+    uint16_t at = px->under.id;
+    for (int steps = 0; at && steps < 256; steps++) {
+        if (at == id) { fail("chained NeoPixels go round in a loop"); return; }
+        at = neopixel_of(p, len, at, &up) ? up.under.id : 0;
+    }
+}
+
 /* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
    count, a DS18B20's temperature and found, an encoder's position and pressed, one for
    the others. */
@@ -294,6 +327,7 @@ static void check_config(const uint8_t *p, size_t len) {
             else {
                 check_source(p, len, px.source, FLOATING, "NeoPixels are wired from something not floating");
                 check_source(p, len, px.enable, BOOLEAN, "NeoPixels' on/off is wired from something not on/off");
+                if (px.under.id) check_under(p, len, it.id, &px);
             }
             break;
         }

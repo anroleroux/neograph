@@ -425,7 +425,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `A4` Block definition message | 5–255 | One message of the definition, header and all. Keyed by the definition's ID |
 | `24` Stepper | 22 | Bytes 0–2: source reference (0 = not connected) · bytes 3–6: the GPIO pins of IN1 to IN4 · byte 7: options · bytes 8–9: full steps per revolution · bytes 10–21: three floats, the scale, the top speed and the acceleration. See [Stepper motors](#stepper-motors). |
 | `25` Servo | 12 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin · bytes 4–5: angles at input 0 and 1 · bytes 6–9: pulses at 0° and 180° · bytes 10–11: speed limit. See [Servos](#servos). |
-| `26` NeoPixels | 20–35 | Bytes 0–2: source reference · bytes 3–5: on/off source reference (each 0 = not connected) · byte 6: GPIO pin · byte 7: layout · byte 8: options · byte 9: brightness · byte 10: the bytes of its size, *k* · then its size · then its graphic: its type, the bytes of its settings, and those. See [NeoPixels](#neopixels). |
+| `26` NeoPixels | 20–38 | Bytes 0–2: source reference · bytes 3–5: on/off source reference (each 0 = not connected) · byte 6: GPIO pin · byte 7: layout · byte 8: options · byte 9: brightness · byte 10: the bytes of its size, *k* · then its size · then its graphic: its type, the bytes of its settings, and those · then, in a chain, its data line in's source reference. See [NeoPixels](#neopixels). |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
@@ -511,6 +511,7 @@ type:
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
 | Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4C` logic | 0 or 1 (`00` / `FF`) |
+| NeoPixel data | `26` NeoPixels' data line out (output 0) | `26` NeoPixels' data line in (after their settings) | What its chain draws on its LEDs; see [NeoPixel chains](#neopixel-chains) |
 | Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1) | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps |
 
 A source has the same value, in the same unit, on the device (its
@@ -1314,6 +1315,8 @@ pin, laid out as an array, a circle or a doughnut, and draws its input on them a
 source's full scale (1 for a slider or a scale, 3.3 V for an ADC, 100 °C for the core
 temperature, a counter's preset), clamped to 0–1. A second, boolean input switches it
 on and off: while it is off (below 0.5) every LED is off. Not wired, it is always on.
+NeoPixel nodes can also be [chained](#neopixel-chains) on their data lines, so several
+graphics show on one set of LEDs.
 
 | Bytes | Field | Range (UI default) |
 |---|---|---|
@@ -1328,6 +1331,7 @@ on and off: while it is off (below 0.5) every LED is off. Not wired, it is alway
 | 11 + *k* | Graphic | `NEOPIXEL_GFX_BAR` (0), a bar level indicator; `NEOPIXEL_GFX_POINT` (1), a moving point; `NEOPIXEL_GFX_PATCH` (2), a patch (bar) |
 | 12 + *k* | *g*, the bytes of its settings | A bar `NEOPIXEL_BAR_LEN` (6), a point `NEOPIXEL_POINT_LEN` (8), a patch `NEOPIXEL_PATCH_LEN` (8); 3 more with `NEOPIXEL_GFX_COLOUR_INPUT` |
 | 13 + *k* … | Its settings | See below |
+| After its settings | Data line in source reference: none, or 3 bytes | Another NeoPixel node's output 0, its data line out: see [NeoPixel chains](#neopixel-chains) (none) |
 
 **The layouts.** LED 0 is the first on the chain, nearest the pin.
 
@@ -1419,11 +1423,11 @@ colour), and it covers:
   (`neopixel_patch_span`). The same angle at both ends lights one LED a ring; to light
   a doughnut of 24 whole, go from LED 0 to LED 23.
 
-**Sending.** Each node takes a PIO state machine, running the Pico SDK's WS2812
+**Sending.** Each node that drives its LEDs (in a [chain](#neopixel-chains), only the last) takes a PIO state machine, running the Pico SDK's WS2812
 program (`src/ws2812.pio`) at 800 kHz, and a DMA channel that feeds it, so core 1 doesn't
 wait for the LEDs: 24 bits, 30 µs, an LED, 7.7 ms for 256. Core 1 sends the colours,
 green, red, blue, most significant bit first, again when its input's fraction or its
-on/off input changes, once the last send has gone out and the line has been low 300
+on/off input changes (in a chain, any node's), once the last send has gone out and the line has been low 300
 µs, which latches it. All the program's NeoPixel nodes may have 1024 LEDs between
 them; the node that would go over, or that finds no state machine or DMA channel free,
 is skipped, and logged. On a save the LEDs keep what they show until the new program
@@ -1471,6 +1475,54 @@ An 8 × 8 array whose top two rows are lit, blue with slider `n1` at 0, red at 1
                 02 08 08                        #   8 rows of 8
                 02 0B 00 00 01 07 02            #   a patch from row 0 column 0 to row 1 column 7; colour from input
                 00 00 FF  FF 00 00              #   blue at 0, red at 1
+```
+
+#### NeoPixel chains
+
+A NeoPixel node has a data line out, its output 0, and may have a data line in: a
+source reference after its settings, to another NeoPixel node's data line out. Joined so
+they make a **chain**, which shows several graphics on one set of LEDs: a bar with a
+point riding on it, a patch for a background, a marker at a set level.
+
+- **Drawing.** The node with nothing on its data line in is the first. Each node draws
+  its graphic over what the ones before it drew (`neopixel_draw`): an LED it lights takes
+  its colour, an LED it lights only partly (a bar's end, a point between two LEDs) goes
+  that much of the way from the colour under it to its own, and an LED it doesn't light
+  keeps its colour. A node whose on/off input is off draws nothing: the chain shows
+  through. So later nodes override earlier ones.
+- **The last node**, whose data line out goes nowhere, drives the LEDs on its pin, with
+  the state machine and DMA channel a NeoPixel node takes, and sends them again when
+  what any node of its chain shows changes. The others take no pin.
+- **One set of LEDs.** A chain's nodes have the same layout, size and wiring (and the
+  UI writes one pin for all of them). Core 1 doesn't join a data line in that names no
+  NeoPixel node, one with other LEDs, one that already feeds another (the first in
+  program order wins), or one that would lead back round to itself; such a node starts
+  from all off, and drives its own pin. The UI draws only a single line: a second
+  data line out of a node replaces the first, and a line that would close a loop isn't
+  drawn.
+- **In the UI** the chain shares its LEDs' settings: the pin, layout, size and wiring
+  set on any of its nodes are set on all. Joining two chains, the joined chain takes
+  the settings of its last node; a data line taken out leaves the node it came from
+  driving its own LEDs, on a free pin if another node has its pin. Each node's preview
+  shows its chain drawn as far as it, each node at its own preview level.
+
+A 12-LED doughnut on GPIO 16, all of it dim blue (`n2`), with a red point going once
+round over it as slider `n1` goes from 0 to 1 (`n3`, over `n2`):
+
+```hex example=neopixel-chain-config
+0A 00 3F                                        # Config, 63 bytes
+12 00 00 01 01  00                              # slider n1, horizontal
+26 01 00 02 16  00 00 00 00 00 00               # NeoPixels n2, no input: always on
+                10 02 00 28                     #   GPIO 16, doughnut, brightness 40
+                01 0C                           #   12 LEDs
+                02 08 00 00 00 0B 00            #   a patch from LED 0 to LED 11
+                00 00 FF                        #   blue
+26 01 00 03 19  00 01 00 00 00 00               # NeoPixels n3 ← n1, always on
+                10 02 00 28                     #   GPIO 16, doughnut, brightness 40
+                01 0C                           #   12 LEDs
+                01 08 00 00 00 00 00            #   a point from LED 0 to LED 0: once round
+                FF 00 00                        #   red
+                00 02 00                        #   its data line in ← n2's data line out
 ```
 
 ### Labels, positions and wires
@@ -1669,7 +1721,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `23` USB keyboard | 1 signal | a keystroke, through core 0 | Types when its signal goes from below 0.5 to 0.5 or up |
 | `24` stepper | 1 signal | its four pins | See [Stepper outputs](#stepper-outputs) |
 | `25` servo | 1 signal | its pin, a 50 Hz pulse | See [Servos](#servos) |
-| `26` NeoPixels | 2 signals: its value, on/off | its pin, through a PIO state machine | See [NeoPixels](#neopixels) |
+| `26` NeoPixels | 2 signals: its value, on/off; in a chain, the node on its data line in | its pin, through a PIO state machine; in a chain, only the last | See [NeoPixels](#neopixels) |
 
 - **An output reads the signals its source references name.** A reference to an
   element that isn't in the program, or to nothing (ID 0), reads 0. A reference to
@@ -1826,6 +1878,16 @@ s0 n1.0 slider = 0
 NEOPIXEL n2 pin 16 array 8x8 brightness 40 patch 0,0-1,7 colour 0000FF-FF0000 <- s0 / 1 on <- -
 ```
 
+In a [chain](#neopixel-chains), ` over nI` names the node it draws over, and ` feeds`
+marks one whose data line out goes to another, which draws over it: it doesn't drive
+its pin.
+
+```program example=neopixel-chain-config
+s0 n1.0 slider = 0
+NEOPIXEL n2 pin 16 doughnut 12 brightness 40 patch 0,0-0,11 colour 0000FF <- - / 1 on <- - feeds
+NEOPIXEL n3 pin 16 doughnut 12 brightness 40 point 0,0-0,0 colour FF0000 <- s0 / 1 on <- - over n2
+```
+
 For the [logic-config example](#logic): the compare reads the temperature and writes
 its own signal, which the GPO reads:
 
@@ -1960,7 +2022,8 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
      the first scan; a servo takes its pin, and starts its slice at 50 Hz at the
      first scan; a stepper takes its four pins as outputs, and holds its coils
      from the first scan (unless it releases them); NeoPixels take their pin, a PIO
-     state machine and a DMA channel (see [NeoPixels](#neopixels));
+     state machine and a DMA channel (see [NeoPixels](#neopixels)), except a NeoPixel
+     node whose data line out feeds another, which takes nothing;
    - an LED, keyboard, core temperature or logic takes no pin.
 
    A node whose pin isn't [usable](#gpio-pins), or that an earlier node took, is
@@ -2001,7 +2064,9 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
      (below).
    - **NeoPixels:** their graphic is drawn for their signal's fraction of full scale
      (all off while their on/off signal is below 0.5),
-     and DMA sends it out (see [NeoPixels](#neopixels)); if the last send isn't out
+     and DMA sends it out; a node whose data line out feeds another does nothing, and
+     the last node of a [chain](#neopixel-chains) draws each node of it in turn, from the
+     first, over the last (see [NeoPixels](#neopixels)); if the last send isn't out
      yet, a later scan sends it.
 
 Inputs come before logic, and logic before outputs, so an output follows its input,

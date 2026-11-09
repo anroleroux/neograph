@@ -289,7 +289,10 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 /* NeoPixel (MSG_HW_NEOPIXEL) payload. A chain of WS2812 LEDs on one pin, laid out as
    an array (rows of columns), a circle (rings, one inside the other) or a doughnut (one
    ring); its graphic draws its input on them, while its on/off input is on (or not
-   wired). PROTOCOL.md, "NeoPixels", has the bytes. */
+   wired). Its data line in, a reference to another NeoPixel node (output 0, its data
+   line out), chains them: it draws over what that one drew, and only the last of a
+   chain, whose data line out goes nowhere, drives its pin. PROTOCOL.md, "NeoPixels",
+   has the bytes. */
 #define NEOPIXEL_ARRAY          0x00    /* layout: rows × columns; LED 0 at the top left, along the top row */
 #define NEOPIXEL_CIRCLE         0x01    /* layout: 1 to NEOPIXEL_RINGS_MAX rings, in the order they are wired */
 #define NEOPIXEL_DOUGHNUT       0x02    /* layout: one ring of LEDs */
@@ -493,6 +496,7 @@ typedef struct {
     uint8_t from[2], to[2];                 /* a point or patch: where it starts and ends: an array's row and
                                                column; a circle's ring and its LED; a doughnut's 0 and LED */
     uint8_t colour[2][3];                   /* red, green, blue: its colour (at 0), and at 1 */
+    msg_ref under;                          /* its data line in: the NeoPixel node it draws over; 0 = none */
 } neopixel_payload;
 
 /* Whether a NeoPixel's point position fits its layout: an array's row and column, a
@@ -515,7 +519,8 @@ static inline int neopixel_place_valid(const neopixel_payload *px, const uint8_t
    an array that it has, around a ring of a circle that it has or across its rings, or
    around a doughnut from one of its LEDs; a point or patch from one place on it to
    another. A
-   graphic with NEOPIXEL_GFX_COLOUR_INPUT has a second colour. */
+   graphic with NEOPIXEL_GFX_COLOUR_INPUT has a second colour. After its graphic, a
+   third source reference may follow: its data line in (see `under`). */
 static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t flags, neopixel_payload *out) {
     uint8_t r = msg_ref_len(flags);
     if (len < 2 * r + 5) return 0;
@@ -523,8 +528,10 @@ static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t
     uint8_t k = q[4];                       /* the bytes of its size */
     if (k < 1 || k > NEOPIXEL_RINGS_MAX || len < 2 * r + 5 + k + 2) return 0;
     const uint8_t *g = q + 5 + k;           /* its graphic */
-    if (len != 2 * r + 5 + k + 2 + g[1]) return 0;
+    unsigned end = 2u * r + 5 + k + 2 + g[1];  /* past its graphic */
+    if (len != end && len != end + r) return 0;
     memset(out, 0, sizeof *out);
+    if (len == end + r) out->under = msg_ref_at(pay + end, flags);
     out->source = msg_ref_at(pay, flags);
     out->enable = msg_ref_at(pay + r, flags);
     out->pin = q[0];

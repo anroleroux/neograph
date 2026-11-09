@@ -1721,6 +1721,85 @@ void test_neopixel_colour_input_and_switch(void)
     TEST_ASSERT_TRUE(neopixel_enabled(n, 0));
 }
 
+/* A NeoPixel message: node `id` on a 4 × 4 array (or `size`), from ADC n1, a graphic,
+   and with `under` its data line in. Returns its length. */
+static uint8_t chained_neopixel(uint8_t *msg, uint16_t id, uint16_t under, const uint8_t *size,
+                                uint8_t graphic, const uint8_t *set, uint8_t glen)
+{
+    msg[0] = MSG_HW_NEOPIXEL;
+    msg[1] = MSG_FLAG_OUTPUT;
+    msg[2] = (uint8_t)(id >> 8);
+    msg[3] = (uint8_t)id;
+    uint8_t len = neopixel_pay(msg + 5, NEOPIXEL_ARRAY, 0, size, 2, graphic, set, glen);
+    if (under) {
+        msg[5 + len] = (uint8_t)(under >> 8);
+        msg[6 + len] = (uint8_t)under;
+        msg[7 + len] = 0;
+        len += 3;
+    }
+    msg[4] = len;
+    return (uint8_t)(5 + len);
+}
+
+void test_neopixel_chain(void)
+{
+    static hw_program p;
+    static const uint8_t grid[] = { 4, 4 }, small[] = { 2, 2 };
+    static const uint8_t patch[] = { 0, 0, 3, 3, 0, 10, 20, 30 };          /* all of it, red 10, green 20, blue 30 */
+    static const uint8_t point[] = { 0, 0, 0, 3, 0, 200, 0, 0 };           /* along the top row, red 200 */
+    uint8_t cfg[512] = { MSG_HW_ADC, 0, 0, 1, 1, 0 };
+    size_t n = 6;
+    n += chained_neopixel(cfg + n, 2, 0, grid, NEOPIXEL_GFX_PATCH, patch, sizeof patch);  /* the first */
+    n += chained_neopixel(cfg + n, 3, 2, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* over n2 */
+    n += chained_neopixel(cfg + n, 4, 3, small, NEOPIXEL_GFX_PATCH, (const uint8_t[]){ 0, 0, 1, 1, 0, 1, 2, 3 }, 8);
+    n += chained_neopixel(cfg + n, 5, 2, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* n2 feeds n3 already */
+    n += chained_neopixel(cfg + n, 6, 6, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* itself */
+    n += chained_neopixel(cfg + n, 7, 8, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* n7 and n8: a loop */
+    n += chained_neopixel(cfg + n, 8, 7, grid, NEOPIXEL_GFX_POINT, point, sizeof point);
+    n += chained_neopixel(cfg + n, 9, 30, grid, NEOPIXEL_GFX_POINT, point, sizeof point); /* no such node */
+    program_compile(cfg, n, &p);
+    TEST_ASSERT_EQUAL_UINT8(9, p.node_count);
+    const prog_node *first = &p.nodes[1], *over = &p.nodes[2];
+    TEST_ASSERT_TRUE(first->px_feeds);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, first->px_under);
+    TEST_ASSERT_EQUAL_UINT8(1, over->px_under);
+    TEST_ASSERT_FALSE(over->px_feeds);                      /* n4's LEDs differ: it isn't joined */
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[3].px_under);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[4].px_under);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[5].px_under);
+    TEST_ASSERT_EQUAL_UINT8(7, p.nodes[6].px_under);        /* n7 over n8; n8 over n7 would close the loop */
+    TEST_ASSERT_TRUE(p.nodes[7].px_feeds);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[7].px_under);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[8].px_under);
+    static char text[2048];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "NEOPIXEL n2 pin 16 array 4x4 brightness 255 patch 0,0-3,3 colour 0A141E <- s0 / 3.3 on <- - feeds\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "NEOPIXEL n3 pin 16 array 4x4 brightness 255 point 0,0-0,3 colour C80000 <- s0 / 3.3 on <- - over n2\n"));
+
+    /* The point over the patch: half way, between LEDs 1 and 2, each half way from the
+       patch's colour to its own; the rest of the patch shows through. */
+    uint32_t out[16];
+    memset(out, 0, sizeof out);
+    neopixel_draw(&first->px, 0, true, out);
+    neopixel_draw(&over->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[0]);
+    TEST_ASSERT_EQUAL_HEX32(10u << 24 | 105u << 16 | 15u << 8, out[1]);
+    TEST_ASSERT_EQUAL_HEX32(10u << 24 | 105u << 16 | 15u << 8, out[2]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[3]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[15]);
+    /* On the end: all its colour. Off: it draws nothing, and the patch shows. */
+    neopixel_draw(&over->px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(200u << 16, out[3]);
+    memset(out, 0, sizeof out);
+    neopixel_draw(&first->px, 0, true, out);
+    neopixel_draw(&over->px, 1, false, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[3]);
+    /* neopixel_render is a draw over all off. */
+    neopixel_render(&over->px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(200u << 16, out[3]);
+    TEST_ASSERT_EQUAL_HEX32(0, out[0]);
+}
+
 /* ── DS18B20 temperature sensors ──────────────────────────────────────── */
 
 /* A scratchpad holding a temperature (its LSB and MSB), with its CRC. */
@@ -2163,6 +2242,7 @@ int main(void)
     RUN_TEST(test_neopixel_point_blends);
     RUN_TEST(test_neopixel_patch);
     RUN_TEST(test_neopixel_colour_input_and_switch);
+    RUN_TEST(test_neopixel_chain);
     RUN_TEST(test_feedback_reference);
     RUN_TEST(test_program_counter);
     RUN_TEST(test_program_feedback_loop);

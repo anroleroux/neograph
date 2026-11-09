@@ -375,6 +375,7 @@ static uint32_t neopixel_pool[NEOPIXEL_LEDS_TOTAL];
 static uint16_t neopixel_pool_used = 0;
 
 static bool neopixel_setup(const prog_node *n, node_state *st) {
+    if (n->px_feeds) return true;       // the last node of its chain drives the LEDs
     if (neopixel_pool_used + n->px.leds > NEOPIXEL_LEDS_TOTAL) {
         printf("NeoPixels n%u: more than %u LEDs in all\n", n->id, NEOPIXEL_LEDS_TOTAL);
         return false;
@@ -408,10 +409,10 @@ static bool neopixel_setup(const prog_node *n, node_state *st) {
     return true;
 }
 
-// Whether a program has a NeoPixel node on a pin.
+// Whether a program has a NeoPixel node driving a pin.
 static bool neopixel_on_pin(const hw_program *p, uint8_t pin) {
     for (uint8_t i = 0; i < p->node_count; i++) {
-        if (p->nodes[i].type == MSG_HW_NEOPIXEL && p->nodes[i].pin == pin) return true;
+        if (p->nodes[i].type == MSG_HW_NEOPIXEL && !p->nodes[i].px_feeds && p->nodes[i].pin == pin) return true;
     }
     return false;
 }
@@ -426,7 +427,7 @@ static uint32_t neopixels_release(const hw_program *p, const hw_program *next) {
     for (uint8_t i = 0; i < p->node_count; i++) {
         const prog_node *n = &p->nodes[i];
         node_state *st = &states[i];
-        if (n->type != MSG_HW_NEOPIXEL || !st->ok) continue;
+        if (n->type != MSG_HW_NEOPIXEL || !st->ok || n->px_feeds) continue;
         dma_channel_wait_for_finish_blocking((uint)st->dma);
         if (!neopixel_on_pin(next, n->pin)) {
             while (time_us_64() < st->ready_us) tight_loop_contents();
@@ -868,6 +869,39 @@ static void take_program(void) {
     printf("hw man running a program of %u signals and %u nodes\n", p->signal_count, p->node_count);
 }
 
+// Show the NeoPixels of chain ending in node `last`, the one that drives the LEDs:
+// each node of it, from the first (the one with nothing on its data line in), draws its
+// graphic over what the one before it drew. Sent again when what any of them shows
+// changes, once the last send is out; if it isn't yet, at a later scan.
+static void neopixels_show(hw_program *p, uint8_t last) {
+    node_state *st = &states[last];
+    uint8_t chain[PROG_NODES_MAX], len = 0;
+    for (uint8_t k = last; k != PROG_NO_NODE && len < PROG_NODES_MAX; k = p->nodes[k].px_under) chain[len++] = k;
+
+    bool changed = !st->driven;
+    for (uint8_t c = 0; c < len && !changed; c++) {
+        const prog_node *m = &p->nodes[chain[c]];
+        changed = neopixel_fraction(m, signal_value(p, m->in[0])) != states[chain[c]].fraction
+            || neopixel_enabled(m, signal_value(p, m->in[1])) != states[chain[c]].on;
+    }
+    if (!changed) return;
+    uint64_t now = time_us_64();
+    if (now < st->ready_us || dma_channel_is_busy((uint)st->dma)) return;
+
+    const prog_node *n = &p->nodes[last];
+    memset(st->leds, 0, n->px.leds * sizeof st->leds[0]);
+    for (uint8_t c = len; c-- > 0;) {
+        const prog_node *m = &p->nodes[chain[c]];
+        node_state *ms = &states[chain[c]];
+        ms->fraction = neopixel_fraction(m, signal_value(p, m->in[0]));
+        ms->on = neopixel_enabled(m, signal_value(p, m->in[1]));
+        neopixel_draw(&m->px, ms->fraction, ms->on, st->leds);
+    }
+    dma_channel_transfer_from_buffer_now((uint)st->dma, st->leds, n->px.leds);
+    st->ready_us = now + (uint64_t)n->px.leds * NEOPIXEL_LED_US + NEOPIXEL_RESET_US;
+    st->driven = true;
+}
+
 // One scan: each node in the program's order, inputs then outputs. An output is
 // driven when the value it would take changes, and at its first scan.
 static void scan(uint32_t count) {
@@ -982,22 +1016,9 @@ static void scan(uint32_t count) {
             break;
         }
 
-        case MSG_HW_NEOPIXEL: {
-            // Sent again when what they show changes, once the last send is out; if it
-            // isn't yet, at a later scan.
-            float f = neopixel_fraction(n, signal_value(p, n->in[0]));
-            bool on = neopixel_enabled(n, signal_value(p, n->in[1]));
-            if (st->driven && f == st->fraction && on == st->on) break;
-            uint64_t now = time_us_64();
-            if (now < st->ready_us || dma_channel_is_busy((uint)st->dma)) break;
-            neopixel_render(&n->px, f, on, st->leds);
-            dma_channel_transfer_from_buffer_now((uint)st->dma, st->leds, n->px.leds);
-            st->ready_us = now + (uint64_t)n->px.leds * NEOPIXEL_LED_US + NEOPIXEL_RESET_US;
-            st->fraction = f;
-            st->on = on;
-            st->driven = true;
+        case MSG_HW_NEOPIXEL:
+            if (!n->px_feeds) neopixels_show(p, i);   // one that feeds another, its chain's last shows
             break;
-        }
 
         case MSG_HW_STEPPER: {
             // The scan gives it its input; steppers_run moves it.

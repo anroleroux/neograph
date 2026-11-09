@@ -1707,6 +1707,69 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(neoBack === '7,2,12,99,1,0:3,0:9,true,true,#ff8000,#0000ff,n1,n3', 'NeoPixels restored as ' + neoBack);
 
+    // NeoPixel chains: a data line from one NeoPixel node into another joins them. The
+    // chain shares the LEDs' settings of its last node, which alone drives the pin;
+    // each node draws over the one before. It saves its data line in after its settings
+    // (as in PROTOCOL.md's neopixel-chain-config example), restores, and splits when the
+    // data line is taken out.
+    const npxChain = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([0x12, 0, 0, 1, 1, 0])));     // slider n1 alone
+        const sld = elements.n1;
+        const a = addNode(MSG_HW_NEOPIXEL), b = addNode(MSG_HW_NEOPIXEL), c = addNode(MSG_HW_NEOPIXEL);
+        const led = addNode(MSG_HW_LED);
+        const apart = new Set([a.pin, b.pin, c.pin]).size === 3;
+        b.setLayout(NEOPIXEL_DOUGHNUT); b.setRingLeds('12'); b.setPin('5');
+        a.setGraphic(NEOPIXEL_GFX_PATCH); a.colour = [0, 0, 40];
+        b.setGraphic(NEOPIXEL_GFX_POINT); b.colour = [200, 0, 0];
+        const joined = !!createEdge(a.name, b.name) && !!createEdge(sld.name, b.name);
+        const shared = [a.layout === NEOPIXEL_DOUGHNUT, a.ringLeds === 12, a.pin === 5, a.usedPins().length === 0,
+            b.usedPins().join() === '5', a.over() === b, b.under() === a, b.chain().map(n => n.name).join('>')].join();
+        const refused = [createEdge(a.name, led.name), createEdge(b.name, a.name), createEdge(a.name, a.name)]
+            .every(e => e === null) && !led.canTakeConn(a);
+        a.setRingLeds('8');                                 // on any node of the chain: all of it
+        const edited = [b.ringLeds, b.pin].join();
+        a.from = [0, 0]; a.to = [0, 7];                     // the patch: all the way round
+        // The point over the patch: half way between LEDs, half way from the patch's blue.
+        a.preview = 0; b.preview = 0;
+        const pv = b.previewColours(), own = a.previewColours();
+        const preview = [pv[0].join(':'), pv[3].join(':'), own[0].join(':')].join();
+        b.preview = 1 / 16;                                 // from LED 0 to 7 round 8: half way to LED 1
+        const half = b.previewColours()[1].join(':');
+        const pay = (n) => n.marshal().slice(5).map(x => x.toString(16).padStart(2, '0')).join(' ');
+        const payloads = [pay(a), pay(b)];
+        saveGraph();
+        // A second data line out of a replaces the first: b is left on its own pin.
+        createEdge(a.name, c.name);
+        const moved = [a.over() === c, b.under() === null, a.pin === c.pin, b.pin === 5, b.drives()].join();
+        // Back as it was, then a's wire out taken away: a drives its LEDs again, on a pin of its own.
+        createEdge(a.name, b.name);
+        const back = [c.drives(), a.pin === 5].join();
+        a.outputs[0].conns[0].remove();
+        const split = [a.drives(), a.pin !== b.pin, a.usedPins().length === 1].join();
+        createEdge(a.name, b.name);
+        return { apart, joined, shared, refused, edited, preview, half, payloads, moved, back, split };
+    });
+    packets.push(...await sent(page));
+    expect(npxChain.apart, 'new NeoPixel nodes did not take pins of their own');
+    expect(npxChain.joined, 'NeoPixel nodes did not chain');
+    expect(npxChain.shared === 'true,true,true,true,true,true,true,n2>n3', 'a chain does not share its last node\'s LEDs: ' + npxChain.shared);
+    expect(npxChain.refused, 'a data line went somewhere other than another NeoPixel node, or round a loop');
+    expect(npxChain.edited === '8,5', 'a chain\'s nodes did not share an edit: ' + npxChain.edited);
+    expect(npxChain.preview === '200:0:0,0:0:40,0:0:40', 'a chain\'s preview showed ' + npxChain.preview);
+    expect(npxChain.half === '100:0:20', 'a point half over the patch showed ' + npxChain.half);
+    expect(npxChain.payloads[0].endsWith('00 00 28') && npxChain.payloads[1].endsWith('00 02 00'),
+        'chained NeoPixels marshal as ' + npxChain.payloads.join(' | '));
+    expect(npxChain.moved === 'true,true,true,true,true', 'a second data line out did not replace the first: ' + npxChain.moved);
+    expect(npxChain.back === 'true,true', 'a chain did not join back: ' + npxChain.back);
+    expect(npxChain.split === 'true,true,true', 'a split chain shares a pin: ' + npxChain.split);
+    const chainBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from(Object.values(elements).flatMap(e => e.marshal()))));
+        const [a, b] = [elements.n2, elements.n3];
+        return [b.under()?.name, a.pin === b.pin, a.usedPins().length, b.ringLeds, a.ringLeds, elements.n4.drives(),
+            elements.n4.pin !== b.pin].join();
+    });
+    expect(chainBack === 'n2,true,0,8,8,true,true', 'a NeoPixel chain restored as ' + chainBack);
+
     // A DS18B20: its pin, resolution and pull-up; its temperature wires into a number
     // input, its Found into an on/off; its tile shows the device's readings. It
     // marshals as the ds18b20-config example in PROTOCOL.md, and restores.

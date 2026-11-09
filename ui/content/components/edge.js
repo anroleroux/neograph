@@ -81,8 +81,10 @@ class gEdge {
         g.appendChild(hit);
         this.hit = hit;
 
-        // A source with several outputs names the one the wire leaves from.
-        if (this.start.node.outputs.length > 1) {
+        // A source with several outputs names the one the wire leaves from; so does a
+        // NeoPixel data line.
+        const out = this.start.node.outputs[this.start.output];
+        if (this.start.node.outputs.length > 1 || out.type === 'pixels') {
             const name = document.createElementNS('http://www.w3.org/2000/svg', 'text');
             name.setAttribute('font-size', 10);
             name.setAttribute('text-anchor', 'middle');

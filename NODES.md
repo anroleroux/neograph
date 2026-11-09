@@ -198,7 +198,8 @@ Things to know:
 | | |
 |---|---|
 | Category | Hardware output |
-| Inputs | A number, as a fraction of its source's full scale; and an on/off |
+| Inputs | A number, as a fraction of its source's full scale; an on/off; and a data line from another NeoPixels node |
+| Outputs | **Data**: its LEDs, for another NeoPixels node to draw over |
 | Default label | NEOPIXEL |
 
 A chain of NeoPixels (WS2812 LEDs) on one pin, showing a graphic of its input. As with
@@ -258,6 +259,28 @@ Under the settings a **preview**
 draws the LEDs with the graphic at the level of its slider, at full brightness, so a
 dim setting still shows; point at an LED for its number.
 
+**Chaining: several graphics on one set of LEDs.** Wire one NeoPixels node to another
+(select the first, then the second, in wire mode): the wire, labelled Data, carries
+what the first draws into the second, which draws its own graphic over it. Chain as
+many as you like, one after another:
+
+- **Later nodes override earlier ones.** Each LED a later node lights takes its
+  colour; one it lights only partly (the end of a bar, a point between two LEDs) blends
+  from the colour underneath; the LEDs it doesn't light show what was drawn before. A
+  node whose on/off is off draws nothing, so what is under it shows.
+- **The last node drives the LEDs:** the one whose Data output goes nowhere. The others
+  only draw.
+- **One set of LEDs.** The nodes of a chain share the pin, layout, size and wiring:
+  change them on any node and they change on all. Joining two chains, they take the
+  settings of the last node. Brightness, graphic and colour are each node's own.
+- **The preview** of a node shows its chain drawn as far as that node, each node at
+  its own preview level.
+- **Taking the Data wire out** splits the chain: the node it came from drives its own
+  LEDs again, on a free pin if the chain kept its pin.
+
+For example: a dim blue Patch over the whole ring as a background, a green Bar level
+over it for a tank's level, and a red Moving point last, marking the level to fill to.
+
 Things to know:
 
 - **Power them from 5 V.** A NeoPixel draws up to 60 mA at full white: more than a few
@@ -267,8 +290,9 @@ Things to know:
   flicker or show the wrong colours, a level shifter to 5 V fixes it.
 - **The on/off** is read on the device: a button in the Command view, a GPIO input or
   logic turns the LEDs on and off within one 10 ms scan.
-- **Up to 256 LEDs a node, and 1024 in all.** Each node takes one of the chip's PIO
-  state machines and a DMA channel; a node that finds none free is skipped.
+- **Up to 256 LEDs a node, and 1024 in all.** Each node that drives LEDs (the last
+  of a chain) takes one of the chip's PIO state machines and a DMA channel; a node
+  that finds none free is skipped.
 - **On a save** the LEDs keep what they show until the device draws them again; taken
   out of the graph, or moved to another pin, they turn off.
 
