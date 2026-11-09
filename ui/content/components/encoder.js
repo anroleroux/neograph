@@ -22,7 +22,7 @@ class uiEncoder extends uiComponents {
         this.steps = 20;            // its position's top: a turn of a 20-click knob
         this.detent = ENCODER_DETENT_4;
         this.reverse = false;
-        this.wrap = false;          // past its ends it goes on from the other
+        this.wrap = true;           // past its ends it goes on from the other: a knob that turns freely
         this.value = NaN;           // its position; none yet
         this.pressed = null;        // whether its switch is held; null before the device says
         this.unit = 'clicks';

@@ -1766,7 +1766,11 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add [title="Add a rotary encoder"]').dispatchEvent('click');
     expect(await keyRows() === 'Label:|A (CLK) pin:|B (DT) pin:|Switch (SW) pin:|Steps:|A click is:|At the ends:|Direction:|Wire from:|Command view:',
         'a new encoder does not show its settings: ' + await keyRows());
+    expect(await page.evaluate(() => selected.wrap && (selected.options() & ENCODER_WRAP) !== 0),
+        'a new encoder does not wrap at its ends');
     await choice('A click is', 'Half cycle');
+    await choice('At the ends', 'Stop');
+    expect(await page.evaluate(() => (selected.options() & ENCODER_WRAP) === 0), 'Stop left an encoder wrapping');
     await choice('At the ends', 'Wrap');
     await choice('Direction', 'Reversed');
     const enc = await page.evaluate(() => {

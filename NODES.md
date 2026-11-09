@@ -439,7 +439,7 @@ wire is labelled with it:
 | Switch (SW) pin | None, or as A, not A's or B's | 8 | The pin its push switch (SW) is on. With None, Pressed stays off. |
 | Steps | 1–1000 | 20 | The top of its position. |
 | A click is | Full cycle, Half cycle, Each edge | Full cycle | How many changes of its contacts make a click. Full cycle suits most encoders (a KY-040, an EC11); if it counts only every other click, pick Half cycle; Each edge for an encoder without clicks. |
-| At the ends | Stop, Wrap | Stop | Stop holds it at 0 and at Steps. Wrap goes on from the other end, so it runs 0 to Steps − 1: a 20-click knob with 20 steps comes back to 0 each turn. |
+| At the ends | Wrap, Stop | Wrap | Wrap goes on from the other end, so it runs 0 to Steps − 1: a 20-click knob with 20 steps comes back to 0 each turn. Stop holds it at 0 and at Steps. |
 | Direction | Normal, Reversed | Normal | Normal counts up clockwise on a KY-040. Reversed counts the other way. |
 | Wire from | Position, Pressed | Position | Which output the next wire leaves from. |
 | Command view | Show, Hide | Hide | A tile with its position, such as "5 of 20", and ", pressed" while it is. |
