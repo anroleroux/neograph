@@ -6,6 +6,7 @@
 #   awk -f make/check-constants.awk src/protocol.h ui/content/protocol.js
 
 function num(s,    i, c, v) {
+    gsub(/[()]/, "", s)                 # a negative one is bracketed in C: (-720)
     if (s !~ /^0[xX]/) return s + 0
     v = 0
     for (i = 3; i <= length(s); i++) {

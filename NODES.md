@@ -740,6 +740,8 @@ a minute or second as a fraction of 60.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
+| Internet time | On, Off | On | On: the device sets its clock from an internet time server when it starts up, and when you save the graph with internet time newly on (a clock added, or this turned on), if it is on a WiFi network with internet. Off: only by hand. |
+| Time zone | UTC−12 to UTC+14, in quarter hours | UTC+2 | Hours ahead of UTC: type 2, +2, -3.5, 5:30 or UTC+5:45. Internet time is UTC; the zone turns it into your time. Changing it moves the clock by the difference. |
 | Hours, Minutes, Seconds | 0–23, 0–59, 0–59 | The time now | Type a part of the time to set it; the other parts stay as they are. |
 | Set to this computer's time | (a button) | | Sets the clock to the time on the computer, to the second. |
 | Wire from | Hour, Minute, Second | Hour | Which output the next wire leaves from. |
@@ -747,12 +749,18 @@ a minute or second as a fraction of 60.
 
 Things to know:
 
-- **One clock.** The device has a single clock; every clock node shows the same time,
-  and setting any of them sets it.
+- **One clock.** The device has a single clock; every clock node shows the same time
+  and has the same settings, and setting any of them sets it.
+- **Internet time** needs the device to have joined a WiFi network with internet
+  (Network view). As its own access point it has none: set the clock by hand. Under the
+  settings it says what the device is doing: asking the time server, set from the
+  internet, or not on a network. It asks once a startup, so a time you set by hand stays
+  until the device restarts. Daylight saving isn't followed: change the time zone when
+  the clocks change.
 - **Setting it takes effect at once** on the device, without saving the graph, and
   saving doesn't change it: the time isn't saved with the graph.
 - **No battery.** When the device powers up, its clock starts at 00:00:00 and counts
-  from there until you set it.
+  from there until it is set, from the internet or by you.
 - **Without a device** (or before it reports) the node keeps time in the browser, from
   the computer's clock or the time you last set, and the node shows it.
 

@@ -1954,7 +1954,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="tm"]').dispatchEvent('click');
     await page.locator('#add [title="Add a clock"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|Hours:|Minutes:|Seconds:|Wire from:|Command view:',
+    expect(await keyRows() === 'Label:|Internet time:|Time zone:|Hours:|Minutes:|Seconds:|Wire from:|Command view:',
         'a new clock does not show its settings: ' + await keyRows());
     // Type the hour into its field, as a user would.
     await page.locator('#settings .editable', { has: page.locator('.label:text-is("Hours:")') })
@@ -1967,6 +1967,21 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         const other = addNode(MSG_HW_CLOCK);
         c.setPart(0, 8);
         const set = [typed, c.now()[0], other.now()[0]].join(); // one clock: setting either sets both
+        // Internet time and the time zone: UTC+2 and on by default; one setting for both nodes.
+        const zones = ['2', '+2', '-3.5', '5:30', 'UTC+5:45', '14', '-12', 'x', '15', '-12:15', '5:07', '2:60']
+            .map(v => uiClock.parseZone(v)).join();
+        const defaults = [c.sync, c.zone, uiClock.zoneText(c.zone), uiClock.zoneText(-210), uiClock.zoneText(0)].join();
+        other.setSync(false);
+        const synced = [c.sync, other.sync].join();
+        c.setSync(true);
+        const before = c.now()[0];
+        const zoned = [c.setZone('+1'), c.zone, other.zone, (before + 23) % 24 === c.now()[0], c.setZone('nope')].join();
+        c.setZone('2');
+        const texts = [c.syncText()];
+        receiveTelemetry('clock waiting'); texts.push(c.syncText());
+        receiveTelemetry('clock synced'); texts.push(c.syncText());
+        receiveTelemetry('clock offline'); texts.push(c.syncText().split(' ').slice(0, 4).join(' '));
+        c.setSync(false); texts.push(c.syncText()); c.setSync(true);
         const rejected = [c.setTime(24, 0, 0), c.setTime(0, 60, 0), c.setTime(0, 0, 60), c.setTime('x', 0, 0), c.setPart(1, 99)]
             .every(r => r === false) && c.now()[0] === 8;
         other.remove();
@@ -1983,22 +1998,33 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         const shown = [c.reading(), c.tileState.textContent, String(c.outputValue(1)), c.gElm.children[1].textContent].join('|');
         const pay = c.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ');
         saveGraph();
-        return { set, rejected, rolled, wired, shown, pay, id: c.id };
+        return { set, zones, defaults, synced, zoned, texts: texts.join('|'), rejected, rolled, wired, shown, pay, id: c.id };
     });
     packets.push(...await sent(page));
     expect(clock.set === '7,8,8', 'setting one clock did not set them all: ' + clock.set);
+    expect(clock.zones === '120,120,-210,330,345,840,-720,,,,,', 'time zones parse as ' + clock.zones);
+    expect(clock.defaults === 'true,120,UTC+2,UTC-3:30,UTC', 'a new clock\'s settings are ' + clock.defaults);
+    expect(clock.synced === 'false,false', 'internet time off on one clock left the other ' + clock.synced);
+    expect(clock.zoned === ',60,60,true,false', 'changing the time zone gave ' + clock.zoned);
+    expect(clock.texts === 'Once saved, the device sets its clock from the internet at startup, when it is on a network.'
+        + '|Asking the internet time server…|Set from the internet at startup.|The device isn\'t on|Internet time is off: set the clock here.',
+        'internet time read ' + clock.texts);
     expect(clock.rejected, 'a clock took a time that is not a time of day');
     expect(clock.rolled === '0:0:0' || clock.rolled === '0:0:1', 'a clock did not go round midnight: ' + clock.rolled);
     expect(clock.wired, 'a clock\'s outputs did not wire as numbers');
     expect(clock.shown === '12:34:56|12:34:56|34|12:34:56', 'a clock showed ' + clock.shown);
-    expect(clock.pay === `35 02 00 ${clock.id.toString(16).padStart(2, '0')} 00`, 'a clock marshals as ' + clock.pay);
+    expect(clock.pay === `35 02 00 ${clock.id.toString(16).padStart(2, '0')} 03 01 00 78`, 'a clock marshals as ' + clock.pay);
     const clockBack = await page.evaluate(() => {
-        restoreGraph(configMessages(Uint8Array.from([0x35, MSG_FLAG_SHOWN, 0, 1, 0, 0x40, 1, 0, 2, 12, 0, 1, 1, 0,
-            0x41, 0xF0, 0, 0, 0x3F, 0x80, 0, 0])));
-        const c = elements.n1;
-        return [c instanceof uiClock, c.shown, elements.n2.inConns()[0]?.start.output].join();
+        // Clock n1 at UTC-3:30 without internet time; clock n3 differs, and takes n1's.
+        restoreGraph(configMessages(Uint8Array.from([0x35, MSG_FLAG_SHOWN, 0, 1, 3, 0, 0xFF, 0x2E, 0x40, 1, 0, 2, 12, 0, 1, 1, 0,
+            0x41, 0xF0, 0, 0, 0x3F, 0x80, 0, 0, 0x35, 0, 0, 3, 3, 1, 0, 0x78])));
+        const c = elements.n1, d = elements.n3;
+        const back = [c instanceof uiClock, c.shown, c.sync, c.zone, d.sync, d.zone, elements.n2.inConns()[0]?.start.output];
+        // One saved before clocks had settings: internet time off, UTC.
+        restoreGraph(configMessages(Uint8Array.from([0x35, 0, 0, 1, 0])));
+        return [...back, elements.n1.sync, elements.n1.zone].join();
     });
-    expect(clockBack === 'true,true,1', 'a clock restored as ' + clockBack);
+    expect(clockBack === 'true,true,false,-210,false,-210,1,false,0', 'a clock restored as ' + clockBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

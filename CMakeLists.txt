@@ -24,6 +24,7 @@ add_executable(twitcher
     src/ds18b20.c
     src/encoder.c
     src/clock.c
+    src/timesync.c
     src/keyboard.c
     src/usb_descriptors.c
     src/networking/dhcpserver.c
@@ -51,6 +52,7 @@ target_link_libraries(twitcher
     pico_mbedtls
     pico_multicore
     pico_cyw43_arch_lwip_poll
+    pico_lwip_sntp
     m
 )
 

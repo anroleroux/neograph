@@ -239,6 +239,7 @@ Core 0 sends the most recently connected client WebSocket text frames:
 |---|---|
 | `uptime N` | Uptime in 1.2 s ticks (integer), from core 1's [uptime word](#core-1--core-0) |
 | `sig I O V` | The value V of output O of element `nI`: a [signal](#signals) of the program core 1 runs, in its unit (°C, volts, 0 to 1), up to 4 significant digits |
+| `clock S` | What internet time is doing for the device's [clock](#clocks): `off`, `offline`, `waiting` or `synced`. Sent while the config has a clock, each second and when it changes |
 
 - **Signals.** Every 100 ms core 0 reads the signals of the program core 1 runs, and
   sends a `sig` frame for each one whose value has changed; every second, and when
@@ -251,7 +252,8 @@ Core 0 sends the most recently connected client WebSocket text frames:
   clicks (output 0) and whether it is pressed (output 1), a [clock](#clocks) its hour,
   minute and second (outputs 0–2), an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
   [logic](#logic) on from 0.5. Other nodes, such as a button or slider, ignore theirs,
-  and so does an element the page doesn't have. The UI ignores `uptime N`.
+  and so does an element the page doesn't have. The UI ignores `uptime N`, and shows
+  `clock S` in a clock node's settings.
 
 ```text
 sig 1 0 31.27               # core temperature n1: 31.27 °C
@@ -417,7 +419,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `31` GPIO input | 2 | Byte 0: the GPIO pin, a [usable](#gpio-pins) one (UI default 3). Byte 1: options; bits 0–1 (`GPI_PULL_MASK`) the pin's pull, `GPI_PULL_NONE` (0), `GPI_PULL_UP` (1) or `GPI_PULL_DOWN` (2, UI default); bit 2 (`GPI_INVERT`): 0 = on while the pin is high (UI default), 1 = on while it is low. Other bits are 0. See [GPIO inputs](#gpio-inputs). |
 | `33` DS18B20 | 2 | Byte 0: the GPIO pin of its data line (DQ), a [usable](#gpio-pins) one (UI default 15). Byte 1: options; bits 0–1 (`DS18B20_RES_MASK`) its resolution, `DS18B20_RES_9` (0) to `DS18B20_RES_12` (3, UI default); bit 2 (`DS18B20_PULLUP`): the pin's internal pull-up on (UI default off: a 4.7 kΩ resistor). Other bits are 0. See [DS18B20 temperature sensors](#ds18b20-temperature-sensors). |
 | `34` Rotary encoder | 6 (`ENCODER_PAYLOAD_LEN`) | Byte 0: the GPIO of its A (CLK) pin (UI default 6); byte 1: of its B (DT) pin (UI default 7); byte 2: of its push switch (SW, UI default 8), or `ENCODER_NO_BUTTON` (`FF`) for none: [usable](#gpio-pins) pins that differ. Byte 3: options; bits 0–1 (`ENCODER_DETENT_MASK`) its pins' transitions a click, `ENCODER_DETENT_4` (0, UI default), `ENCODER_DETENT_2` (1) or `ENCODER_DETENT_1` (2); bit 2 (`ENCODER_REVERSE`): it counts the other way; bit 3 (`ENCODER_WRAP`): past its ends it goes on from the other (UI default on). Other bits are 0. Bytes 4–5: its steps, big endian, 1 to `ENCODER_STEPS_MAX` (1000; UI default 20). See [Rotary encoders](#rotary-encoders). |
-| `35` Clock | 0 | None: the device has one clock. Set it with a [command](#01-command). See [Clocks](#clocks). |
+| `35` Clock | 3 (`CLOCK_PAYLOAD_LEN`; or 0) | Byte 0: options; bit 0 (`CLOCK_SYNC`): internet time (UI default on). Other bits are 0. Bytes 1–2: its time zone, minutes ahead of UTC, a signed 16-bit big-endian number, `CLOCK_ZONE_MIN` (−720) to `CLOCK_ZONE_MAX` (840), a multiple of `CLOCK_ZONE_STEP` (15) (UI default 120: UTC+2). None, saved before clocks had settings, is internet time off, UTC. The device has one clock: the first clock in the config sets it. Set the time with a [command](#01-command). See [Clocks](#clocks). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -925,12 +927,27 @@ the same clock. The Command view can show it on a tile (see
 - **Keeping time.** The clock is the milliseconds the device's timer has counted since
   it powered up, plus an offset, a day round (`clock_time_of_day`): it doesn't drift with
   the scan, and keeps going through a save or a flash write. The Pico has no battery,
-  so after power-up it counts from 00:00:00 until it is set.
-- **Setting it.** A clock [command](#01-command) sets it, at once, from the browser: its
-  hour, minute and second (`clock_set` works out the offset). The time isn't in the
-  config, so a save doesn't set the clock back, and it can be set before the graph is
-  saved. The UI sets it from a clock node's settings, Hours, Minutes and Seconds, or the
-  computer's time.
+  so after power-up it counts from 00:00:00 until it is set: from the internet, or the
+  browser.
+- **Its settings** are the device's, in the first clock node's message: internet time
+  (`CLOCK_SYNC`) and its **time zone**, minutes ahead of UTC. Core 0 takes them each time
+  a config is applied (`timesync_config`, at startup and on each save). A new time zone
+  moves a clock that was set by the change (`clock_shift`): 14:00 at UTC+2 is 13:00 at
+  UTC+1. The UI keeps every clock node's settings the same.
+- **Internet time.** With `CLOCK_SYNC`, core 0 asks an internet time server,
+  `pool.ntp.org` (`TIMESYNC_SERVER`), for the time with lwIP's SNTP client, once: at
+  startup, and when a config turns internet time on (a clock added with it, or it set
+  on again). It asks only on a network (station mode): as its own access point the
+  device has no internet. Until the server answers it asks again, after 15 s and then
+  longer; once it does, the clock is set to its time, Unix seconds, in the time zone
+  (`clock_from_unix`), and it stops. It doesn't ask again until the next startup, so a
+  time set from the browser afterwards stays. Core 0 reports what it is doing as
+  `clock off`, `offline`, `waiting` or `synced` [telemetry](#telemetry-text-frames).
+- **Setting it by hand.** A clock [command](#01-command) sets it, at once, from the
+  browser: its hour, minute and second, the time in its time zone (`clock_set` works out
+  the offset). The time isn't in the config, so a save doesn't set the clock back, and
+  it can be set before the graph is saved. The UI sets it from a clock node's settings,
+  Hours, Minutes and Seconds, or the computer's time.
 - **On the device** core 1 writes each clock node's three signals from the clock at each
   scan. A PWM, servo or NeoPixels wired to it take its hour as a fraction of
   `CLOCK_HOURS` (24), its minute or second of `CLOCK_MINUTES` (60).
@@ -939,12 +956,12 @@ the same clock. The Command view can show it on a tile (see
   from the computer's time or the time it last set, so a graph can be tried without a
   device.
 
-A clock `n1`, its tile shown, turning GPO `n3` (a lamp) on from 18:00, by its hour, and
-sweeping servo `n4` once a minute, by its second:
+A clock `n1`, its tile shown, set from the internet at UTC+2, turning GPO `n3` (a lamp)
+on from 18:00, by its hour, and sweeping servo `n4` once a minute, by its second:
 
 ```hex example=clock-config
-0A 00 30                                        # Config, 48 bytes
-35 02 00 01 00                                  # clock n1, tile shown
+0A 00 33                                        # Config, 51 bytes
+35 02 00 01 03  01 00 78                        # clock n1, tile shown: internet time, UTC+2
 40 01 00 02 0C  00 01 00 00                     # compare n2 ← n1's hour, above
                 41 88 00 00  00 00 00 00        #   17, hysteresis 0: on from 18:00
 21 01 00 03 04  00 02 00 01                     # GPO n3 ← n2, GPIO 1

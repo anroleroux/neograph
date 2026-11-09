@@ -364,8 +364,11 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
 
         case MSG_HW_CLOCK: {
-            // Three signals, in a row: its hour, minute and second.
-            if (itr.len != 0) break;
+            // Three signals, in a row: its hour, minute and second. Its settings are core 0's
+            // (timesync.c).
+            uint8_t options;
+            int16_t zone;
+            if (!clock_payload_read(itr.pay, itr.len, &options, &zone)) break;
             if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
             if (add_signal(p, itr.id, 1, itr.type, 0) != s + 1 || add_signal(p, itr.id, 2, itr.type, 0) != s + 2) break;
             if ((n = add_node(p, itr.type, itr.id))) n->out = s;

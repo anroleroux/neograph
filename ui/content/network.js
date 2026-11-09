@@ -238,6 +238,9 @@ function toggleWebSocket(n,d) {
                         const c = Math.round((22 + 1.5 * Math.sin(t / 30) + 0.1 * (Math.random() - 0.5)) * 16) / 16;
                         receiveTelemetry(`sig ${e.id} 0 ${c}`);
                         receiveTelemetry(`sig ${e.id} 1 1`);
+                    } else if (e instanceof uiClock && tick % 5 === 0) {
+                        // A device on a network, its clock set from the internet.
+                        receiveTelemetry(`clock ${e.sync ? 'synced' : 'off'}`);
                     } else if (e instanceof uiEncoder) {
                         // Turned slowly up and back down; pushed in for a moment every 8 s.
                         const top = e.wrap ? e.steps - 1 : e.steps;

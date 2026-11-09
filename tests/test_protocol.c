@@ -1990,13 +1990,43 @@ void test_clock(void)
     TEST_ASSERT_FALSE(clock_offset_for(now, 0, 0, 60, &offset));
     TEST_ASSERT_EQUAL_UINT32((23 * 3600 + 59 * 60 + 58) * 1000u, clock_time_of_day(now, offset));   /* left */
 
+    /* A time zone moves a clock, forwards or back, round midnight; a time server's Unix
+       time is a time of day in the zone. */
+    TEST_ASSERT_EQUAL_UINT32(2 * 3600000u, clock_shift(0, 120));
+    TEST_ASSERT_EQUAL_UINT32(CLOCK_DAY_MS - 30 * 60000u, clock_shift(0, -30));
+    TEST_ASSERT_EQUAL_UINT32(30 * 60000u, clock_shift(CLOCK_DAY_MS - 60 * 60000u, 90));
+    /* 1762700400: 2025-11-09 15:00:00 UTC, 17:00 at UTC+2, 09:30 at UTC-5:30. */
+    TEST_ASSERT_EQUAL_UINT32(17 * 3600000u, clock_from_unix(1762700400u, 120));
+    TEST_ASSERT_EQUAL_UINT32(15 * 3600000u, clock_from_unix(1762700400u, 0));
+    TEST_ASSERT_EQUAL_UINT32(9 * 3600000u + 30 * 60000u, clock_from_unix(1762700400u, -330));
+    TEST_ASSERT_EQUAL_UINT32(1 * 3600000u, clock_from_unix(1762700400u, 600));     /* past midnight: 01:00 */
+    TEST_ASSERT_EQUAL_UINT32(7 * 1000u, clock_offset_to(5 * CLOCK_DAY_MS + 3000, 10000));
+
+    /* Its settings: internet time and its zone; none (saved before it had them) is off, UTC. */
+    uint8_t options;
+    int16_t zone;
+    TEST_ASSERT_TRUE(clock_payload_read((const uint8_t[]){ CLOCK_SYNC, 0x00, 0x78 }, 3, &options, &zone));
+    TEST_ASSERT_EQUAL_HEX8(CLOCK_SYNC, options);
+    TEST_ASSERT_EQUAL_INT16(120, zone);
+    TEST_ASSERT_TRUE(clock_payload_read((const uint8_t[]){ 0, 0xFE, 0xB6 }, 3, &options, &zone));
+    TEST_ASSERT_EQUAL_INT16(-330, zone);
+    TEST_ASSERT_TRUE(clock_payload_read(NULL, 0, &options, &zone));
+    TEST_ASSERT_EQUAL_HEX8(0, options);
+    TEST_ASSERT_EQUAL_INT16(0, zone);
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0x02, 0, 0 }, 3, &options, &zone));    /* unknown option */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0x03, 0x84 }, 3, &options, &zone)); /* UTC+15 */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0xFD, 0x2F }, 3, &options, &zone)); /* UTC-12:01 */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0x00, 0x7B }, 3, &options, &zone)); /* 123: not in 15s */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0 }, 2, &options, &zone));
+
     /* A clock node: three signals in a row; a PWM takes its hour as a fraction of 24. */
     static hw_program p;
     const uint8_t cfg[] = {
         MSG_HW_CLOCK, MSG_FLAG_SHOWN, 0, 1, 0,
         MSG_HW_PWM, MSG_FLAG_OUTPUT, 0, 2, 17, 0, 1, 0, 2, 0x03, 0xE8, PWM_DUTY_INPUT | PWM_FREQ_INPUT, 50, 0, 100,
         0, 1, 2, 0, 100, 0x27, 0x10,                                         /* duty <- its hour, freq <- its second */
-        MSG_HW_CLOCK, 0, 0, 3, 1, 0,                                         /* a payload: skipped */
+        MSG_HW_CLOCK, 0, 0, 3, 1, 0,                                         /* not its settings: skipped */
+        MSG_HW_CLOCK, 0, 0, 4, 3, 0x04, 0, 0,                                /* an unknown option: skipped */
     };
     program_compile(cfg, sizeof cfg, &p);
     TEST_ASSERT_EQUAL_UINT8(3, p.signal_count);

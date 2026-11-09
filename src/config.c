@@ -9,6 +9,7 @@
 #include "pico/multicore.h"
 #include "hardware/flash.h"
 #include "config.h"
+#include "timesync.h"
 #include "hwman.h"
 #include "keyboard.h"
 #include "config/config_iterator.h"
@@ -352,6 +353,7 @@ void unmarshal_controls(const uint8_t* data, size_t length) {
         return;
     }
     program_compile(data, length, program);
+    timesync_config(data, length);
 
     keyboard_clear();
     config_element_iterator itr;

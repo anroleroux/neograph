@@ -68,18 +68,32 @@ static void core_temp_sample(void) {
 }
 
 // ── The clock ──
-// One time of day for the device (MSG_HW_CLOCK): the milliseconds the timer has counted
-// since boot, plus clock_offset_ms, a day round. It starts at 00:00:00 at boot; core 0
-// sets it (clock_set), and core 1 reads it for the clock nodes' signals each scan. The
-// offset is one 32-bit word, so core 1 never reads half of a new one.
+// One time of day for the device (MSG_HW_CLOCK), in its time zone: the milliseconds the
+// timer has counted since boot, plus clock_offset_ms, a day round. It starts at 00:00:00
+// at boot; core 0 sets it (from the browser, or an internet time server: timesync.c),
+// and core 1 reads it for the clock nodes' signals each scan. The offset is one 32-bit
+// word, so core 1 never reads half of a new one.
 static volatile uint32_t clock_offset_ms = 0;
+static bool clock_was_set = false;
+static int32_t clock_zone = 0;          // minutes ahead of UTC
 
 bool clock_set(uint8_t h, uint8_t m, uint8_t s) {
-    uint32_t offset;
-    if (!clock_offset_for(time_us_64() / 1000, h, m, s, &offset)) return false;
-    clock_offset_ms = offset;
-    __dmb();
+    if (h >= CLOCK_HOURS || m >= CLOCK_MINUTES || s >= CLOCK_SECONDS) return false;
+    clock_set_ms(((uint32_t)h * 3600 + (uint32_t)m * 60 + s) * 1000);
     return true;
+}
+
+void clock_set_ms(uint32_t ms) {
+    clock_offset_ms = clock_offset_to(time_us_64() / 1000, ms);
+    clock_was_set = true;
+    __dmb();
+}
+
+void clock_set_zone(int32_t zone) {
+    if (zone == clock_zone) return;
+    if (clock_was_set) clock_offset_ms = clock_shift(clock_offset_ms, zone - clock_zone);
+    clock_zone = zone;
+    __dmb();
 }
 
 static uint32_t clock_now(void) {

@@ -25,4 +25,14 @@ bool clock_offset_for(uint64_t now_ms, uint8_t h, uint8_t m, uint8_t s, uint32_t
 // The time of day, in milliseconds from midnight, when the timer has counted `now_ms`.
 uint32_t clock_time_of_day(uint64_t now_ms, uint32_t offset);
 
+// The offset to set the clock to `ms` from midnight now (as clock_offset_for).
+uint32_t clock_offset_to(uint64_t now_ms, uint32_t ms);
+
+// An offset moved by a number of minutes, forwards or back: a time zone changed.
+uint32_t clock_shift(uint32_t offset, int32_t minutes);
+
+// The time of day, in milliseconds from midnight, in a time zone `zone` minutes ahead
+// of UTC, at Unix time `unix_s` (seconds since 1970, UTC), as a time server gives it.
+uint32_t clock_from_unix(uint32_t unix_s, int32_t zone);
+
 #endif

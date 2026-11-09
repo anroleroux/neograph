@@ -167,13 +167,19 @@ const ENCODER_REVERSE        = 0x04;
 const ENCODER_WRAP           = 0x08;
 const ENCODER_STEPS_MAX      = 1000;
 
-// Clock (MSG_HW_CLOCK): no payload; the device has one clock, which every clock node
-// reads. Outputs: its hour (0), minute (1) and second (2), whole numbers. A command from
-// a clock sets it: CLOCK_SET_LEN bytes, the hour, minute and second.
+// Clock (MSG_HW_CLOCK): the device has one clock, which every clock node reads. Outputs:
+// its hour (0), minute (1) and second (2), whole numbers. Its payload: options
+// (CLOCK_SYNC: internet time), then its time zone, minutes ahead of UTC, int16 BE. A
+// command from a clock sets it: CLOCK_SET_LEN bytes, the hour, minute and second.
 const CLOCK_HOURS            = 24;
 const CLOCK_MINUTES          = 60;
 const CLOCK_SECONDS          = 60;
 const CLOCK_SET_LEN          = 3;
+const CLOCK_PAYLOAD_LEN      = 3;
+const CLOCK_SYNC             = 0x01;  // options bit 0: internet time
+const CLOCK_ZONE_MIN         = -720;  // UTC-12
+const CLOCK_ZONE_MAX         = 840;   // UTC+14
+const CLOCK_ZONE_STEP        = 15;    // minutes: zones such as UTC+5:45
 
 // ADC input (MSG_HW_ADC) payload byte 0: the channel, 0 to ADC_CHANNELS - 1, on GPIO
 // ADC_PIN_FIRST + channel. ADC3, on GPIO 29, is the WiFi chip's clock on the Pico 2 W.

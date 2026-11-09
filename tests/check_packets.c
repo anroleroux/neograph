@@ -220,9 +220,13 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_HW_ENCODER:
             if (!encoder_payload_valid(it.pay, it.len)) fail("encoder message is not one the device runs");
             break;
-        case MSG_HW_CLOCK:
-            if (it.len != 0) fail("clock message has a payload; the device would skip it");
+        case MSG_HW_CLOCK: {
+            uint8_t options;
+            int16_t zone;
+            if (it.len != CLOCK_PAYLOAD_LEN) fail("clock message is not its settings, as the UI writes it");
+            else if (!clock_payload_read(it.pay, it.len, &options, &zone)) fail("clock settings the device would skip");
             break;
+        }
         case MSG_HW_ADC:
             if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
             else if (it.pay[0] >= ADC_CHANNELS) fail("ADC channel is not below ADC_CHANNELS");

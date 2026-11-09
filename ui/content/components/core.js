@@ -88,5 +88,10 @@ function receiveTelemetry(text) {
     if (name === 'sig') {
         const [id, output, value] = values.map(Number);
         (mainElements()['n' + id] ?? partNodes.get(id))?.signal?.(output, value);
+    } else if (name === 'clock') {
+        // Internet time for the device's clock: "off", "offline", "waiting" or "synced".
+        uiClock.syncStatus = values[0] ?? null;
+        const status = document.querySelector('#settings .clock-sync');
+        if (status && selected instanceof uiClock) status.textContent = selected.syncText();
     }
 }

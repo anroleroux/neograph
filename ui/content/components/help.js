@@ -119,7 +119,8 @@ const NODE_HELP = {
     ],
     clock: [
         "The device's clock: the time of day as three numbers, Hour (0 to 23), Minute and Second (0 to 59), each a whole number. Pick the one the next wire leaves from in Wire from. Compare an hour with a threshold to switch a light on in the evening; wire Second into a servo to sweep it each minute (it takes an hour as a fraction of 24, a minute or second of 60).",
-        "Set the time with Hours, Minutes and Seconds, or Set to this computer's time: it is set on the device at once, not saved with the graph. The device has one clock, so every clock node shows the same time. It has no battery: after power-up it counts from 00:00:00 until you set it.",
+        "Set the time with Hours, Minutes and Seconds, or Set to this computer's time: it is set on the device at once, not saved with the graph. The device has one clock, so every clock node shows the same time and has the same settings. It has no battery: after power-up it counts from 00:00:00 until it is set.",
+        "Internet time (on by default) sets the clock from an internet time server when the device starts up, and when you save with it newly on, if the device is on a WiFi network with internet. Time zone turns that into your time: +2 is UTC+2; 5:30 or -3.5 work too. Daylight saving isn't followed: change the zone when the clocks change.",
     ],
     sine: [
         "A smooth wave, a number: its offset plus its amplitude times the sine of the time, going round once each period. With offset 0.5 and amplitude 0.5 it swings from 0 to 1, which sweeps a servo or PWM from end to end, or breathes NeoPixels.",

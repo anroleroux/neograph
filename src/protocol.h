@@ -222,15 +222,24 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ENCODER_WRAP            0x08
 #define ENCODER_STEPS_MAX       1000
 
-/* Clock (MSG_HW_CLOCK): no payload; the device has one clock, a time of day, which every
-   clock node reads. Three outputs, each a whole number: its hour (0, 0 to 23), its minute
-   (1) and its second (2), 0 to 59; on the device they drive outputs from 0 to CLOCK_HOURS,
-   CLOCK_MINUTES and CLOCK_SECONDS. A command (PKT_COMMAND) from a clock sets the clock:
-   CLOCK_SET_LEN bytes, the hour, minute and second, now. */
+/* Clock (MSG_HW_CLOCK): the device has one clock, a time of day, which every clock node
+   reads. Three outputs, each a whole number: its hour (0, 0 to 23), its minute (1) and its
+   second (2), 0 to 59; on the device they drive outputs from 0 to CLOCK_HOURS,
+   CLOCK_MINUTES and CLOCK_SECONDS. Its payload, CLOCK_PAYLOAD_LEN bytes (or none, saved
+   before it had settings: internet time off, UTC): byte 0 options, CLOCK_SYNC: set the
+   clock from an internet time server; bytes 1-2 its time zone, minutes ahead of UTC, a
+   signed 16-bit big-endian number from CLOCK_ZONE_MIN to CLOCK_ZONE_MAX, a multiple of
+   CLOCK_ZONE_STEP. The first clock in a config sets the device's. A command (PKT_COMMAND)
+   from a clock sets the clock: CLOCK_SET_LEN bytes, the hour, minute and second, now. */
 #define CLOCK_HOURS             24
 #define CLOCK_MINUTES           60
 #define CLOCK_SECONDS           60
 #define CLOCK_SET_LEN           3
+#define CLOCK_PAYLOAD_LEN       3
+#define CLOCK_SYNC              0x01    /* options bit 0: internet time */
+#define CLOCK_ZONE_MIN          (-720)  /* UTC-12 */
+#define CLOCK_ZONE_MAX          840     /* UTC+14 */
+#define CLOCK_ZONE_STEP         15      /* minutes: zones such as UTC+5:45 */
 
 /* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
    (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
@@ -328,6 +337,20 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define NEOPIXEL_BAR_COLUMN     0x01    /* a bar up an array's column; across a circle's rings, from the centre out */
 
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
+
+/* Read a clock's payload: its options (CLOCK_SYNC) and its time zone, minutes ahead of
+   UTC. Returns 0 if it is not one the device runs; none is internet time off, UTC. */
+static inline int clock_payload_read(const uint8_t *pay, uint8_t len, uint8_t *options, int16_t *zone) {
+    *options = 0;
+    *zone = 0;
+    if (len == 0) return 1;
+    if (len != CLOCK_PAYLOAD_LEN || (pay[0] & ~CLOCK_SYNC)) return 0;
+    int16_t z = (int16_t)(uint16_t)(pay[1] << 8 | pay[2]);
+    if (z < CLOCK_ZONE_MIN || z > CLOCK_ZONE_MAX || z % CLOCK_ZONE_STEP) return 0;
+    *options = pay[0];
+    *zone = z;
+    return 1;
+}
 
 /* Whether a rotary encoder payload is one the device runs: its length, its A and B on
    usable pins, its switch on one or ENCODER_NO_BUTTON, the three apart, known options

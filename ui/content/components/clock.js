@@ -2,10 +2,17 @@
 // second (0 to 59), each a whole number. The device has one clock, which every clock
 // node reads; setting the time on any of them sets it, at once, with a command
 // (PROTOCOL.md, "Clocks"), not in the saved graph. It starts at 00:00:00 when the device
-// powers up. While the device reports it, the node shows the device's time; otherwise
+// powers up. With Internet time on, the device sets it from an internet time server at
+// startup, and when a save turns it on, if it is on a network; its time zone turns that
+// (UTC) into the time where you are. The clock's settings are the device's: every clock
+// node has the same. While the device reports the time, the node shows it; otherwise
 // the browser keeps its own, from the computer's time or the time last set, so a graph
 // can be tried without a device.
 class uiClock extends uiComponents {
+    // What the device last said about internet time ("clock <status>" telemetry):
+    // "off", "offline", "waiting" or "synced"; null before it has.
+    static syncStatus = null;
+
     constructor(x = 0, y = 0) {
         super("clock", x, y);
         this.label = "Clock";
@@ -20,6 +27,10 @@ class uiClock extends uiComponents {
         this.actDir = "outputs";
         this.actNum = 0;            // the output the next wire leaves from
         this.shown = false;         // a tile in the Command view
+        // The device's clock's settings, as the other clock nodes have them.
+        const first = uiClock.others(this)[0];
+        this.sync = first?.sync ?? true;        // internet time
+        this.zone = first?.zone ?? 120;         // minutes ahead of UTC: UTC+2
 
         // The browser's clock: `ms` from midnight at performance.now() `at`.
         this.base = { ms: uiClock.computerMs(), at: performance.now() };
@@ -57,6 +68,31 @@ class uiClock extends uiComponents {
     }
 
     static DAY_MS = 86400000;
+
+    // The graph's other clock nodes.
+    static others(node) {
+        return Object.values(mainElements()).filter(e => e instanceof uiClock && e !== node);
+    }
+
+    // A time zone as typed: hours ahead of UTC, "2", "+2", "-3.5", "5:30" or "UTC+5:45".
+    // Minutes ahead of UTC, from CLOCK_ZONE_MIN to CLOCK_ZONE_MAX in CLOCK_ZONE_STEP
+    // steps; null if it isn't one.
+    static parseZone(v) {
+        const m = /^\s*(?:UTC|GMT)?\s*([+-]?)\s*(\d{1,2})(?:(?::(\d{2}))|(\.\d+))?\s*$/i.exec(String(v));
+        if (!m) return null;
+        const minutes = Number(m[2]) * 60 + (m[3] !== undefined ? Number(m[3]) : m[4] ? Math.round(Number(m[4]) * 60) : 0);
+        const zone = m[1] === '-' ? -minutes : minutes;
+        if ((m[3] !== undefined && Number(m[3]) >= 60) || zone < CLOCK_ZONE_MIN || zone > CLOCK_ZONE_MAX
+            || zone % CLOCK_ZONE_STEP) return null;
+        return zone;
+    }
+
+    // A time zone as shown: "UTC+2", "UTC-3:30", "UTC".
+    static zoneText(zone) {
+        if (!zone) return 'UTC';
+        const a = Math.abs(zone), m = a % 60;
+        return `UTC${zone < 0 ? '-' : '+'}${Math.floor(a / 60)}${m ? ':' + String(m).padStart(2, '0') : ''}`;
+    }
 
     // Whether the device has reported its clock lately (it reports each second).
     fromDevice() {
@@ -137,6 +173,37 @@ class uiClock extends uiComponents {
         return this.setTime(Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60);
     }
 
+    // Internet time on or off, on every clock node: the device's clock has one setting.
+    // It takes effect when the graph is saved.
+    setSync(on) {
+        for (const c of [this, ...uiClock.others(this)]) c.sync = !!on;
+    }
+
+    // The time zone, as typed (see parseZone), on every clock node. The clock moves with
+    // it, in the browser now and on the device when the graph is saved: 14:00 at UTC+2 is
+    // 13:00 at UTC+1.
+    setZone(v) {
+        const zone = uiClock.parseZone(v);
+        if (zone === null) return false;
+        const shift = (zone - this.zone) * 60000;
+        for (const c of [this, ...uiClock.others(this)]) {
+            c.zone = zone;
+            c.base.ms = ((c.base.ms + shift) % uiClock.DAY_MS + uiClock.DAY_MS) % uiClock.DAY_MS;
+            c.tick();
+        }
+    }
+
+    // What internet time is doing, in words.
+    syncText() {
+        if (!this.sync) return 'Internet time is off: set the clock here.';
+        switch (uiClock.syncStatus) {
+            case 'synced': return 'Set from the internet at startup.';
+            case 'waiting': return 'Asking the internet time server…';
+            case 'offline': return 'The device isn\'t on a network with internet (it is its own access point, or didn\'t join one): set the clock here.';
+            default: return 'Once saved, the device sets its clock from the internet at startup, when it is on a network.';
+        }
+    }
+
     setWireOutput(output) {
         if (![0, 1, 2].includes(output)) return false;
         this.actNum = output;
@@ -149,9 +216,17 @@ class uiClock extends uiComponents {
         const again = () => this.createSettings();
         const note = document.createElement('p');
         note.className = 'setting-note';
-        note.textContent = 'The device\'s clock: every clock node shows the same time. It starts at 00:00:00 '
-            + 'when the device powers up; setting it here sets it on the device at once.';
+        note.textContent = 'The device\'s clock: every clock node shows the same time, and has the same settings. '
+            + 'Setting the time here sets it on the device at once.';
         settings.appendChild(note);
+        settings.appendChild(choiceSetting('Internet time', {on: 'On', off: 'Off'},
+            () => this.sync ? 'on' : 'off', (v) => { this.setSync(v === 'on'); again(); }));
+        settings.appendChild(editableSetting('Time zone', () => uiClock.zoneText(this.zone),
+            (v) => this.setZone(v) ?? again()));
+        const status = document.createElement('p');
+        status.className = 'setting-note clock-sync';
+        status.textContent = this.syncText();
+        settings.appendChild(status);
         [['Hours', CLOCK_HOURS], ['Minutes', CLOCK_MINUTES], ['Seconds', CLOCK_SECONDS]].forEach(([label, top], k) =>
             settings.appendChild(editableSetting(label, () => String(this.now()[k]),
                 (v) => this.setPart(k, v) ?? again(), {type: 'number', min: 0, max: top - 1, step: 1})));
@@ -181,9 +256,34 @@ class uiClock extends uiComponents {
         commandInterface.appendChild(control);
     }
 
-    // No payload: the time is the device's, set with a command.
+    // Its settings: internet time and the time zone. The time itself is set with a command.
     marshal() {
-        return [this.tc, this.shown ? MSG_FLAG_SHOWN : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 0x00];
+        const zone = this.zone & 0xFFFF;
+        return [this.tc, this.shown ? MSG_FLAG_SHOWN : 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, CLOCK_PAYLOAD_LEN,
+            this.sync ? CLOCK_SYNC : 0, (zone >> 8) & 0xFF, zone & 0xFF];
+    }
+
+    // From a saved payload: none (saved before clocks had settings) is internet time off,
+    // UTC; one the device wouldn't run keeps the defaults.
+    restore(pay, r, len) {
+        if (len === 0) {
+            this.sync = false;
+            this.zone = 0;
+            return;
+        }
+        const zone = ((pay[1] << 8 | pay[2]) << 16) >> 16;
+        if (len !== CLOCK_PAYLOAD_LEN || pay[0] & ~CLOCK_SYNC || zone < CLOCK_ZONE_MIN || zone > CLOCK_ZONE_MAX
+            || zone % CLOCK_ZONE_STEP) return;
+        this.sync = !!(pay[0] & CLOCK_SYNC);
+        this.zone = zone;
+    }
+
+    // Once the graph is restored: the device's clock takes the first clock's settings, so
+    // every clock node shows them.
+    restored() {
+        const first = Object.values(mainElements()).find(e => e instanceof uiClock);
+        if (first !== this) return;
+        for (const c of uiClock.others(this)) [c.sync, c.zone] = [this.sync, this.zone];
     }
 
     remove() {
