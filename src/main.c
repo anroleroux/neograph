@@ -14,6 +14,7 @@
 #include "tcpserver.h"
 #include "websockets.h"
 #include "config.h"
+#include "timesync.h"
 #include "hwman.h"
 #include "keyboard.h"
 #include "protocol.h"
@@ -60,6 +61,16 @@ static void report_signals(tcpserver *state) {
         snprintf(text, sizeof text, "sig %u %u %.4g", p->signals[i].id, p->signals[i].output, (double)value);
         send_to_clients(state, text);
     }
+
+    // Internet time for the clock: "clock <status>", when it changes and with the refresh.
+    static const char *reported_sync = NULL;
+    const char *sync = timesync_status();
+    if (sync && (refresh || fresh || sync != reported_sync)) {
+        char text[24];
+        snprintf(text, sizeof text, "clock %s", sync);
+        send_to_clients(state, text);
+    }
+    reported_sync = sync;
 }
 
 int main() {
@@ -128,6 +139,7 @@ int main() {
         // and signals are reported several times a second. While a keystroke is
         // being typed, 1 ms: the PC takes a key down or up each millisecond.
         bool typing = keyboard_task();
+        timesync_task();
         cyw43_arch_wait_for_work_until(make_timeout_time_ms(typing ? 1 : 10));
 
         // Each message from core 1 is a tag and a value (PROTOCOL.md, "Core 1 →

@@ -1,11 +1,12 @@
 # Check that src/protocol.h and ui/content/protocol.js define the same PKT_, MSG_,
 # FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_, KEYBOARD_, CORE_,
-# LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_ and SUB_
+# LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_, ENCODER_, SINE_, CLOCK_ and SUB_
 # constants with the same values.
 #
 #   awk -f make/check-constants.awk src/protocol.h ui/content/protocol.js
 
 function num(s,    i, c, v) {
+    gsub(/[()]/, "", s)                 # a negative one is bracketed in C: (-720)
     if (s !~ /^0[xX]/) return s + 0
     v = 0
     for (i = 3; i <= length(s); i++) {
@@ -17,9 +18,9 @@ function num(s,    i, c, v) {
 
 FNR == 1 { file++ }
 
-file == 1 && /^#define (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LOGIC|COMPARE|DELAY|SCALE|COUNTER|STEPPER|SERVO|NEOPIXEL|DS18B20|SUB)_[A-Z0-9_]+[ \t]/ { c[$2] = num($3) }
+file == 1 && /^#define (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LOGIC|COMPARE|DELAY|SCALE|COUNTER|STEPPER|SERVO|NEOPIXEL|DS18B20|ENCODER|SINE|CLOCK|SUB)_[A-Z0-9_]+[ \t]/ { c[$2] = num($3) }
 
-file == 2 && /^const (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LOGIC|COMPARE|DELAY|SCALE|COUNTER|STEPPER|SERVO|NEOPIXEL|DS18B20|SUB)_[A-Z0-9_]+[ \t]*=/ {
+file == 2 && /^const (PKT|MSG|FIELD|NET_OPT|NET_LEASE|PWM|SLIDER|BUTTON|VALUE|PIN|ADC|GPI|KEYBOARD|CORE|LOGIC|COMPARE|DELAY|SCALE|COUNTER|STEPPER|SERVO|NEOPIXEL|DS18B20|ENCODER|SINE|CLOCK|SUB)_[A-Z0-9_]+[ \t]*=/ {
     line = $0
     sub(/^const /, "", line); sub(/;.*/, "", line)
     split(line, kv, /[ \t]*=[ \t]*/)

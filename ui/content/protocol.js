@@ -22,7 +22,8 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 // sources had several outputs.
 const MSG_FLAG_OUTPUT        = 0x01;
 
-// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20) or
+// Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
+// rotary encoder, clock) or
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
@@ -61,6 +62,8 @@ const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
 const MSG_HW_DS18B20         = 0x33;  // a DS18B20 temperature sensor on a 1-Wire pin; two outputs
+const MSG_HW_ENCODER         = 0x34;  // a rotary encoder and its push switch; two outputs
+const MSG_HW_CLOCK           = 0x35;  // the device's clock, a time of day: hour, minute, second
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -78,7 +81,8 @@ const MSG_LOGIC_BLINK        = 0x49;  // on and off in turn while its input is o
 const MSG_LOGIC_TOGGLE       = 0x4A;  // turns over each time its input goes on
 const MSG_LOGIC_LATCH        = 0x4B;  // on once set, off once reset; reset wins
 const MSG_LOGIC_COUNTER      = 0x4C;  // counts its input going on, up to a preset; two outputs
-const MSG_LOGIC_LAST         = 0x4C;  // the last logic type: MSG_LOGIC_COUNTER
+const MSG_LOGIC_SINE         = 0x4D;  // floating: a sine wave, while its input is on
+const MSG_LOGIC_LAST         = 0x4D;  // the last logic type: MSG_LOGIC_SINE
 
 // Blocks (subroutines): see src/protocol.h.
 const MSG_SUB                = 0x60;  // a copy of a block
@@ -149,6 +153,34 @@ const DS18B20_RES_12         = 0x03;  // 0.0625 °C, 750 ms
 const DS18B20_PULLUP         = 0x04;
 const DS18B20_FULL           = 100;   // °C: its full scale, for an output that takes a fraction
 
+// Rotary encoder (MSG_HW_ENCODER) payload: the GPIO of its A (CLK), B (DT) and push
+// switch (SW, or ENCODER_NO_BUTTON), its options, then its steps (2 bytes, BE). Options:
+// bits 0-1 its transitions a click (ENCODER_DETENT_), bit 2 it counts the other way,
+// bit 3 it wraps past its ends. Outputs: its position, 0 to its steps (0), pressed (1).
+const ENCODER_PAYLOAD_LEN    = 6;
+const ENCODER_NO_BUTTON      = 0xFF;
+const ENCODER_DETENT_MASK    = 0x03;
+const ENCODER_DETENT_4       = 0x00;  // a whole cycle of its pins a click: most encoders, a KY-040
+const ENCODER_DETENT_2       = 0x01;  // half a cycle a click
+const ENCODER_DETENT_1       = 0x02;  // each change of a pin; or an encoder without clicks
+const ENCODER_REVERSE        = 0x04;
+const ENCODER_WRAP           = 0x08;
+const ENCODER_STEPS_MAX      = 1000;
+
+// Clock (MSG_HW_CLOCK): the device has one clock, which every clock node reads. Outputs:
+// its hour (0), minute (1) and second (2), whole numbers. Its payload: options
+// (CLOCK_SYNC: internet time), then its time zone, minutes ahead of UTC, int16 BE. A
+// command from a clock sets it: CLOCK_SET_LEN bytes, the hour, minute and second.
+const CLOCK_HOURS            = 24;
+const CLOCK_MINUTES          = 60;
+const CLOCK_SECONDS          = 60;
+const CLOCK_SET_LEN          = 3;
+const CLOCK_PAYLOAD_LEN      = 3;
+const CLOCK_SYNC             = 0x01;  // options bit 0: internet time
+const CLOCK_ZONE_MIN         = -720;  // UTC-12
+const CLOCK_ZONE_MAX         = 840;   // UTC+14
+const CLOCK_ZONE_STEP        = 15;    // minutes: zones such as UTC+5:45
+
 // ADC input (MSG_HW_ADC) payload byte 0: the channel, 0 to ADC_CHANNELS - 1, on GPIO
 // ADC_PIN_FIRST + channel. ADC3, on GPIO 29, is the WiFi chip's clock on the Pico 2 W.
 const ADC_CHANNELS           = 3;
@@ -162,6 +194,7 @@ const LOGIC_INPUTS_MAX       = 4;
 const DELAY_MAX_MS           = 86400000;  // a day
 const SCALE_CLAMP            = 0x01;  // options bit 0: keep the output within its range
 const COUNTER_MAX            = 1000000;  // the highest preset
+const SINE_PERIOD_MIN_MS     = 20;    // a sine's shortest period: two scans
 
 // Core temperature: on the device it drives outputs from 0 °C (0) to CORE_TEMP_FULL °C (1).
 const CORE_TEMP_FULL         = 100;

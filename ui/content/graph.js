@@ -162,6 +162,8 @@ const NODE_CLASSES = {
     [MSG_HW_CORE]: uiCore,
     [MSG_HW_ADC]: uiADC,
     [MSG_HW_DS18B20]: uiDS18B20,
+    [MSG_HW_ENCODER]: uiEncoder,
+    [MSG_HW_CLOCK]: uiClock,
     [MSG_HW_GPI]: uiGPI,
     [MSG_HW_KEYBOARD]: uiKeyboard,
     [MSG_LOGIC_COMPARE]: uiCompare,
@@ -174,6 +176,7 @@ const NODE_CLASSES = {
     [MSG_LOGIC_MAX]: uiMax,
     [MSG_LOGIC_PULSE]: uiPulse,
     [MSG_LOGIC_BLINK]: uiBlink,
+    [MSG_LOGIC_SINE]: uiSine,
     [MSG_LOGIC_TOGGLE]: uiToggle,
     [MSG_LOGIC_LATCH]: uiLatch,
     [MSG_LOGIC_COUNTER]: uiCounter,
@@ -302,7 +305,7 @@ function buildGraph(msgs) {
             elm.x = int16(layout.pay[0], layout.pay[1]);
             elm.y = int16(layout.pay[2], layout.pay[3]);
         } else {
-            const side = !elm.inputs.length ? 'inputs' : !elm.outputs.length ? 'outputs' : 'logic';
+            const side = !elm.inputs.length ? 'inputs' : !elm.outputs.length || elm.tc & MSG_HW_BIT ? 'outputs' : 'logic';
             elm.x = { inputs: -200, logic: -25, outputs: 150 }[side];
             elm.y = -100 + 100 * stacked[side]++;
         }
@@ -332,7 +335,7 @@ function buildGraph(msgs) {
             elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
-        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI, MSG_HW_DS18B20].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
+        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI, MSG_HW_DS18B20, MSG_HW_ENCODER, MSG_HW_CLOCK].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
         // Logic with settings takes them from after its source reference (an invalid payload keeps the
         // defaults); a block takes its definition.
         if (elm.restore) elm.restore(m.pay, r, m.len);
@@ -397,10 +400,14 @@ function buildGraph(msgs) {
             // An AND, OR, min or max has a reference for each wire in; the others one.
             const r = refLen(m);
             const several = [MSG_LOGIC_AND, MSG_LOGIC_OR, MSG_LOGIC_MIN, MSG_LOGIC_MAX].includes(m.type);
-            // NeoPixels have two: their value's, then their on/off's (wireRefs).
+            // NeoPixels have two: their value's, then their on/off's (wireRefs); and maybe
+            // a third after their settings, their data line in (dataRefAt).
             const refs = several ? Math.floor(m.len / r) : elm.wireRefs ?? 1;
-            for (let k = 0; k < refs; k++) {
-                const ref = refAt(m, k * r);
+            const at = [...Array(refs).keys()].map(k => k * r);
+            const data = elm.dataRefAt?.(m);
+            if (data != null) at.push(data);
+            for (const i of at) {
+                const ref = refAt(m, i);
                 // None if the types don't match, or (in a config not saved by the UI) it would close
                 // a loop through nothing that holds a state.
                 restoreWire(ref, () => createEdge(ref.node.name, elm.name, ref.output));
@@ -408,6 +415,8 @@ function buildGraph(msgs) {
         }
     }
     feedback.forEach(draw => draw());
+    // Anything a node settles once its wires are in (NeoPixels' chains: see restored).
+    Object.values(elements).forEach(elm => elm.restored?.());
 
     const angle = (hi, lo) => (hi << 8 | lo) / 65536 * 2 * Math.PI;
     for (const [id, m] of controls) {

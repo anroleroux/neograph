@@ -5,7 +5,16 @@
 // from a start to an end); and an on/off, which turns every LED off while it is off
 // (not wired, it is always on). The device drives them; the browser only shows a
 // preview in the settings.
+//
+// NeoPixel nodes chain on their data lines: a third wire in, from another NeoPixel
+// node's Data output. Each node of a chain draws its graphic over what the ones before
+// it drew, and the last, whose Data output goes nowhere, drives the LEDs. The nodes of
+// a chain share their LEDs' settings (pin, layout, size, wiring; see STRIP): changing
+// one changes them all.
 class uiNeoPixel extends uiComponents {
+    // The settings of the LEDs themselves, which a chain shares.
+    static STRIP = ['pin', 'layout', 'rows', 'cols', 'zigzag', 'rings', 'ringLeds'];
+
     constructor(x = 0, y = 0) {
         super("neopixel", x, y);
 
@@ -20,9 +29,11 @@ class uiNeoPixel extends uiComponents {
                 max: 3
             }
         );
+        // Its data line out: to another NeoPixel node, which draws over this one.
+        this.outputs.push({ type: "pixels", name: "Data", conns: [] });
         this.actDir = "inputs";
         this.actNum = 0;
-        this.wireRefs = 2;                 // restoreGraph: its value's source, then its on/off's
+        this.wireRefs = 2;                 // restoreGraph: its value's source, then its on/off's; then dataRefAt
 
         this.pin = freePin(this, 16);      // 16, unless another node uses it
         this.layout = NEOPIXEL_ARRAY;
@@ -66,30 +77,94 @@ class uiNeoPixel extends uiComponents {
 
     // ── Its two wires ──
 
-    // The type of what a wire brings: "float" for its value, "bool" for on/off.
+    // The type of what a wire brings: "float" for its value, "bool" for on/off,
+    // "pixels" for a data line.
     static wireType(conn) {
         return conn.start.node.outputs[conn.start.output].type;
     }
 
     // A number or an on/off, from a source whose values reach the device. Not a
     // block's port that takes its type from its first wire: which input it would be
-    // is not known.
+    // is not known. Or a data line, from another NeoPixel node.
     takesType(source, output = source.actNum) {
         const out = source.outputs[output];
+        if (out?.type === 'pixels') return source instanceof uiNeoPixel && source !== this;
         return !!out && !out.browserOnly && !source.typeFromWire?.() && (out.type === 'float' || out.type === 'bool');
     }
 
-    // A wire in replaces the one of its type.
+    // A wire in replaces the one of its type; a data line out replaces the one it had.
+    // A new data line joins two chains: they take the LEDs' settings of the node that
+    // drives them, the last.
     addEdge(e) {
+        const data = uiNeoPixel.wireType(e) === 'pixels';
         if (e.end.node === this) {
             const type = uiNeoPixel.wireType(e);
             this.inConns().filter(c => uiNeoPixel.wireType(c) === type).forEach(c => c.remove());
+        } else if (data) {
+            this.outputs[0].conns.forEach(c => c.remove());
         }
         super.addEdge(e);
+        if (data && e.end.node === this) {
+            this.chainLast().shareStrip();
+            if (selected && selected instanceof uiNeoPixel) selected.createSettings();
+        }
+    }
+
+    // A data line taken out splits a chain: the node it came from now drives its own
+    // LEDs, on a pin of its own if another node has the one it had.
+    edgeRemoved(e) {
+        if (uiNeoPixel.wireType(e) === 'pixels') {
+            const last = e.start.node;
+            if (!last.removedNode && pinsInUse(last).has(last.pin)) {
+                last.pin = freePin(last, last.pin);
+                last.shareStrip();
+            }
+            if (selected instanceof uiNeoPixel && !selected.removedNode) selected.createSettings();
+        }
+        super.edgeRemoved(e);
+    }
+
+    // Taken out of the graph: its wires go first, and the chain it was in splits.
+    remove() {
+        this.removedNode = true;
+        super.remove();
     }
 
     valueConn() { return this.inConns().find(c => uiNeoPixel.wireType(c) === 'float'); }
     enableConn() { return this.inConns().find(c => uiNeoPixel.wireType(c) === 'bool'); }
+    dataConn() { return this.inConns().find(c => uiNeoPixel.wireType(c) === 'pixels'); }
+
+    // ── Its chain ──
+
+    // The node on its data line in, which it draws over; and the one on its data line
+    // out, which draws over it. Null if none.
+    under() { return this.dataConn()?.start.node ?? null; }
+    over() { return this.outputs[0].conns[0]?.end.node ?? null; }
+
+    // Its chain, from the first node to the last, which drives the LEDs.
+    chain() {
+        let first = this;
+        const seen = new Set([first]);
+        while (first.under() && !seen.has(first.under())) seen.add(first = first.under());
+        const nodes = [first];
+        while (nodes.at(-1).over() && !nodes.includes(nodes.at(-1).over())) nodes.push(nodes.at(-1).over());
+        return nodes;
+    }
+
+    chainLast() { return this.chain().at(-1); }
+
+    // Whether it drives the LEDs: its data line out goes nowhere.
+    drives() { return !this.over(); }
+
+    // Give the other nodes of its chain this one's LEDs' settings; each keeps its
+    // graphic where the LEDs have it.
+    shareStrip() {
+        for (const n of this.chain()) {
+            if (n === this) continue;
+            for (const key of uiNeoPixel.STRIP) n[key] = Array.isArray(this[key]) ? [...this[key]] : this[key];
+            n.keepPosition();
+        }
+    }
 
     // ── Its layout ──
 
@@ -135,12 +210,14 @@ class uiNeoPixel extends uiComponents {
         pin = parsePin(pin);
         if (pin === null) return false;
         this.pin = pin;
+        this.shareStrip();
     }
 
     setLayout(layout) {
         if (![NEOPIXEL_ARRAY, NEOPIXEL_CIRCLE, NEOPIXEL_DOUGHNUT].includes(layout)) return false;
         this.layout = layout;
         this.keepPosition();
+        this.shareStrip();
     }
 
     setRows(v) {
@@ -148,6 +225,7 @@ class uiNeoPixel extends uiComponents {
         if (v === null || v * this.cols > NEOPIXEL_LEDS_MAX) return false;
         this.rows = v;
         this.keepPosition();
+        this.shareStrip();
     }
 
     setCols(v) {
@@ -155,6 +233,7 @@ class uiNeoPixel extends uiComponents {
         if (v === null || v * this.rows > NEOPIXEL_LEDS_MAX) return false;
         this.cols = v;
         this.keepPosition();
+        this.shareStrip();
     }
 
     // A circle's rings, as a list of LED counts in wiring order: "24, 16, 12, 8, 1".
@@ -165,6 +244,7 @@ class uiNeoPixel extends uiComponents {
             || rings.reduce((a, b) => a + b, 0) > NEOPIXEL_LEDS_MAX) return false;
         this.rings = rings;
         this.keepPosition();
+        this.shareStrip();
     }
 
     setRingLeds(v) {
@@ -172,6 +252,13 @@ class uiNeoPixel extends uiComponents {
         if (v === null) return false;
         this.ringLeds = v;
         this.keepPosition();
+        this.shareStrip();
+    }
+
+    // An array's wiring: every other row running back (zigzag), or not.
+    setZigzag(zigzag) {
+        this.zigzag = !!zigzag;
+        this.shareStrip();
     }
 
     setBrightness(v) {
@@ -224,8 +311,9 @@ class uiNeoPixel extends uiComponents {
         return '#' + this[at1 ? 'colourAt1' : 'colour'].map(c => c.toString(16).padStart(2, '0')).join('');
     }
 
+    // Its pin, if it drives the LEDs: the others of its chain share the last's.
     usedPins() {
-        return [this.pin];
+        return this.drives() ? [this.pin] : [];
     }
 
     // ── What it shows: as src/neopixel.c works it out ──
@@ -350,31 +438,49 @@ class uiNeoPixel extends uiComponents {
         return leds;
     }
 
-    // Its colour at `fraction`, [r, g, b], scaled by an amount and its brightness.
-    colourAt(fraction, amount) {
-        const t = this.colourInput ? fraction : 0, k = amount * this.brightness / 255;
-        return this.colour.map((c, i) => Math.floor((c + (this.colourAt1[i] - c) * t) * k + 0.5));
+    // Its colour at `fraction`, [r, g, b] unrounded, scaled by its brightness.
+    colourAt(fraction) {
+        const t = this.colourInput ? fraction : 0, k = this.brightness / 255;
+        return this.colour.map((c, i) => (c + (this.colourAt1[i] - c) * t) * k);
     }
 
-    // Each LED's colour, [r, g, b], for its input at `fraction` of full scale; all off
-    // when not `on`.
-    render(fraction, on = true) {
-        const out = Array.from({length: this.leds()}, () => [0, 0, 0]);
+    // Each LED's colour, [r, g, b], for its input at `fraction` of full scale, drawn over
+    // `under` (what the nodes before it in a chain drew; by default all off), as
+    // neopixel_draw does: an LED it lights takes its colour, one it lights partly that
+    // much of the way from the colour under it. Not `on`, it draws nothing.
+    render(fraction, on = true, under = null) {
+        const out = under ? under.map(c => [...c]) : Array.from({length: this.leds()}, () => [0, 0, 0]);
         if (!on) return out;
         fraction = Math.max(0, Math.min(1, fraction));
+        const c = this.colourAt(fraction);
+        const light = (led, amount) => out[led] = out[led].map((u, i) => Math.floor(u + (c[i] - u) * amount + 0.5));
         if (this.graphic === NEOPIXEL_GFX_PATCH) {
-            const c = this.colourAt(fraction, 1);
-            this.patchLeds().forEach(led => out[led] = c);
+            this.patchLeds().forEach(led => light(led, 1));
             return out;
         }
         if (this.graphic === NEOPIXEL_GFX_POINT) {
-            this.pointLeds(fraction).forEach(([led, amount]) => out[led] = this.colourAt(fraction, amount));
+            this.pointLeds(fraction).forEach(([led, amount]) => light(led, amount));
             return out;
         }
         const steps = this.barSteps(), lit = fraction * steps;
         for (let e = 0; e < steps && lit > e; e++) {
-            const c = this.colourAt(fraction, Math.min(1, lit - e));
-            this.barLeds(e).forEach(i => out[i] = c);
+            const amount = Math.min(1, lit - e);
+            this.barLeds(e).forEach(i => light(i, amount));
+        }
+        return out;
+    }
+
+    // What its LEDs show in the preview: each node of its chain up to this one drawn
+    // over the one before, each at its own preview level, at full brightness (so a dim
+    // setting still shows).
+    previewColours() {
+        const chain = this.chain();
+        let out = null;
+        for (const n of chain.slice(0, chain.indexOf(this) + 1)) {
+            const brightness = n.brightness;
+            n.brightness = 255;
+            out = n.render(n.preview, true, out);
+            n.brightness = brightness;
         }
         return out;
     }
@@ -402,16 +508,13 @@ class uiNeoPixel extends uiComponents {
         return places;
     }
 
-    // An SVG of the LEDs at the preview level: off ones dim, lit ones in their colour.
-    // Brightness is left out, so a dim setting still shows.
+    // An SVG of the LEDs at the preview level: off ones dim, lit ones in their colour,
+    // over what the nodes before it in its chain show (see previewColours).
     previewSvg() {
         const places = this.ledPlaces(), xs = places.map(p => p[0]), ys = places.map(p => p[1]);
         const [x0, y0] = [Math.min(...xs) - 0.6, Math.min(...ys) - 0.6];
         const [w, h] = [Math.max(...xs) - x0 + 0.6, Math.max(...ys) - y0 + 0.6];
-        const brightness = this.brightness;
-        this.brightness = 255;
-        const colours = this.render(this.preview);
-        this.brightness = brightness;
+        const colours = this.previewColours();
         const dots = places.map(([x, y], i) => {
             const [r, g, b] = colours[i], on = r || g || b;
             return `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="0.4" fill="${on ? `rgb(${r},${g},${b})` : '#BFCDE726'}"><title>LED ${i + 1}</title></circle>`;
@@ -425,6 +528,16 @@ class uiNeoPixel extends uiComponents {
         super.createSettings();
         const settings = document.getElementById('settings');
         const again = () => this.createSettings();
+        const chain = this.chain();
+        if (chain.length > 1) {
+            const name = (n) => `${n.label} (${n.name})`, note = document.createElement('p');
+            note.className = 'setting-note';
+            const under = this.under(), last = chain.at(-1);
+            note.textContent = (under ? `Draws over ${name(under)}. ` : 'First in its chain: the others draw over it. ')
+                + (this.drives() ? 'It drives the LEDs.' : `${name(last)} drives the LEDs.`)
+                + ' Pin, layout and size are shared by the chain.';
+            settings.appendChild(note);
+        }
         settings.appendChild(pinSetting(this, () => this.pin, (pin) => this.setPin(pin)));
 
         settings.appendChild(choiceSetting('Layout',
@@ -435,7 +548,7 @@ class uiNeoPixel extends uiComponents {
             settings.appendChild(editableSetting('Rows', () => this.rows, (v) => this.setRows(v) ?? again(), count(255)));
             settings.appendChild(editableSetting('Columns', () => this.cols, (v) => this.setCols(v) ?? again(), count(255)));
             settings.appendChild(choiceSetting('Wiring', {rows: 'Row by row', zigzag: 'Zigzag'},
-                () => this.zigzag ? 'zigzag' : 'rows', (v) => { this.zigzag = v === 'zigzag'; again(); }));
+                () => this.zigzag ? 'zigzag' : 'rows', (v) => { this.setZigzag(v === 'zigzag'); again(); }));
         } else if (this.layout === NEOPIXEL_CIRCLE) {
             settings.appendChild(editableSetting('Rings (LEDs, as wired)', () => this.rings.join(', '),
                 (v) => this.setRings(v) ?? again()));
@@ -576,8 +689,30 @@ class uiNeoPixel extends uiComponents {
         const size = this.size(), gfx = this.graphicBytes();
         const pay = [...connRef(this.valueConn()), ...connRef(this.enableConn()),
             this.pin, this.layout, this.zigzag ? NEOPIXEL_ZIGZAG : 0, this.brightness,
-            size.length, ...size, this.graphic, gfx.length, ...gfx];
+            size.length, ...size, this.graphic, gfx.length, ...gfx,
+            ...(this.dataConn() ? connRef(this.dataConn()) : [])];
         return [this.tc, MSG_FLAG_OUTPUT, (this.id >> 8) & 0xFF, this.id & 0xFF, pay.length, ...pay];
+    }
+
+    // Where its data line in's reference is in a saved message, after its graphic; null
+    // if it has none.
+    dataRefAt(m) {
+        const r = refLen(m), at = 2 * r;
+        if (m.len < at + 5) return null;
+        const k = m.pay[at + 4];
+        if (m.len < at + 7 + k) return null;
+        const end = at + 7 + k + m.pay[at + 6 + k];
+        return m.len === end + r ? end : null;
+    }
+
+    // Once the graph is restored: of two chains saved on one pin, the later one's last
+    // node takes a free pin, as it would have drawn one.
+    restored() {
+        if (!this.drives()) return;
+        const tails = Object.values(elements).filter(e => e instanceof uiNeoPixel && e.drives());
+        const earlier = tails.slice(0, tails.indexOf(this));
+        if (earlier.some(e => e.pin === this.pin)) this.pin = freePin(this, this.pin);
+        this.shareStrip();
     }
 
     // Its settings, after its two source references (r is one's length). One the
@@ -587,7 +722,8 @@ class uiNeoPixel extends uiComponents {
         const at = 2 * r, q = (i) => pay[at + i];
         if (len < at + 5) return;
         const k = q(4);
-        if (k < 1 || k > NEOPIXEL_RINGS_MAX || len < at + 7 + k || len !== at + 7 + k + q(6 + k)) return;
+        const end = at + 7 + k + q(6 + k);
+        if (k < 1 || k > NEOPIXEL_RINGS_MAX || len < at + 7 + k || (len !== end && len !== end + r)) return;
         const [pin, layout, options, brightness] = [0, 1, 2, 3].map(q);
         const size = [...Array(k).keys()].map(i => q(5 + i));
         const graphic = q(5 + k), g = (i) => q(7 + k + i);
@@ -629,7 +765,10 @@ class uiNeoPixel extends uiComponents {
             this.along = g(0);
             this.position = g(1);
         }
-        if (pinUsable(pin) && !pinsInUse(this).has(pin)) this.pin = pin;
+        // A chain's nodes share a pin: only another kind of node's pin is taken (see restored).
+        const others = new Set(Object.values(elements).filter(e => e !== this && !(e instanceof uiNeoPixel))
+            .flatMap(e => e.usedPins()));
+        if (pinUsable(pin) && !others.has(pin)) this.pin = pin;
         this.zigzag = !!(options & NEOPIXEL_ZIGZAG);
         this.brightness = brightness;
         this.graphic = graphic;

@@ -61,6 +61,15 @@
 #define LWIP_DHCP_DOES_ACD_CHECK    0
 #define MBEDTLS_SHA1_C
 
+// Internet time for the clock (src/timesync.c): lwIP's SNTP client looks its server up
+// by name, asks at once, and hands the answer to timesync_got. It takes a timeout of
+// its own.
+#define SNTP_SERVER_DNS             1
+#define SNTP_STARTUP_DELAY          0
+void timesync_got(unsigned long unix_s);
+#define SNTP_SET_SYSTEM_TIME(sec)   timesync_got(sec)
+#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 1)
+
 #ifndef NDEBUG
 #define LWIP_DEBUG                  1
 #define LWIP_STATS                  1

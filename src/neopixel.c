@@ -48,48 +48,60 @@ static uint16_t bar_steps(const neopixel_payload *px) {
     }
 }
 
-// Its colour for its input at `fraction`: the one colour, or with
-// NEOPIXEL_GFX_COLOUR_INPUT from its colour at 0 to its colour at 1. Scaled by an
-// amount, 0 to 1, and the node's brightness; as a WS2812 takes it.
-static uint32_t colour(const neopixel_payload *px, float fraction, float amount) {
+// Its colour for its input at `fraction`, red, green and blue, 0 to 255: the one
+// colour, or with NEOPIXEL_GFX_COLOUR_INPUT from its colour at 0 to its colour at 1;
+// scaled by the node's brightness.
+typedef struct { float rgb[3]; } shade;
+
+static shade colour(const neopixel_payload *px, float fraction) {
     float t = px->gfx_options & NEOPIXEL_GFX_COLOUR_INPUT ? fraction : 0;
-    float k = amount * px->brightness / 255.0f;
-    uint32_t c[3];
+    float k = px->brightness / 255.0f;
+    shade c;
     for (int i = 0; i < 3; i++) {
         float v = px->colour[0][i] + ((float)px->colour[1][i] - px->colour[0][i]) * t;
-        c[i] = (uint32_t)(v * k + 0.5f);
+        c.rgb[i] = v * k;
     }
-    return c[1] << 24 | c[0] << 16 | c[2] << 8;
+    return c;
 }
 
-// Light step `e` of a bar, from the start of the bar.
-static void bar_light(const neopixel_payload *px, uint16_t e, uint32_t c, uint32_t *out) {
+// Light LED i in colour c, `amount` (0 to 1) of the way from the colour under it, which
+// an earlier node of a chain drew (or off): all the way at 1. As a WS2812 takes it.
+static void light(uint32_t *out, uint16_t i, shade c, float amount) {
+    uint32_t was = out[i];
+    const float under[3] = { (float)(was >> 16 & 0xFF), (float)(was >> 24 & 0xFF), (float)(was >> 8 & 0xFF) };
+    uint32_t v[3];
+    for (int k = 0; k < 3; k++) v[k] = (uint32_t)(under[k] + (c.rgb[k] - under[k]) * amount + 0.5f);
+    out[i] = v[1] << 24 | v[0] << 16 | v[2] << 8;
+}
+
+// Light step `e` of a bar, from the start of the bar, `amount` of the way.
+static void bar_light(const neopixel_payload *px, uint16_t e, shade c, float amount, uint32_t *out) {
     bool reverse = px->gfx_options & NEOPIXEL_GFX_REVERSE;
     uint16_t steps = bar_steps(px);
     uint16_t s = reverse ? (uint16_t)(steps - 1 - e) : e;
     switch (px->layout) {
     case NEOPIXEL_ARRAY:
         // Along a row from the left; up a column from the bottom.
-        if (px->along == NEOPIXEL_BAR_ROW) out[neopixel_array_led(px, px->position, (uint8_t)s)] = c;
-        else out[neopixel_array_led(px, (uint8_t)(steps - 1 - s), px->position)] = c;
+        if (px->along == NEOPIXEL_BAR_ROW) light(out, neopixel_array_led(px, px->position, (uint8_t)s), c, amount);
+        else light(out, neopixel_array_led(px, (uint8_t)(steps - 1 - s), px->position), c, amount);
         break;
     case NEOPIXEL_CIRCLE:
         if (px->along == NEOPIXEL_BAR_ROW) {
             // Around the ring from its first LED, as a doughnut.
             uint16_t n = px->size[px->position];
-            out[ring_first(px, px->position) + (reverse ? n - e : e) % n] = c;
+            light(out, (uint16_t)(ring_first(px, px->position) + (reverse ? n - e : e) % n), c, amount);
         } else {
             uint8_t order[NEOPIXEL_RINGS_MAX];
             rings_outwards(px, order);
             uint8_t ring = order[s];
             uint16_t first = ring_first(px, ring);
-            for (uint16_t i = 0; i < px->size[ring]; i++) out[first + i] = c;
+            for (uint16_t i = 0; i < px->size[ring]; i++) light(out, (uint16_t)(first + i), c, amount);
         }
         break;
     default: {
         // Around from its first LED, in wiring order; reversed, the other way round.
         uint16_t n = px->size[0];
-        out[(px->position + (reverse ? n - e : e)) % n] = c;
+        light(out, (uint16_t)((px->position + (reverse ? n - e : e)) % n), c, amount);
         break;
     }
     }
@@ -162,12 +174,13 @@ uint16_t neopixel_point_steps(const neopixel_payload *px) {
 }
 
 // A point: the two LEDs on its path either side of where it is, each lit as much as it
-// is near it; on one of them, that one. Its path is neopixel_point_steps steps, each
+// is near it (over what is under it); on one of them, that one. Its path is neopixel_point_steps steps, each
 // from one LED (neopixel_point_led) to the next.
 static void point_light(const neopixel_payload *px, float fraction, uint32_t *out) {
     uint16_t steps = neopixel_point_steps(px);
+    shade c = colour(px, fraction);
     if (steps == 0) {
-        out[neopixel_point_led(px, fraction)] = colour(px, fraction, 1);
+        light(out, neopixel_point_led(px, fraction), c, 1);
         return;
     }
     float at = fraction * steps;
@@ -176,11 +189,11 @@ static void point_light(const neopixel_payload *px, float fraction, uint32_t *ou
     float near = at - i;                    // 0 on LED a, 1 on LED b
     uint16_t a = neopixel_point_led(px, (float)i / steps), b = neopixel_point_led(px, (float)(i + 1) / steps);
     if (a == b) {
-        out[a] = colour(px, fraction, 1);
+        light(out, a, c, 1);
         return;
     }
-    out[a] = colour(px, fraction, 1 - near);
-    out[b] = colour(px, fraction, near);
+    light(out, a, c, 1 - near);
+    light(out, b, c, near);
 }
 
 void neopixel_patch_span(const neopixel_payload *px, uint8_t ring, uint8_t *start, uint8_t *more) {
@@ -202,12 +215,12 @@ void neopixel_patch_span(const neopixel_payload *px, uint8_t ring, uint8_t *star
 // from its start ring to its end ring, the LEDs from the one nearest its start angle
 // round to the one nearest its end angle.
 static void patch_light(const neopixel_payload *px, float fraction, uint32_t *out) {
-    uint32_t c = colour(px, fraction, 1);
+    shade c = colour(px, fraction);
     if (px->layout == NEOPIXEL_ARRAY) {
         uint8_t r0 = px->from[0] < px->to[0] ? px->from[0] : px->to[0], r1 = px->from[0] ^ px->to[0] ^ r0;
         uint8_t c0 = px->from[1] < px->to[1] ? px->from[1] : px->to[1], c1 = px->from[1] ^ px->to[1] ^ c0;
         for (uint16_t r = r0; r <= r1; r++)
-            for (uint16_t col = c0; col <= c1; col++) out[neopixel_array_led(px, (uint8_t)r, (uint8_t)col)] = c;
+            for (uint16_t col = c0; col <= c1; col++) light(out, neopixel_array_led(px, (uint8_t)r, (uint8_t)col), c, 1);
         return;
     }
     uint8_t outwards[NEOPIXEL_RINGS_MAX] = { 0 };
@@ -221,12 +234,16 @@ static void patch_light(const neopixel_payload *px, float fraction, uint32_t *ou
         uint8_t ring = outwards[j], n = px->size[ring], start, more;
         uint16_t first = ring_first(px, ring);
         neopixel_patch_span(px, ring, &start, &more);
-        for (uint16_t e = 0; e <= more; e++) out[first + (reverse ? start + n - e : start + e) % n] = c;
+        for (uint16_t e = 0; e <= more; e++) light(out, (uint16_t)(first + (reverse ? start + n - e : start + e) % n), c, 1);
     }
 }
 
 void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32_t *out) {
     memset(out, 0, px->leds * sizeof out[0]);
+    neopixel_draw(px, fraction, on, out);
+}
+
+void neopixel_draw(const neopixel_payload *px, float fraction, bool on, uint32_t *out) {
     if (!on) return;
     if (px->graphic == NEOPIXEL_GFX_POINT) {
         point_light(px, fraction, out);
@@ -240,8 +257,9 @@ void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32
     // much as it is reached, so it moves smoothly.
     uint16_t steps = bar_steps(px);
     float lit = fraction * steps;
+    shade c = colour(px, fraction);
     for (uint16_t e = 0; e < steps && lit > e; e++) {
         float amount = lit - e;
-        bar_light(px, e, colour(px, fraction, amount > 1 ? 1 : amount), out);
+        bar_light(px, e, c, amount > 1 ? 1 : amount, out);
     }
 }

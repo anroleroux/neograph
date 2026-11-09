@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,7 +12,7 @@ bool program_logic(uint8_t type) {
 }
 
 bool program_logic_floating(uint8_t type) {
-    return type == MSG_LOGIC_SCALE || type == MSG_LOGIC_MIN || type == MSG_LOGIC_MAX;
+    return type == MSG_LOGIC_SCALE || type == MSG_LOGIC_MIN || type == MSG_LOGIC_MAX || type == MSG_LOGIC_SINE;
 }
 
 bool program_ui_source(uint8_t type) {
@@ -49,7 +50,10 @@ void program_logic_start(const hw_program *p, const prog_node *n, prog_logic_sta
 // on (or with none wired), starts on, then turns over after each time on or off.
 // A toggle turns over each time its input goes on. A latch goes on when set and
 // off when reset, and reset wins. A counter counts its count input going on, up to
-// its preset, and is on (done) at its preset; reset sets it back to 0, and wins.
+// its preset, and is on (done) at its preset; reset sets it back to 0, and wins. A
+// sine, while its input is on (or with none wired), is its offset plus its amplitude
+// times the sine of how far it is through its period, starting at its phase; off, it
+// rests where it starts, and starts again from there when it goes on.
 float program_logic_step(const hw_program *p, const prog_node *n, float out, prog_logic_state *st, uint32_t dt_ms) {
     bool on = out >= 0.5f;
     switch (n->type) {
@@ -159,6 +163,20 @@ float program_logic_step(const hw_program *p, const prog_node *n, float out, pro
         return st->count >= n->preset;
     }
 
+    case MSG_LOGIC_SINE: {
+        // on_ms: its period; scale[0] its amplitude, scale[1] its offset, scale[2] its
+        // phase in degrees; held_ms how far through its period it is. Off, it rests where
+        // it starts.
+        if (n->in[0] != PROG_NO_SIGNAL && !signal_on(p, n->in[0])) {
+            st->held_ms = 0;
+            return n->scale[1] + n->scale[0] * sinf(n->scale[2] * 0.017453293f);
+        }
+        float y = n->scale[1] + n->scale[0] * sinf(6.2831853f * (float)st->held_ms / (float)n->on_ms
+                                                   + n->scale[2] * 0.017453293f);
+        st->held_ms = (st->held_ms + dt_ms) % n->on_ms;
+        return y;
+    }
+
     default:
         return 0;
     }
@@ -180,7 +198,8 @@ static uint8_t add_signal(hw_program *p, uint16_t id, uint8_t output, uint8_t ty
 static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
     if (p->node_count == PROG_NODES_MAX) return NULL;
     prog_node *n = &p->nodes[p->node_count++];
-    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL, .out_count = PROG_NO_SIGNAL, .in_full = { 1, 1 } };
+    *n = (prog_node){ .type = type, .id = id, .out = PROG_NO_SIGNAL, .out_count = PROG_NO_SIGNAL, .in_full = { 1, 1 },
+                      .px_under = PROG_NO_NODE };
     memset(n->in, PROG_NO_SIGNAL, sizeof n->in);
     return n;
 }
@@ -188,13 +207,21 @@ static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
 // The value of a source's signal that drives an output to its max, such as a
 // PWM's: 1 for a slider (its values are 0 to 1) or a scale, 3.3 V for an ADC,
 // CORE_TEMP_FULL °C for the core temperature, for a min or max that of what it
-// picks from, and for a counter's count its preset.
+// picks from, for a counter's count its preset, and for an encoder's position its
+// steps.
 static float signal_full(const hw_program *p, uint8_t s) {
     if (s == PROG_NO_SIGNAL) return 1;
     switch (p->signals[s].type) {
     case MSG_HW_ADC: return PROG_ADC_VOLTS;
     case MSG_HW_CORE: return CORE_TEMP_FULL;
+    case MSG_HW_CLOCK: return p->signals[s].output == 0 ? CLOCK_HOURS : CLOCK_MINUTES;   // 24 h; 60 min or s
     case MSG_HW_DS18B20: return p->signals[s].output == 0 ? DS18B20_FULL : 1;  // °C, or found: 0 or 1
+    case MSG_HW_ENCODER:
+        // Its position: its steps; pressed: 0 or 1.
+        for (uint8_t i = 0; i < p->node_count; i++) {
+            if (p->nodes[i].type == MSG_HW_ENCODER && p->nodes[i].out == s) return (float)p->nodes[i].enc_steps;
+        }
+        return 1;
     case MSG_LOGIC_COUNTER:
         for (uint8_t i = 0; i < p->node_count; i++) {
             if (p->nodes[i].out_count == s) return (float)p->nodes[i].preset;
@@ -275,6 +302,33 @@ static void order_logic(hw_program *p, uint8_t first) {
     }
 }
 
+// Whether two NeoPixel nodes' LEDs are the same: their layout, size and wiring.
+static bool same_strip(const neopixel_payload *a, const neopixel_payload *b) {
+    return a->layout == b->layout && a->options == b->options && a->size_len == b->size_len
+        && !memcmp(a->size, b->size, a->size_len);
+}
+
+// Join the NeoPixel nodes into chains: each draws over the node on its data line in,
+// which then feeds it rather than driving its pin. A data line in is left unjoined if
+// it names no NeoPixel node, one with other LEDs (layout, size or wiring), one that
+// already feeds another (in program order, the first wins), or one that, through its
+// own data line in, would come back to it.
+static void link_neopixels(hw_program *p) {
+    for (uint8_t i = 0; i < p->node_count; i++) {
+        prog_node *n = &p->nodes[i];
+        if (n->type != MSG_HW_NEOPIXEL || !n->px.under.id) continue;
+        uint8_t j = 0;
+        while (j < p->node_count && !(p->nodes[j].type == MSG_HW_NEOPIXEL && p->nodes[j].id == n->px.under.id)) j++;
+        if (j == p->node_count || j == i || p->nodes[j].px_feeds || !same_strip(&n->px, &p->nodes[j].px)) continue;
+        bool loop = false;
+        for (uint8_t k = j, steps = 0; k != PROG_NO_NODE && steps <= p->node_count; k = p->nodes[k].px_under, steps++)
+            if (k == i) loop = true;
+        if (loop) continue;
+        n->px_under = j;
+        p->nodes[j].px_feeds = true;
+    }
+}
+
 void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
     p->signal_count = 0;
     p->node_count = 0;
@@ -309,6 +363,18 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             if ((n = add_node(p, itr.type, itr.id))) n->out = s;
             break;
 
+        case MSG_HW_CLOCK: {
+            // Three signals, in a row: its hour, minute and second. Its settings are core 0's
+            // (timesync.c).
+            uint8_t options;
+            int16_t zone;
+            if (!clock_payload_read(itr.pay, itr.len, &options, &zone)) break;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if (add_signal(p, itr.id, 1, itr.type, 0) != s + 1 || add_signal(p, itr.id, 2, itr.type, 0) != s + 2) break;
+            if ((n = add_node(p, itr.type, itr.id))) n->out = s;
+            break;
+        }
+
         case MSG_HW_GPI:
             if (itr.len != 2) break;
             if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
@@ -339,6 +405,23 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
                 n->out_count = found;
                 n->pin = itr.pay[0];
                 n->options = itr.pay[1];
+            }
+            break;
+        }
+
+        case MSG_HW_ENCODER: {
+            // Two signals: its position, and whether its switch is pressed.
+            if (!encoder_payload_valid(itr.pay, itr.len)) break;
+            uint8_t pressed;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((pressed = add_signal(p, itr.id, 1, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->out = s;
+                n->out_count = pressed;
+                memcpy(n->enc_pins, itr.pay, sizeof n->enc_pins);
+                n->pin = itr.pay[0];
+                n->options = itr.pay[3];
+                n->enc_steps = (uint16_t)(itr.pay[4] << 8 | itr.pay[5]);
             }
             break;
         }
@@ -384,6 +467,11 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             n->off_ms = msg_u32_at(itr.pay + r + 4);
         } else if (itr.type == MSG_LOGIC_PULSE) {
             n->on_ms = msg_u32_at(itr.pay + r);
+        } else if (itr.type == MSG_LOGIC_SINE) {
+            n->on_ms = msg_u32_at(itr.pay + r);
+            n->scale[0] = msg_float_at(itr.pay + r + 4);
+            n->scale[1] = msg_float_at(itr.pay + r + 8);
+            n->scale[2] = itr.len == r + 16 ? msg_float_at(itr.pay + r + 12) : 0;
         } else if (itr.type == MSG_LOGIC_SCALE) {
             n->options = itr.pay[r];
             for (int i = 0; i < 4; i++) n->scale[i] = msg_float_at(itr.pay + r + 1 + 4 * i);
@@ -494,6 +582,7 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
     }
+    link_neopixels(p);
 }
 
 // ── Description ──
@@ -507,6 +596,8 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_GPI: return "gpi";
     case MSG_HW_ADC: return "adc";
     case MSG_HW_DS18B20: return "ds18b20";
+    case MSG_HW_ENCODER: return "encoder";
+    case MSG_HW_CLOCK: return "clock";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
     case MSG_LOGIC_OR: return "or";
@@ -520,6 +611,7 @@ static const char *type_name(uint8_t type) {
     case MSG_LOGIC_TOGGLE: return "toggle";
     case MSG_LOGIC_LATCH: return "latch";
     case MSG_LOGIC_COUNTER: return "counter";
+    case MSG_LOGIC_SINE: return "sine";
     default: return "?";
     }
 }
@@ -564,6 +656,14 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         const prog_node *n = &p->nodes[i];
         switch (n->type) {
         case MSG_HW_CORE: put(&t, "CORE n%u -> ", n->id); put_signal(&t, n->out); break;
+        case MSG_HW_CLOCK:
+            put(&t, "CLOCK n%u -> ", n->id);
+            put_signal(&t, n->out);
+            put(&t, " ");
+            put_signal(&t, (uint8_t)(n->out + 1));
+            put(&t, " ");
+            put_signal(&t, (uint8_t)(n->out + 2));
+            break;
         case MSG_HW_ADC: put(&t, "ADC n%u channel %u -> ", n->id, n->pin); put_signal(&t, n->out); break;
         case MSG_HW_GPI: put(&t, "GPI n%u pin %u options %02X -> ", n->id, n->pin, n->options); put_signal(&t, n->out); break;
         case MSG_HW_DS18B20:
@@ -573,6 +673,18 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put(&t, " found ");
             put_signal(&t, n->out_count);
             break;
+        case MSG_HW_ENCODER: {
+            static const char *const detents[] = { "4", "2", "1" };
+            put(&t, "ENCODER n%u pins %u %u ", n->id, n->enc_pins[0], n->enc_pins[1]);
+            if (n->enc_pins[2] == ENCODER_NO_BUTTON) put(&t, "no button");
+            else put(&t, "button %u", n->enc_pins[2]);
+            put(&t, " %s/click steps %u%s%s -> ", detents[n->options & ENCODER_DETENT_MASK], n->enc_steps,
+                n->options & ENCODER_REVERSE ? " reverse" : "", n->options & ENCODER_WRAP ? " wrap" : "");
+            put_signal(&t, n->out);
+            put(&t, " pressed ");
+            put_signal(&t, n->out_count);
+            break;
+        }
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);
@@ -626,6 +738,13 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->out);
             put(&t, " ");
             put_signal(&t, n->out_count);
+            break;
+        case MSG_LOGIC_SINE:
+            put(&t, "SINE n%u period %lu amplitude %.4g offset %.4g phase %.4g <- ", n->id, (unsigned long)n->on_ms,
+                (double)n->scale[0], (double)n->scale[1], (double)n->scale[2]);
+            put_input(&t, n, 0);
+            put(&t, " -> ");
+            put_signal(&t, n->out);
             break;
         case MSG_LOGIC_DELAY:
             put(&t, "DELAY n%u on %lu off %lu <- ", n->id, (unsigned long)n->on_ms, (unsigned long)n->off_ms);
@@ -690,6 +809,8 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->in[0]);
             put(&t, " / %.4g on <- ", (double)n->in_full[0]);
             put_signal(&t, n->in[1]);
+            if (n->px_under != PROG_NO_NODE) put(&t, " over n%u", p->nodes[n->px_under].id);
+            if (n->px_feeds) put(&t, " feeds");
             break;
         }
         default: put(&t, "? n%u", n->id); break;

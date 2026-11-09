@@ -23,6 +23,12 @@ bool neopixel_enabled(const prog_node *n, float enable);
 // Its brightness scales each colour. Not `on`, every LED is off.
 void neopixel_render(const neopixel_payload *px, float fraction, bool on, uint32_t *out);
 
+// Its graphic drawn over out[], what the nodes before it in a chain drew: each LED it
+// lights takes its colour, an LED it lights only partly (a bar's end, a point between
+// two LEDs) that much of the way from the colour under it. The LEDs it doesn't light
+// keep theirs. Not `on`, it draws nothing. neopixel_render is this over all off.
+void neopixel_draw(const neopixel_payload *px, float fraction, bool on, uint32_t *out);
+
 // The LED nearest a point, for its input at `fraction` of full scale.
 uint16_t neopixel_point_led(const neopixel_payload *px, float fraction);
 

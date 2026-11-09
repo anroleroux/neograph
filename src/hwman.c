@@ -9,8 +9,11 @@
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/pio.h"
+#include "hardware/irq.h"
 
+#include "clock.h"
 #include "ds18b20.h"
+#include "encoder.h"
 #include "hwman.h"
 #include "neopixel.h"
 #include "program.h"
@@ -62,6 +65,39 @@ static void core_temp_sample(void) {
     else core_temp.celsius += (sample - core_temp.celsius) / TEMP_FILTER;
     core_temp.sampled = true;
     if (fabsf(core_temp.celsius - core_temp.value) >= TEMP_DEADBAND) core_temp.value = core_temp.celsius;
+}
+
+// ── The clock ──
+// One time of day for the device (MSG_HW_CLOCK), in its time zone: the milliseconds the
+// timer has counted since boot, plus clock_offset_ms, a day round. It starts at 00:00:00
+// at boot; core 0 sets it (from the browser, or an internet time server: timesync.c),
+// and core 1 reads it for the clock nodes' signals each scan. The offset is one 32-bit
+// word, so core 1 never reads half of a new one.
+static volatile uint32_t clock_offset_ms = 0;
+static bool clock_was_set = false;
+static int32_t clock_zone = 0;          // minutes ahead of UTC
+
+bool clock_set(uint8_t h, uint8_t m, uint8_t s) {
+    if (h >= CLOCK_HOURS || m >= CLOCK_MINUTES || s >= CLOCK_SECONDS) return false;
+    clock_set_ms(((uint32_t)h * 3600 + (uint32_t)m * 60 + s) * 1000);
+    return true;
+}
+
+void clock_set_ms(uint32_t ms) {
+    clock_offset_ms = clock_offset_to(time_us_64() / 1000, ms);
+    clock_was_set = true;
+    __dmb();
+}
+
+void clock_set_zone(int32_t zone) {
+    if (zone == clock_zone) return;
+    if (clock_was_set) clock_offset_ms = clock_shift(clock_offset_ms, zone - clock_zone);
+    clock_zone = zone;
+    __dmb();
+}
+
+static uint32_t clock_now(void) {
+    return clock_time_of_day(time_us_64() / 1000, clock_offset_ms);
 }
 
 // ── ADC inputs ──
@@ -325,6 +361,8 @@ typedef struct {
         bool configured;        // its resolution is written
         bool doubted;           // an 85 °C reading was dropped (ds18b20_take)
     } ds;                       // DS18B20
+    uint8_t encoder;            // rotary encoder: its place in encoders[]; `on` and `differ`
+                                // debounce its switch, as a GPIO input's
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -371,6 +409,7 @@ static uint32_t neopixel_pool[NEOPIXEL_LEDS_TOTAL];
 static uint16_t neopixel_pool_used = 0;
 
 static bool neopixel_setup(const prog_node *n, node_state *st) {
+    if (n->px_feeds) return true;       // the last node of its chain drives the LEDs
     if (neopixel_pool_used + n->px.leds > NEOPIXEL_LEDS_TOTAL) {
         printf("NeoPixels n%u: more than %u LEDs in all\n", n->id, NEOPIXEL_LEDS_TOTAL);
         return false;
@@ -404,10 +443,10 @@ static bool neopixel_setup(const prog_node *n, node_state *st) {
     return true;
 }
 
-// Whether a program has a NeoPixel node on a pin.
+// Whether a program has a NeoPixel node driving a pin.
 static bool neopixel_on_pin(const hw_program *p, uint8_t pin) {
     for (uint8_t i = 0; i < p->node_count; i++) {
-        if (p->nodes[i].type == MSG_HW_NEOPIXEL && p->nodes[i].pin == pin) return true;
+        if (p->nodes[i].type == MSG_HW_NEOPIXEL && !p->nodes[i].px_feeds && p->nodes[i].pin == pin) return true;
     }
     return false;
 }
@@ -422,7 +461,7 @@ static uint32_t neopixels_release(const hw_program *p, const hw_program *next) {
     for (uint8_t i = 0; i < p->node_count; i++) {
         const prog_node *n = &p->nodes[i];
         node_state *st = &states[i];
-        if (n->type != MSG_HW_NEOPIXEL || !st->ok) continue;
+        if (n->type != MSG_HW_NEOPIXEL || !st->ok || n->px_feeds) continue;
         dma_channel_wait_for_finish_blocking((uint)st->dma);
         if (!neopixel_on_pin(next, n->pin)) {
             while (time_us_64() < st->ready_us) tight_loop_contents();
@@ -578,6 +617,119 @@ static void ds18b20_step(hw_program *p, const prog_node *n, node_state *st) {
     }
 }
 
+// ── Rotary encoders ──
+// An encoder's A and B pins change faster than the scan when it is turned quickly, so
+// core 1 takes each of their edges with an interrupt: encoders_irq decodes them into
+// clicks (encoder_decode), and each scan adds the clicks since the last to its
+// position. Its switch is read each scan, debounced as a GPIO input. Its pins have
+// their pull-ups on: a KY-040 has resistors on A and B, but often none on its switch.
+#define ENCODERS_MAX        8
+#define ENCODER_EDGES       (GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE)
+
+static struct {
+    uint8_t a, b;
+    uint8_t detent;             // ENCODER_DETENT_
+    encoder_decoder decoder;
+    volatile int32_t clicks;    // since the scan last took them
+} encoders[ENCODERS_MAX];
+static volatile uint8_t encoders_on = 0;
+
+static inline uint8_t encoder_pins(uint8_t a, uint8_t b) {
+    return (uint8_t)(gpio_get(a) << 1 | gpio_get(b));
+}
+
+// IO_IRQ_BANK0 on core 1, shared with core 0's handlers (the WiFi chip's): each
+// encoder whose pins have an edge for this core takes it. It reads the pins after
+// acknowledging their edges, so an edge after the read raises it again.
+static void __not_in_flash_func(encoders_irq)(void) {
+    for (uint8_t i = 0; i < encoders_on; i++) {
+        uint32_t a = gpio_get_irq_event_mask(encoders[i].a) & ENCODER_EDGES;
+        uint32_t b = gpio_get_irq_event_mask(encoders[i].b) & ENCODER_EDGES;
+        if (!a && !b) continue;
+        if (a) gpio_acknowledge_irq(encoders[i].a, a);
+        if (b) gpio_acknowledge_irq(encoders[i].b, b);
+        encoders[i].clicks += encoder_decode(&encoders[i].decoder, encoder_pins(encoders[i].a, encoders[i].b),
+                                             encoders[i].detent);
+    }
+}
+
+// Stop taking the edges of the last program's encoders, before their pins are released.
+static void encoders_stop(void) {
+    uint32_t ints = save_and_disable_interrupts();
+    for (uint8_t i = 0; i < encoders_on; i++) {
+        gpio_set_irq_enabled(encoders[i].a, ENCODER_EDGES, false);
+        gpio_set_irq_enabled(encoders[i].b, ENCODER_EDGES, false);
+    }
+    encoders_on = 0;
+    restore_interrupts(ints);
+}
+
+static void encoder_pin_init(uint8_t pin) {
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_IN);
+    gpio_pull_up(pin);
+}
+
+// Its pins, all or none, and a place in encoders[]. It starts where the program
+// before left it (take_program kept its position), within its steps.
+static bool encoder_setup(hw_program *p, const prog_node *n, node_state *st) {
+    if (encoders_on == ENCODERS_MAX) {
+        printf("encoder n%u: more than %u encoders\n", n->id, ENCODERS_MAX);
+        return false;
+    }
+    uint8_t pins = n->enc_pins[2] == ENCODER_NO_BUTTON ? 2 : 3;
+    for (uint8_t k = 0; k < pins; k++) {
+        if (claim_pin(n->enc_pins[k])) continue;
+        while (k--) used_pins &= ~(1u << n->enc_pins[k]);
+        return false;
+    }
+    for (uint8_t k = 0; k < pins; k++) encoder_pin_init(n->enc_pins[k]);
+    busy_wait_us_32(10);        // the pull-ups bring the pins up
+
+    int32_t at = (int32_t)lroundf(p->signals[n->out].value);
+    p->signals[n->out].value = (float)encoder_position(at, 0, n->enc_steps, n->options & ENCODER_WRAP);
+    p->signals[n->out_count].value = 0;
+
+    uint8_t i = encoders_on;
+    encoders[i].a = n->enc_pins[0];
+    encoders[i].b = n->enc_pins[1];
+    encoders[i].detent = n->options & ENCODER_DETENT_MASK;
+    encoders[i].clicks = 0;
+    encoder_start(&encoders[i].decoder, encoder_pins(n->enc_pins[0], n->enc_pins[1]));
+    st->encoder = i;
+    uint32_t ints = save_and_disable_interrupts();
+    encoders_on = i + 1;
+    gpio_set_irq_enabled(n->enc_pins[0], ENCODER_EDGES, true);    // acknowledges an old edge first
+    gpio_set_irq_enabled(n->enc_pins[1], ENCODER_EDGES, true);
+    restore_interrupts(ints);
+    printf("encoder on GPIO %u and %u\n", n->enc_pins[0], n->enc_pins[1]);
+    return true;
+}
+
+// One scan of an encoder: the clicks since the last move its position; its switch,
+// held in its new state GPI_DEBOUNCE reads in a row, is pressed while low.
+static void encoder_scan(hw_program *p, const prog_node *n, node_state *st) {
+    uint32_t ints = save_and_disable_interrupts();
+    int32_t clicks = encoders[st->encoder].clicks;
+    encoders[st->encoder].clicks = 0;
+    restore_interrupts(ints);
+    if (n->options & ENCODER_REVERSE) clicks = -clicks;
+    if (clicks) {
+        int32_t at = (int32_t)lroundf(p->signals[n->out].value);
+        p->signals[n->out].value = (float)encoder_position(at, clicks, n->enc_steps, n->options & ENCODER_WRAP);
+    }
+
+    if (n->enc_pins[2] == ENCODER_NO_BUTTON) return;
+    bool pressed = !gpio_get(n->enc_pins[2]);
+    if (pressed == st->on) {
+        st->differ = 0;
+    } else if (++st->differ >= GPI_DEBOUNCE) {
+        st->on = pressed;
+        st->differ = 0;
+        p->signals[n->out_count].value = pressed;
+    }
+}
+
 // Set up a node's hardware. Inputs come before outputs in a program, so an
 // input wins a pin an output also names; otherwise the first node on a pin wins.
 static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
@@ -619,6 +771,9 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
         if (n->options & DS18B20_PULLUP) gpio_pull_up(n->pin);
         else gpio_disable_pulls(n->pin);
         return true;
+
+    case MSG_HW_ENCODER:
+        return encoder_setup(p, n, st);
 
     case MSG_HW_GPO:
         if (!claim_pin(n->pin)) return false;
@@ -702,11 +857,13 @@ static void take_program(void) {
     const hw_program *old = &programs[running];
     hw_program *p = &programs[running ^ 1];
 
-    // A UI source's signals keep their values, and so do a DS18B20's until it is read
-    // again, so a save neither moves a slider nor drops a reading.
+    // A UI source's signals keep their values, so do a DS18B20's until it is read
+    // again, and an encoder's position, so a save neither moves a slider or a knob's
+    // position nor drops a reading.
     for (uint8_t i = 0; i < p->signal_count; i++) {
         prog_signal *s = &p->signals[i];
-        if (!program_ui_source(s->type) && s->type != MSG_HW_DS18B20) continue;
+        if (!program_ui_source(s->type) && s->type != MSG_HW_DS18B20
+            && !(s->type == MSG_HW_ENCODER && s->output == 0)) continue;
         uint8_t was = program_signal(old, s->id, s->output);
         if (was != PROG_NO_SIGNAL) s->value = old->signals[was].value;
     }
@@ -723,6 +880,7 @@ static void take_program(void) {
     }
 
     uint32_t neopixel_pins = neopixels_release(old, p);
+    encoders_stop();
     release_pins();
     for (uint gpio = 0; gpio < 32; gpio++) if (neopixel_pins >> gpio & 1) gpio_pull_down(gpio);
     memset(states, 0, sizeof states);
@@ -743,6 +901,39 @@ static void take_program(void) {
             states[i].stepper.pos = (int32_t)lroundf(turned[i] * states[i].motion.steps_rev);
     }
     printf("hw man running a program of %u signals and %u nodes\n", p->signal_count, p->node_count);
+}
+
+// Show the NeoPixels of chain ending in node `last`, the one that drives the LEDs:
+// each node of it, from the first (the one with nothing on its data line in), draws its
+// graphic over what the one before it drew. Sent again when what any of them shows
+// changes, once the last send is out; if it isn't yet, at a later scan.
+static void neopixels_show(hw_program *p, uint8_t last) {
+    node_state *st = &states[last];
+    uint8_t chain[PROG_NODES_MAX], len = 0;
+    for (uint8_t k = last; k != PROG_NO_NODE && len < PROG_NODES_MAX; k = p->nodes[k].px_under) chain[len++] = k;
+
+    bool changed = !st->driven;
+    for (uint8_t c = 0; c < len && !changed; c++) {
+        const prog_node *m = &p->nodes[chain[c]];
+        changed = neopixel_fraction(m, signal_value(p, m->in[0])) != states[chain[c]].fraction
+            || neopixel_enabled(m, signal_value(p, m->in[1])) != states[chain[c]].on;
+    }
+    if (!changed) return;
+    uint64_t now = time_us_64();
+    if (now < st->ready_us || dma_channel_is_busy((uint)st->dma)) return;
+
+    const prog_node *n = &p->nodes[last];
+    memset(st->leds, 0, n->px.leds * sizeof st->leds[0]);
+    for (uint8_t c = len; c-- > 0;) {
+        const prog_node *m = &p->nodes[chain[c]];
+        node_state *ms = &states[chain[c]];
+        ms->fraction = neopixel_fraction(m, signal_value(p, m->in[0]));
+        ms->on = neopixel_enabled(m, signal_value(p, m->in[1]));
+        neopixel_draw(&m->px, ms->fraction, ms->on, st->leds);
+    }
+    dma_channel_transfer_from_buffer_now((uint)st->dma, st->leds, n->px.leds);
+    st->ready_us = now + (uint64_t)n->px.leds * NEOPIXEL_LED_US + NEOPIXEL_RESET_US;
+    st->driven = true;
 }
 
 // One scan: each node in the program's order, inputs then outputs. An output is
@@ -788,6 +979,17 @@ static void scan(uint32_t count) {
 
         case MSG_HW_DS18B20:
             ds18b20_step(p, n, st);
+            break;
+
+        case MSG_HW_CLOCK: {
+            uint8_t parts[3];
+            clock_parts(clock_now(), parts);
+            for (uint8_t k = 0; k < 3; k++) p->signals[n->out + k].value = parts[k];
+            break;
+        }
+
+        case MSG_HW_ENCODER:
+            encoder_scan(p, n, st);
             break;
 
 
@@ -855,22 +1057,9 @@ static void scan(uint32_t count) {
             break;
         }
 
-        case MSG_HW_NEOPIXEL: {
-            // Sent again when what they show changes, once the last send is out; if it
-            // isn't yet, at a later scan.
-            float f = neopixel_fraction(n, signal_value(p, n->in[0]));
-            bool on = neopixel_enabled(n, signal_value(p, n->in[1]));
-            if (st->driven && f == st->fraction && on == st->on) break;
-            uint64_t now = time_us_64();
-            if (now < st->ready_us || dma_channel_is_busy((uint)st->dma)) break;
-            neopixel_render(&n->px, f, on, st->leds);
-            dma_channel_transfer_from_buffer_now((uint)st->dma, st->leds, n->px.leds);
-            st->ready_us = now + (uint64_t)n->px.leds * NEOPIXEL_LED_US + NEOPIXEL_RESET_US;
-            st->fraction = f;
-            st->on = on;
-            st->driven = true;
+        case MSG_HW_NEOPIXEL:
+            if (!n->px_feeds) neopixels_show(p, i);   // one that feeds another, its chain's last shows
             break;
-        }
 
         case MSG_HW_STEPPER: {
             // The scan gives it its input; steppers_run moves it.
@@ -911,6 +1100,10 @@ void core1_worker() {
 
     adc_init();
     adc_set_temp_sensor_enabled(true);
+
+    // The encoders' pin edges, on this core.
+    irq_add_shared_handler(IO_IRQ_BANK0, encoders_irq, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
+    irq_set_enabled(IO_IRQ_BANK0, true);
 
     absolute_time_t start = get_absolute_time();
     absolute_time_t next_scan = start;

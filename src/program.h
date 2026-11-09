@@ -13,15 +13,16 @@
  *
  *   - signals: the value of each output of each source (a button, a slider's
  *     value, a 2D slider's X and Y, an ADC, a GPIO input, the core temperature,
- *     a logic element), as a float in the source's own unit;
+ *     a DS18B20, a rotary encoder, a logic element), as a float in the source's own unit;
  *   - nodes: the elements core 1 runs, in the order it runs them: the hardware
- *     inputs (ADC, GPIO input, core temperature, DS18B20), which write a signal (a
- *     DS18B20 two); then the
+ *     inputs (ADC, GPIO input, core temperature, DS18B20, rotary encoder, clock), which
+ *     write a signal (a DS18B20 or an encoder two, a clock three); then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
- *     latch, counter), which reads signals and writes its own, each after the
+ *     latch, counter, sine), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
  *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
- *     servo, NeoPixels), which read one or two.
+ *     servo, NeoPixels), which read one or two. NeoPixel nodes may be chained, each
+ *     drawing over the one on its data line in; the last drives the LEDs.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
  * while it runs a program; core 0 reads them for telemetry.
@@ -31,6 +32,7 @@
 #define PROG_NODES_MAX      64
 #define PROG_NODE_INPUTS    LOGIC_INPUTS_MAX    /* the most signals a node reads: an AND's or OR's */
 #define PROG_NO_SIGNAL      0xFF    /* a node input wired to nothing: it reads 0 */
+#define PROG_NO_NODE        0xFF    /* a NeoPixel node with nothing on its data line in */
 #define PROG_ADC_VOLTS      3.3f    /* an ADC signal at ADC_RAW_FULL */
 
 typedef struct {
@@ -43,11 +45,13 @@ typedef struct {
 typedef struct {
     uint8_t type;           // MSG_HW_ or MSG_LOGIC_
     uint16_t id;
-    uint8_t pin;            // GPO, PWM, GPIO input, DS18B20: its GPIO; ADC: its channel
+    uint8_t pin;            // GPO, PWM, GPIO input, DS18B20: its GPIO; ADC: its channel; an encoder: its A
     uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options;
-                            // stepper: STEPPER_ options
-    uint8_t out;            // an input or logic: the signal it writes
-    uint8_t out_count;      // a counter: the signal of its count, its output 1; a DS18B20: of found, its output 1
+                            // stepper: STEPPER_ options; an encoder: ENCODER_ options
+    uint8_t out;            // an input or logic: the signal it writes; a clock: its hour's, then its
+                            // minute's and second's follow
+    uint8_t out_count;      // a counter: the signal of its count, its output 1; a DS18B20: of found, its output 1;
+                            // an encoder: of pressed, its output 1
     uint8_t in_count;       // the signals it reads
     uint8_t in[PROG_NODE_INPUTS];   // logic or an output: the signals it reads; a PWM's duty, then its
                                     // frequency; a latch's set, then its reset; a counter's count, then its reset
@@ -57,8 +61,10 @@ typedef struct {
     uint8_t duty, duty_min, duty_max;       // a PWM, percent
     uint16_t freq, freq_min, freq_max;      // a PWM, Hz
     float threshold, hysteresis;            // a compare
-    float scale[4];                         // a scale: the input's from and to, the output's from and to
-    uint32_t on_ms, off_ms;                 // a delay's delays; a pulse's time on; a blink's times on and off
+    float scale[4];                         // a scale: the input's from and to, the output's from and to;
+                                            // a sine: its amplitude, then its offset
+    uint32_t on_ms, off_ms;                 // a delay's delays; a pulse's time on; a blink's times on and off;
+                                            // a sine's period
     uint32_t preset;                        // a counter
     uint8_t coil_pins[STEPPER_PINS];        // a stepper: the GPIO of IN1 to IN4
     uint16_t steps_rev;                     // a stepper: full steps per revolution
@@ -68,12 +74,19 @@ typedef struct {
     uint16_t pulse_min, pulse_max;          // a servo: µs at 0° and at SERVO_ANGLE_MAX°
     uint16_t slew;                          // a servo: °/s it turns at most, 0 = no limit
     neopixel_payload px;                    // NeoPixels: their layout, size and graphic (its source is in[0])
+    uint8_t px_under;                       // NeoPixels: the node (its index) on its data line in, which it draws
+                                            // over; PROG_NO_NODE: none
+    bool px_feeds;                          // NeoPixels: its data line out goes to another, which draws over it;
+                                            // it doesn't drive its pin
+    uint8_t enc_pins[3];                    // an encoder: the GPIO of A, B and its switch (ENCODER_NO_BUTTON: none)
+    uint16_t enc_steps;                     // an encoder: its position's top, its full scale
 } prog_node;
 
 // What a logic node keeps from one scan to the next, besides its output.
 typedef struct {
     uint32_t held_ms;       // delay: how long its input has differed from its output;
-                            // pulse, blink: how long it has been in its state
+                            // pulse, blink: how long it has been in its state; sine: how far
+                            // through its period it is
     bool in_was;            // pulse, toggle, counter: its input at the last scan; blink: whether it was blinking
     uint32_t count;         // counter: its count, 0 to its preset
 } prog_logic_state;

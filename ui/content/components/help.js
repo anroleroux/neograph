@@ -49,12 +49,19 @@ const NODE_HELP = {
         "Point is a dot moving from its start at 0 to its end at 1, gliding between LEDs (it lights the two it is between, each as much as it is near it): on an array in a straight line, any way across; on a circle or doughnut around (and from ring to ring), the way Direction says. The same LED at both ends goes once round.",
         "Patch lights a fixed area from its start to its end: a rectangle on an array (start and end are opposite corners), an arc on a doughnut, a sector on a circle. The number doesn't move it; with Colour From input it sets its colour.",
         "Colour: Fixed, or From input, which blends from Colour at 0 to Colour at 1 as the input rises. Brightness scales every colour. Each LED draws up to 60 mA at full white, so power more than a few from 5 V, with the grounds joined. The preview shows the graphic at the level you set, at full brightness.",
+        "Chain NeoPixels nodes to show several graphics on one set of LEDs: wire one node to another, and the second draws over what the first drew (the Data wire). Later nodes override earlier ones; a node that is off draws nothing, so what is under it shows. The last node, whose Data goes nowhere, drives the LEDs. The chain shares its pin, layout and size: set them on any node.",
     ],
     ds18b20: [
         "A DS18B20 digital temperature sensor on one pin, read by the device about every 0.1 to 0.75 s. It has two outputs: °C, the temperature (a number), and Found (on/off), on while the sensor answers. Pick the one the next wire leaves from in Wire from.",
         "Wire it: red (VDD) to 3.3 V, black (GND) to GND, yellow (DQ, data) to the pin, and a 4.7 kΩ resistor from DQ to 3.3 V. For a short wire and one sensor, Internal uses the pin's own weak pull-up in place of the resistor; if it reads No sensor, fit the resistor. One sensor per pin; parasite power (two wires) is not supported.",
         "Resolution: 9 bits gives 0.5 °C steps, a reading every 94 ms; 12 bits 0.0625 °C every 750 ms. Its temperature is good from −55 to +125 °C. Wired into a PWM or servo, it counts as a fraction of 100 °C.",
         "If the sensor stops answering, Found goes off after three failed reads, and the temperature keeps its last reading.",
+    ],
+    encoder: [
+        "A rotary encoder, such as a KY-040 or an EC11: a knob that turns without end, in clicks, and often pushes in as a switch. It has two outputs: Position (a number, 0 to its Steps), and Pressed (on/off), on while the knob is pushed in. Pick the one the next wire leaves from in Wire from.",
+        "Wire it: CLK (A) and DT (B) to two pins, SW to a third (or None), + to 3.3 V and GND to GND. Don't power a KY-040 from 5 V: its pins would then be pulled to 5 V. The device turns on each pin's pull-up.",
+        "Each click moves Position by 1, up to Steps; At the ends Wrap (the default) goes round from Steps − 1 back to 0, as the knob turns freely; Stop holds it at 0 and at Steps. Wired into a PWM, servo or NeoPixels, it counts as a fraction of Steps: 20 steps sweeps a servo across in 20 clicks. If it counts the wrong way, set Direction to Reversed.",
+        "A click is: Full cycle for most encoders (a KY-040, an EC11); if it counts only every other click, Half cycle; Each edge for an encoder without clicks. A save keeps its position.",
     ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
@@ -109,6 +116,16 @@ const NODE_HELP = {
     ],
     max: [
         "The highest of up to 4 number inputs, such as the hottest of several readings, in the unit of the first. With none wired, 0.",
+    ],
+    clock: [
+        "The device's clock: the time of day as three numbers, Hour (0 to 23), Minute and Second (0 to 59), each a whole number. Pick the one the next wire leaves from in Wire from. Compare an hour with a threshold to switch a light on in the evening; wire Second into a servo to sweep it each minute (it takes an hour as a fraction of 24, a minute or second of 60).",
+        "Set the time with Hours, Minutes and Seconds, or Set to this computer's time: it is set on the device at once, not saved with the graph. The device has one clock, so every clock node shows the same time and has the same settings. It has no battery: after power-up it counts from 00:00:00 until it is set.",
+        "Internet time (on by default) sets the clock from an internet time server when the device starts up, and when you save with it newly on, if the device is on a WiFi network with internet. Time zone turns that into your time: +2 is UTC+2; 5:30 or -3.5 work too. Daylight saving isn't followed: change the zone when the clocks change.",
+    ],
+    sine: [
+        "A smooth wave, a number: its offset plus its amplitude times the sine of the time, going round once each period. With offset 0.5 and amplitude 0.5 it swings from 0 to 1, which sweeps a servo or PWM from end to end, or breathes NeoPixels.",
+        "It runs while its on/off input is on, or always with nothing wired in. When the input goes off it rests where it starts, and starts from the beginning when it comes on again. The device runs it every 10 ms scan, so the shortest period is 0.02 s.",
+        "Phase shifts where on the wave it starts, in degrees: 90 starts at its top, 180 on its way down, 270 at its bottom. Two sines a quarter period apart (0 and 90) trace a circle.",
     ],
     pulse: [
         "Turns on for its time each time its input goes on, however long the input stays on. Going on again while on starts the time again.",

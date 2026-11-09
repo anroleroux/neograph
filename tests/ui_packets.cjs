@@ -224,7 +224,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS, PLT LGT, KEY, DLY PLS BLK, CMP SCL MIN MAX, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC, PLT LGT, KEY, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1707,6 +1707,69 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(neoBack === '7,2,12,99,1,0:3,0:9,true,true,#ff8000,#0000ff,n1,n3', 'NeoPixels restored as ' + neoBack);
 
+    // NeoPixel chains: a data line from one NeoPixel node into another joins them. The
+    // chain shares the LEDs' settings of its last node, which alone drives the pin;
+    // each node draws over the one before. It saves its data line in after its settings
+    // (as in PROTOCOL.md's neopixel-chain-config example), restores, and splits when the
+    // data line is taken out.
+    const npxChain = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([0x12, 0, 0, 1, 1, 0])));     // slider n1 alone
+        const sld = elements.n1;
+        const a = addNode(MSG_HW_NEOPIXEL), b = addNode(MSG_HW_NEOPIXEL), c = addNode(MSG_HW_NEOPIXEL);
+        const led = addNode(MSG_HW_LED);
+        const apart = new Set([a.pin, b.pin, c.pin]).size === 3;
+        b.setLayout(NEOPIXEL_DOUGHNUT); b.setRingLeds('12'); b.setPin('5');
+        a.setGraphic(NEOPIXEL_GFX_PATCH); a.colour = [0, 0, 40];
+        b.setGraphic(NEOPIXEL_GFX_POINT); b.colour = [200, 0, 0];
+        const joined = !!createEdge(a.name, b.name) && !!createEdge(sld.name, b.name);
+        const shared = [a.layout === NEOPIXEL_DOUGHNUT, a.ringLeds === 12, a.pin === 5, a.usedPins().length === 0,
+            b.usedPins().join() === '5', a.over() === b, b.under() === a, b.chain().map(n => n.name).join('>')].join();
+        const refused = [createEdge(a.name, led.name), createEdge(b.name, a.name), createEdge(a.name, a.name)]
+            .every(e => e === null) && !led.canTakeConn(a);
+        a.setRingLeds('8');                                 // on any node of the chain: all of it
+        const edited = [b.ringLeds, b.pin].join();
+        a.from = [0, 0]; a.to = [0, 7];                     // the patch: all the way round
+        // The point over the patch: half way between LEDs, half way from the patch's blue.
+        a.preview = 0; b.preview = 0;
+        const pv = b.previewColours(), own = a.previewColours();
+        const preview = [pv[0].join(':'), pv[3].join(':'), own[0].join(':')].join();
+        b.preview = 1 / 16;                                 // from LED 0 to 7 round 8: half way to LED 1
+        const half = b.previewColours()[1].join(':');
+        const pay = (n) => n.marshal().slice(5).map(x => x.toString(16).padStart(2, '0')).join(' ');
+        const payloads = [pay(a), pay(b)];
+        saveGraph();
+        // A second data line out of a replaces the first: b is left on its own pin.
+        createEdge(a.name, c.name);
+        const moved = [a.over() === c, b.under() === null, a.pin === c.pin, b.pin === 5, b.drives()].join();
+        // Back as it was, then a's wire out taken away: a drives its LEDs again, on a pin of its own.
+        createEdge(a.name, b.name);
+        const back = [c.drives(), a.pin === 5].join();
+        a.outputs[0].conns[0].remove();
+        const split = [a.drives(), a.pin !== b.pin, a.usedPins().length === 1].join();
+        createEdge(a.name, b.name);
+        return { apart, joined, shared, refused, edited, preview, half, payloads, moved, back, split };
+    });
+    packets.push(...await sent(page));
+    expect(npxChain.apart, 'new NeoPixel nodes did not take pins of their own');
+    expect(npxChain.joined, 'NeoPixel nodes did not chain');
+    expect(npxChain.shared === 'true,true,true,true,true,true,true,n2>n3', 'a chain does not share its last node\'s LEDs: ' + npxChain.shared);
+    expect(npxChain.refused, 'a data line went somewhere other than another NeoPixel node, or round a loop');
+    expect(npxChain.edited === '8,5', 'a chain\'s nodes did not share an edit: ' + npxChain.edited);
+    expect(npxChain.preview === '200:0:0,0:0:40,0:0:40', 'a chain\'s preview showed ' + npxChain.preview);
+    expect(npxChain.half === '100:0:20', 'a point half over the patch showed ' + npxChain.half);
+    expect(npxChain.payloads[0].endsWith('00 00 28') && npxChain.payloads[1].endsWith('00 02 00'),
+        'chained NeoPixels marshal as ' + npxChain.payloads.join(' | '));
+    expect(npxChain.moved === 'true,true,true,true,true', 'a second data line out did not replace the first: ' + npxChain.moved);
+    expect(npxChain.back === 'true,true', 'a chain did not join back: ' + npxChain.back);
+    expect(npxChain.split === 'true,true,true', 'a split chain shares a pin: ' + npxChain.split);
+    const chainBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from(Object.values(elements).flatMap(e => e.marshal()))));
+        const [a, b] = [elements.n2, elements.n3];
+        return [b.under()?.name, a.pin === b.pin, a.usedPins().length, b.ringLeds, a.ringLeds, elements.n4.drives(),
+            elements.n4.pin !== b.pin].join();
+    });
+    expect(chainBack === 'n2,true,0,8,8,true,true', 'a NeoPixel chain restored as ' + chainBack);
+
     // A DS18B20: its pin, resolution and pull-up; its temperature wires into a number
     // input, its Found into an on/off; its tile shows the device's readings. It
     // marshals as the ds18b20-config example in PROTOCOL.md, and restores.
@@ -1757,6 +1820,211 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         return [s.pin, s.resolution, s.pullup, s.shown, led.inConns().map(c => c.start.node.name + ':' + c.start.output).join()].join();
     });
     expect(dsBack === '22,2,true,true,n1:1', 'a DS18B20 restored as ' + dsBack);
+
+    // A rotary encoder: its three pins, steps and options; its position wires into a
+    // number input, its Pressed into an on/off; its tile shows the device's readings.
+    // It marshals as the encoder-config example in PROTOCOL.md, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a rotary encoder"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|A (CLK) pin:|B (DT) pin:|Switch (SW) pin:|Steps:|A click is:|At the ends:|Direction:|Wire from:|Command view:',
+        'a new encoder does not show its settings: ' + await keyRows());
+    expect(await page.evaluate(() => selected.wrap && (selected.options() & ENCODER_WRAP) !== 0),
+        'a new encoder does not wrap at its ends');
+    await choice('A click is', 'Half cycle');
+    await choice('At the ends', 'Stop');
+    expect(await page.evaluate(() => (selected.options() & ENCODER_WRAP) === 0), 'Stop left an encoder wrapping');
+    await choice('At the ends', 'Wrap');
+    await choice('Direction', 'Reversed');
+    const enc = await page.evaluate(() => {
+        const s = selected;
+        const pins = [...s.pins];
+        const rejected = [s.setPin(0, s.pins[1]), s.setPin(1, '29'), s.setPin(0, 'none'), s.setSteps(0),
+            s.setSteps(ENCODER_STEPS_MAX + 1), s.setSteps('2.5'), s.setDetent(3), s.setWireOutput(2)].every(r => r === false)
+            && pins.join() === s.pins.join();
+        const cmp = addNode(MSG_LOGIC_COMPARE), led = addNode(MSG_HW_LED);
+        s.setWireOutput(0);
+        const wired = !!createEdge(s.name, cmp.name) && createEdge(s.name, led.name) === null
+            && (s.setWireOutput(1), !!createEdge(s.name, led.name)) && createEdge(s.name, cmp.name) === null;
+        s.setSteps('24');
+        s.shown = true;
+        buildCommandInterface();
+        const tile = () => s.tileState.textContent;
+        const tiles = [tile()];
+        receiveTelemetry(`sig ${s.id} 0 5`);
+        tiles.push(tile());
+        receiveTelemetry(`sig ${s.id} 1 1`);
+        tiles.push(tile(), String(s.outputValue(0)), String(s.outputValue(1)));
+        const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        s.setPin(2, 'none');
+        const none = [s.marshal()[7], s.usedPins().length, s.outputValue(1)].join();
+        s.setPin(2, pins[2]);
+        saveGraph();
+        return { rejected, wired, tiles: tiles.join('|'), pay, none, pins: pins.join() };
+    });
+    packets.push(...await sent(page));
+    expect(enc.rejected, 'an encoder took settings out of range');
+    expect(enc.wired, 'an encoder\'s outputs did not wire by type');
+    expect(enc.tiles === '–|5 of 24|5 of 24, pressed|5|1', 'an encoder\'s tile showed ' + enc.tiles);
+    const [ea, eb, esw] = enc.pins.split(',').map(Number);
+    const h = (b) => b.toString(16).padStart(2, '0');
+    expect(enc.pay === [ea, eb, esw, 0x01 | 0x04 | 0x08, 0, 24].map(h).join(' '), 'an encoder marshals as ' + enc.pay);
+    expect(enc.none === '255,2,', 'an encoder without a switch marshals and reads as ' + enc.none);
+    const encBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x34, MSG_FLAG_SHOWN, 0, 1, 6, 6, 7, 8, 0x08, 0, 24,
+            0x25, 1, 0, 2, 12, 0, 1, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
+            0x20, 1, 0, 3, 3, 0, 1, 1,
+            0x34, 0, 0, 4, 6, 10, 10, 11, 0, 0, 20,
+        ])));
+        const s = elements.n1, led = elements.n3, bad = elements.n4;
+        return [s.pins.join(':'), s.steps, s.detent, s.wrap, s.reverse, s.shown,
+            led.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            elements.n2.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            bad.pins.includes(10) && bad.pins.includes(11) ? 'kept' : bad.pins.join(':')].join();
+    });
+    expect(encBack.startsWith('6:7:8,24,0,true,false,true,n1:1,n1:0,'), 'an encoder restored as ' + encBack);
+    expect(!encBack.endsWith('kept'), 'an encoder took A and B on one pin: ' + encBack);
+
+    // A sine: an on/off wire in runs it, a number wire leaves it; the browser runs the
+    // wave, from its offset; off, it rests at its offset. It marshals as the sine-config
+    // example's layout in PROTOCOL.md, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a sine wave"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|Period (s):|Amplitude:|Offset:|Phase (°):|Command view:',
+        'a new sine does not show its settings: ' + await keyRows());
+    expect(await page.locator('#settings .setting-note').textContent() === 'From 0 to 1 and back every 2 s',
+        'a new sine says ' + await page.locator('#settings .setting-note').textContent());
+    const sine = await page.evaluate(async () => {
+        const s = selected;
+        const rejected = [s.setPeriod('0.01'), s.setPeriod('x'), s.setAmplitude('inf'), s.setOffset(''),
+            s.setPhase('361'), s.setPhase('-400')].every(r => r === false) && s.periodMs === 2000 && s.phase === 0;
+        const btn = addNode(MSG_UI_BUTTON), sld = addNode(MSG_UI_SLIDER), pwm = addNode(MSG_HW_PWM), led = addNode(MSG_HW_LED);
+        const wired = createEdge(sld.name, s.name) === null && createEdge(s.name, led.name) === null
+            && !!createEdge(s.name, pwm.name) && !!createEdge(btn.name, s.name);
+        // Off (the button is off): its offset.
+        const off = s.outputValue(0);
+        btn.handleClick();                                  // on
+        s.setPeriod('0.4');
+        const seen = [];
+        for (let i = 0; i < 8; i++) { await new Promise(r => setTimeout(r, 60)); seen.push(s.outputValue(0)); }
+        const moved = new Set(seen.map(v => v.toFixed(3))).size > 3 && seen.every(v => v >= 0 && v <= 1);
+        btn.handleClick();                                  // off
+        await new Promise(r => setTimeout(r, 120));
+        const rested = s.outputValue(0);
+        // A phase of 90°: off, it rests at its top, where it starts.
+        s.setPhase('90');
+        const phased = [s.outputValue(0), s.swing()].join('|');
+        s.setPeriod('2'); s.setAmplitude('100'); s.setOffset('0');
+        const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        saveGraph();
+        s.remove();
+        return { rejected, wired, off, moved, rested, phased, pay, btn: btn.id };
+    });
+    packets.push(...await sent(page));
+    expect(sine.rejected, 'a sine took settings out of range');
+    expect(sine.wired, 'a sine did not take an on/off wire in, and give a number out');
+    expect(sine.off === 0.5, 'a sine that is off is at ' + sine.off);
+    expect(sine.moved, 'a running sine did not move between 0 and 1');
+    expect(sine.rested === 0.5, 'a sine turned off rested at ' + sine.rested);
+    expect(sine.phased === '1|From 0 to 1 and back every 0.4 s, starting at 1', 'a sine with a phase of 90° showed ' + sine.phased);
+    expect(sine.pay === `00 ${sine.btn.toString(16).padStart(2, '0')} 00 00 00 07 d0 42 c8 00 00 00 00 00 00 42 b4 00 00`,
+        'a sine marshals as ' + sine.pay);
+    const sineBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x10, 0, 0, 1, 0,
+            0x4D, MSG_FLAG_OUTPUT, 0, 2, 19, 0, 1, 0, 0, 0, 0x03, 0xE8, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0, 0x43, 0x34, 0, 0,
+            0x25, 1, 0, 3, 12, 0, 2, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
+            0x4D, MSG_FLAG_OUTPUT, 0, 4, 15, 0, 0, 0, 0, 0, 0, 10, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0,   // too short a period
+            0x4D, MSG_FLAG_OUTPUT, 0, 5, 15, 0, 0, 0, 0, 0, 0x03, 0xE8, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0, // saved before phases
+        ])));
+        const s = elements.n2, bad = elements.n4;
+        const back = [s.periodMs, s.amplitude, s.offset, s.phase, s.inConns()[0]?.start.node.name,
+            elements.n3.inConns()[0]?.start.node.name, bad.periodMs, elements.n5.periodMs, elements.n5.phase].join();
+        Object.values(elements).forEach(e => e.remove());
+        return back;
+    });
+    expect(sineBack === '1000,0.5,0.5,180,n1,n2,2000,1000,0', 'a sine restored as ' + sineBack);
+
+    // A clock: three number outputs, wired by Wire from; setting the time sends the
+    // device a clock command (checked by check_packets), and sets every clock node in
+    // the browser; the device's reports, while fresh, are what it shows. It saves with
+    // no payload, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="tm"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a clock"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|Internet time:|Time zone:|Hours:|Minutes:|Seconds:|Wire from:|Command view:',
+        'a new clock does not show its settings: ' + await keyRows());
+    // Type the hour into its field, as a user would.
+    await page.locator('#settings .editable', { has: page.locator('.label:text-is("Hours:")') })
+        .locator('svg').first().dispatchEvent('click');
+    await page.locator('#settings .editable input').fill('7');
+    await page.locator('#settings .editable input').press('Enter');
+    await page.evaluate(() => { document.body.scrollLeft = 0; });
+    const clock = await page.evaluate(async () => {
+        const c = selected, typed = c.now()[0];                 // the hour typed in
+        const other = addNode(MSG_HW_CLOCK);
+        c.setPart(0, 8);
+        const set = [typed, c.now()[0], other.now()[0]].join(); // one clock: setting either sets both
+        // Internet time and the time zone: UTC+2 and on by default; one setting for both nodes.
+        const zones = ['2', '+2', '-3.5', '5:30', 'UTC+5:45', '14', '-12', 'x', '15', '-12:15', '5:07', '2:60']
+            .map(v => uiClock.parseZone(v)).join();
+        const defaults = [c.sync, c.zone, uiClock.zoneText(c.zone), uiClock.zoneText(-210), uiClock.zoneText(0)].join();
+        other.setSync(false);
+        const synced = [c.sync, other.sync].join();
+        c.setSync(true);
+        const before = c.now()[0];
+        const zoned = [c.setZone('+1'), c.zone, other.zone, (before + 23) % 24 === c.now()[0], c.setZone('nope')].join();
+        c.setZone('2');
+        const texts = [c.syncText()];
+        receiveTelemetry('clock waiting'); texts.push(c.syncText());
+        receiveTelemetry('clock synced'); texts.push(c.syncText());
+        receiveTelemetry('clock offline'); texts.push(c.syncText().split(' ').slice(0, 4).join(' '));
+        c.setSync(false); texts.push(c.syncText()); c.setSync(true);
+        const rejected = [c.setTime(24, 0, 0), c.setTime(0, 60, 0), c.setTime(0, 0, 60), c.setTime('x', 0, 0), c.setPart(1, 99)]
+            .every(r => r === false) && c.now()[0] === 8;
+        other.remove();
+        c.setTime(23, 59, 59);
+        await new Promise(r => setTimeout(r, 1300));
+        const rolled = c.now().join(':');                       // past midnight
+        const cmp = addNode(MSG_LOGIC_COMPARE), plot = addNode(MSG_UI_GRAPH), led = addNode(MSG_HW_LED);
+        c.setWireOutput(2);
+        const wired = !!createEdge(c.name, cmp.name) && !!createEdge(c.name, plot.name) && createEdge(c.name, led.name) === null
+            && cmp.inConns()[0].start.output === 2 && c.setWireOutput(3) === false;
+        receiveTelemetry(`sig ${c.id} 0 12`); receiveTelemetry(`sig ${c.id} 1 34`); receiveTelemetry(`sig ${c.id} 2 56`);
+        c.shown = true;
+        buildCommandInterface();
+        const shown = [c.reading(), c.tileState.textContent, String(c.outputValue(1)), c.gElm.children[1].textContent].join('|');
+        const pay = c.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ');
+        saveGraph();
+        return { set, zones, defaults, synced, zoned, texts: texts.join('|'), rejected, rolled, wired, shown, pay, id: c.id };
+    });
+    packets.push(...await sent(page));
+    expect(clock.set === '7,8,8', 'setting one clock did not set them all: ' + clock.set);
+    expect(clock.zones === '120,120,-210,330,345,840,-720,,,,,', 'time zones parse as ' + clock.zones);
+    expect(clock.defaults === 'true,120,UTC+2,UTC-3:30,UTC', 'a new clock\'s settings are ' + clock.defaults);
+    expect(clock.synced === 'false,false', 'internet time off on one clock left the other ' + clock.synced);
+    expect(clock.zoned === ',60,60,true,false', 'changing the time zone gave ' + clock.zoned);
+    expect(clock.texts === 'Once saved, the device sets its clock from the internet at startup, when it is on a network.'
+        + '|Asking the internet time server…|Set from the internet at startup.|The device isn\'t on|Internet time is off: set the clock here.',
+        'internet time read ' + clock.texts);
+    expect(clock.rejected, 'a clock took a time that is not a time of day');
+    expect(clock.rolled === '0:0:0' || clock.rolled === '0:0:1', 'a clock did not go round midnight: ' + clock.rolled);
+    expect(clock.wired, 'a clock\'s outputs did not wire as numbers');
+    expect(clock.shown === '12:34:56|12:34:56|34|12:34:56', 'a clock showed ' + clock.shown);
+    expect(clock.pay === `35 02 00 ${clock.id.toString(16).padStart(2, '0')} 03 01 00 78`, 'a clock marshals as ' + clock.pay);
+    const clockBack = await page.evaluate(() => {
+        // Clock n1 at UTC-3:30 without internet time; clock n3 differs, and takes n1's.
+        restoreGraph(configMessages(Uint8Array.from([0x35, MSG_FLAG_SHOWN, 0, 1, 3, 0, 0xFF, 0x2E, 0x40, 1, 0, 2, 12, 0, 1, 1, 0,
+            0x41, 0xF0, 0, 0, 0x3F, 0x80, 0, 0, 0x35, 0, 0, 3, 3, 1, 0, 0x78])));
+        const c = elements.n1, d = elements.n3;
+        const back = [c instanceof uiClock, c.shown, c.sync, c.zone, d.sync, d.zone, elements.n2.inConns()[0]?.start.output];
+        // One saved before clocks had settings: internet time off, UTC.
+        restoreGraph(configMessages(Uint8Array.from([0x35, 0, 0, 1, 0])));
+        return [...back, elements.n1.sync, elements.n1.zone].join();
+    });
+    expect(clockBack === 'true,true,false,-210,false,-210,1,false,0', 'a clock restored as ' + clockBack);
 
     // The block-config example in PROTOCOL.md restores as it says.
     const example = await page.evaluate(() => {

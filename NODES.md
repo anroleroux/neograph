@@ -13,11 +13,11 @@ the TMP button in the HWI group.
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
-| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS |
+| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
-| **TM** | Time: logic that waits, or runs for a set time | DLY, PLS, BLK |
-| **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX |
+| **TM** | Time: logic that waits, or runs for a set time; the clock | DLY, PLS, BLK, CLK |
+| **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX, SIN |
 | **LGC** | Logic: decisions the device makes | AND, OR, NOT, TGL, LCH, CNT |
 | **SUB** | Blocks: logic you define once and place many times | NEW, then one per block; in a block, IN, OUT |
 
@@ -198,7 +198,8 @@ Things to know:
 | | |
 |---|---|
 | Category | Hardware output |
-| Inputs | A number, as a fraction of its source's full scale; and an on/off |
+| Inputs | A number, as a fraction of its source's full scale; an on/off; and a data line from another NeoPixels node |
+| Outputs | **Data**: its LEDs, for another NeoPixels node to draw over |
 | Default label | NEOPIXEL |
 
 A chain of NeoPixels (WS2812 LEDs) on one pin, showing a graphic of its input. As with
@@ -258,6 +259,28 @@ Under the settings a **preview**
 draws the LEDs with the graphic at the level of its slider, at full brightness, so a
 dim setting still shows; point at an LED for its number.
 
+**Chaining: several graphics on one set of LEDs.** Wire one NeoPixels node to another
+(select the first, then the second, in wire mode): the wire, labelled Data, carries
+what the first draws into the second, which draws its own graphic over it. Chain as
+many as you like, one after another:
+
+- **Later nodes override earlier ones.** Each LED a later node lights takes its
+  colour; one it lights only partly (the end of a bar, a point between two LEDs) blends
+  from the colour underneath; the LEDs it doesn't light show what was drawn before. A
+  node whose on/off is off draws nothing, so what is under it shows.
+- **The last node drives the LEDs:** the one whose Data output goes nowhere. The others
+  only draw.
+- **One set of LEDs.** The nodes of a chain share the pin, layout, size and wiring:
+  change them on any node and they change on all. Joining two chains, they take the
+  settings of the last node. Brightness, graphic and colour are each node's own.
+- **The preview** of a node shows its chain drawn as far as that node, each node at
+  its own preview level.
+- **Taking the Data wire out** splits the chain: the node it came from drives its own
+  LEDs again, on a free pin if the chain kept its pin.
+
+For example: a dim blue Patch over the whole ring as a background, a green Bar level
+over it for a tank's level, and a red Moving point last, marking the level to fill to.
+
 Things to know:
 
 - **Power them from 5 V.** A NeoPixel draws up to 60 mA at full white: more than a few
@@ -267,8 +290,9 @@ Things to know:
   flicker or show the wrong colours, a level shifter to 5 V fixes it.
 - **The on/off** is read on the device: a button in the Command view, a GPIO input or
   logic turns the LEDs on and off within one 10 ms scan.
-- **Up to 256 LEDs a node, and 1024 in all.** Each node takes one of the chip's PIO
-  state machines and a DMA channel; a node that finds none free is skipped.
+- **Up to 256 LEDs a node, and 1024 in all.** Each node that drives LEDs (the last
+  of a chain) takes one of the chip's PIO state machines and a DMA channel; a node
+  that finds none free is skipped.
 - **On a save** the LEDs keep what they show until the device draws them again; taken
   out of the graph, or moved to another pin, they turn off.
 
@@ -409,6 +433,49 @@ Things to know:
 - **If it stops answering,** Found goes off after three failed reads (a second or two),
   the temperature keeps its last reading, and the device keeps looking for it.
 - **After a save** it keeps its reading until the next one.
+
+### Rotary encoder: `HWI-ENC`
+
+| | |
+|---|---|
+| Category | Hardware input |
+| Outputs | **Position**: number, in clicks, 0 to its Steps; **Pressed**: on/off, on while the knob is pushed in |
+| Default label | Encoder |
+
+A rotary encoder, such as a KY-040 module or an EC11: a knob that turns without end, in
+clicks, and pushes in as a switch. Each click one way adds 1 to its position, each the
+other way takes 1 off. The device counts every click, however fast it is turned. The
+offline demo turns it slowly to and fro.
+
+It has two outputs. Pick the one the next wire leaves from in **Wire from**, and each
+wire is labelled with it:
+
+- **Position** goes to anything that takes a number: a servo, PWM or NeoPixels, which
+  take it as a fraction of Steps (with 20 steps, 20 clicks sweep a servo across), a
+  compare, a scale or a plot.
+- **Pressed** goes to anything that takes on/off: a toggle (push to turn something on
+  and off), a counter, an LED or a light.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| A (CLK) pin | GPIO 0–22, 26–28, not used by another node | 6, or the lowest free pin | The pin its A contact (CLK) is on. |
+| B (DT) pin | as A, not A's | 7 | The pin its B contact (DT) is on. |
+| Switch (SW) pin | None, or as A, not A's or B's | 8 | The pin its push switch (SW) is on. With None, Pressed stays off. |
+| Steps | 1–1000 | 20 | The top of its position. |
+| A click is | Full cycle, Half cycle, Each edge | Full cycle | How many changes of its contacts make a click. Full cycle suits most encoders (a KY-040, an EC11); if it counts only every other click, pick Half cycle; Each edge for an encoder without clicks. |
+| At the ends | Wrap, Stop | Wrap | Wrap goes on from the other end, so it runs 0 to Steps − 1: a 20-click knob with 20 steps comes back to 0 each turn. Stop holds it at 0 and at Steps. |
+| Direction | Normal, Reversed | Normal | Normal counts up clockwise on a KY-040. Reversed counts the other way. |
+| Wire from | Position, Pressed | Position | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile with its position, such as "5 of 20", and ", pressed" while it is. |
+
+Things to know:
+
+- **Wiring:** CLK and DT to the A and B pins, SW to the switch pin, `+` to 3.3 V and GND
+  to GND. Don't power it from 5 V: a KY-040's resistors would pull the pins to 5 V. The
+  device turns on each pin's pull-up, so a bare encoder needs no resistors: its common
+  pin, and the switch's other side, go to GND.
+- **It starts at 0,** and a save keeps its position (within the new Steps).
+- **Up to 8 encoders** in a graph.
 
 ---
 
@@ -599,7 +666,8 @@ settings to change that. Each wire leaving it is labelled Done or Count.
 Logic that works with time: it waits, or runs for a set time. These are logic nodes,
 run by the device every 10 ms like those in [LGC](#lgc-logic), with the same
 Command view setting; they have a group of their own in the add menu. Times are in
-seconds, to the millisecond, up to a day.
+seconds, to the millisecond, up to a day. The group also has the device's clock, the
+time of day.
 
 ### Delay: `TM-DLY`
 
@@ -656,13 +724,53 @@ it blinks all the time.
 | Time on (s) | 0.001 to 86400 | 0.5 | How long each flash is on. |
 | Time off (s) | 0.001 to 86400 | 0.5 | How long it is off between flashes. |
 
+### Clock: `TM-CLK`
+
+| | |
+|---|---|
+| Category | Hardware input: the device's clock |
+| Outputs | **Hour**: number, 0–23; **Minute**: number, 0–59; **Second**: number, 0–59. Each a whole number |
+| Default label | Clock |
+
+The device's time of day. Pick the output the next wire leaves from in **Wire from**,
+and each wire is labelled with it. Wire the hour into a compare to switch a lamp on in
+the evening (above 17: from 18:00), the minute into a plot, or the second into a servo
+to sweep it once a minute. A servo, PWM or NeoPixels take the hour as a fraction of 24,
+a minute or second as a fraction of 60.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Internet time | On, Off | On | On: the device sets its clock from an internet time server when it starts up, and when you save the graph with internet time newly on (a clock added, or this turned on), if it is on a WiFi network with internet. Off: only by hand. |
+| Time zone | UTC−12 to UTC+14, in quarter hours | UTC+2 | Hours ahead of UTC: type 2, +2, -3.5, 5:30 or UTC+5:45. Internet time is UTC; the zone turns it into your time. Changing it moves the clock by the difference. |
+| Hours, Minutes, Seconds | 0–23, 0–59, 0–59 | The time now | Type a part of the time to set it; the other parts stay as they are. |
+| Set to this computer's time | (a button) | | Sets the clock to the time on the computer, to the second. |
+| Wire from | Hour, Minute, Second | Hour | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile with the time, such as 07:30:00. |
+
+Things to know:
+
+- **One clock.** The device has a single clock; every clock node shows the same time
+  and has the same settings, and setting any of them sets it.
+- **Internet time** needs the device to have joined a WiFi network with internet
+  (Network view). As its own access point it has none: set the clock by hand. Under the
+  settings it says what the device is doing: asking the time server, set from the
+  internet, or not on a network. It asks once a startup, so a time you set by hand stays
+  until the device restarts. Daylight saving isn't followed: change the time zone when
+  the clocks change.
+- **Setting it takes effect at once** on the device, without saving the graph, and
+  saving doesn't change it: the time isn't saved with the graph.
+- **No battery.** When the device powers up, its clock starts at 00:00:00 and counts
+  from there until it is set, from the internet or by you.
+- **Without a device** (or before it reports) the node keeps time in the browser, from
+  the computer's clock or the time you last set, and the node shows it.
+
 ---
 
 ## ANL: Analog
 
 Logic that works on numbers: a slider's 0 to 1, an ADC's volts, the core
 temperature's °C, a counter's count, or another analog node's output. A compare turns
-a number into on/off; a scale, min and max give a number. These are logic nodes, run
+a number into on/off; a scale, min and max give a number, and a sine makes one. These are logic nodes, run
 by the device every 10 ms like those in [LGC](#lgc-logic), with the same Command view
 setting.
 
@@ -735,6 +843,37 @@ The highest of its wired inputs, such as the hottest of several readings. With
 nothing wired in, 0.
 
 No settings of its own.
+
+### Sine: `ANL-SIN`
+
+| | |
+|---|---|
+| Category | Logic |
+| Input | One on/off, or none |
+| Output | Number |
+| Default label | Sine |
+
+A smooth wave: it swings from its offset − amplitude up to offset + amplitude and back
+once every period, starting at its offset and rising. The defaults swing from 0 to 1
+every 2 s, which sweeps a servo or PWM from end to end, or makes NeoPixels breathe
+(with Colour From input, or a bar). The node runs in the browser too, so a plot wired to
+it moves without a device.
+
+It runs while its on/off input is on, or all the time with nothing wired in. When the
+input goes off it rests where it starts (its offset, with phase 0), and starts from the
+beginning of its wave when it comes back on.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Period (s) | 0.02 s to a day | 2 | How long one wave takes. |
+| Amplitude | Any number | 0.5 | How far it swings either side of its offset. Below 0, it falls first. |
+| Offset | Any number | 0.5 | The middle of the wave: where it starts, and rests while off, with phase 0. |
+| Phase (°) | −360 to 360 | 0 | Where on the wave it starts, and rests while off: 90 at its top, 180 on its way down through its offset, 270 at its bottom. Two sines with one period, at 0 and 90, trace a circle. |
+| Command view | Show, Hide | Hide | A tile with its value. |
+
+Under the settings it says what that makes, for example "From 0 to 1 and back every
+2 s", and with a phase where it starts. The device works it out every 10 ms scan, so a period under a few tenths of a
+second comes out in coarse steps.
 
 ---
 
@@ -840,12 +979,12 @@ for a longer kick, or to a Counter to count the ticks.
 
 ## Which node takes which
 
-| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT |
+| From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT, SIN |
 |---|---|---|---|---|
-| BTN, GPI | ✓ | | | ✓ |
-| SLD, XY (X or Y), ADC, TMP | | ✓ | ✓ | |
+| BTN, GPI, DS (Found), ENC (Pressed) | ✓ | | | ✓ |
+| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position) | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
-| SCL, MIN, MAX, CNT (Count) | | ✓ | ✓ | |
+| SCL, MIN, MAX, SIN, CNT (Count), CLK (Hour, Minute or Second) | | ✓ | ✓ | |
 
 A block's copy takes, on each input, and gives, on each output, what the block's IN or
 OUT says: on/off like a button, or a number like a slider.

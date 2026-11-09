@@ -32,6 +32,10 @@
 
 /* {{ds18b20-js}} */
 
+/* {{encoder-js}} */
+
+/* {{clock-js}} */
+
 /* {{keyboard-js}} */
 
 /* {{logic-js}} */

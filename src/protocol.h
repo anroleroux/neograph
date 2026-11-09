@@ -5,7 +5,8 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_ and SUB_ constants are mirrored in
+ * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
+ * ENCODER_, SINE_, CLOCK_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -36,7 +37,8 @@
    sources had several outputs. */
 #define MSG_FLAG_OUTPUT         0x01
 
-/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20) or
+/* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
+   rotary encoder, clock) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
@@ -71,9 +73,11 @@
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
 #define MSG_HW_DS18B20          0x33    /* a DS18B20 temperature sensor on a 1-Wire pin; two outputs */
+#define MSG_HW_ENCODER          0x34    /* a rotary encoder and its push switch; two outputs */
+#define MSG_HW_CLOCK            0x35    /* the device's clock, a time of day: hour, minute, second */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
-   source itself, with one output, 0: boolean, or floating for a scale, min or max. A
+   source itself, with one output, 0: boolean, or floating for a scale, min, max or sine. A
    counter has two: done (0, boolean) and its count (1, floating). */
 #define MSG_LOGIC_BIT           0x40
 #define MSG_LOGIC_COMPARE       0x40    /* a floating input above or below a threshold */
@@ -89,7 +93,8 @@
 #define MSG_LOGIC_TOGGLE        0x4A    /* turns over each time its input goes on */
 #define MSG_LOGIC_LATCH         0x4B    /* on once set, off once reset; reset wins */
 #define MSG_LOGIC_COUNTER       0x4C    /* counts its input going on, up to a preset; two outputs */
-#define MSG_LOGIC_LAST          0x4C    /* the last logic type: MSG_LOGIC_COUNTER */
+#define MSG_LOGIC_SINE          0x4D    /* floating: a sine wave, while its input is on */
+#define MSG_LOGIC_LAST          0x4D    /* the last logic type: MSG_LOGIC_SINE */
 
 /* Blocks (subroutines): a graph of logic defined once (MSG_SUB_DEF, MSG_SUB_PART) and
    placed any number of times (MSG_SUB). The device runs each copy's parts
@@ -198,6 +203,44 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define DS18B20_PULLUP          0x04
 #define DS18B20_FULL            100     /* °C: its full scale, for an output that takes a fraction */
 
+/* Rotary encoder (MSG_HW_ENCODER), such as a KY-040 or an EC11, payload: byte 0 the GPIO
+   of its A (CLK) pin, byte 1 of its B (DT) pin, byte 2 of its push switch (SW), or
+   ENCODER_NO_BUTTON; three usable pins that differ. Byte 3: options. Bits 0-1: the
+   transitions of its two pins a click (ENCODER_DETENT_), bit 2 (ENCODER_REVERSE): it
+   counts the other way, bit 3 (ENCODER_WRAP): past its ends it goes on from the other.
+   Bytes 4-5: its steps, big endian, 1 to ENCODER_STEPS_MAX: its position goes from 0 to
+   its steps (wrapping, to its steps - 1). Two outputs: its position, in clicks (0,
+   floating; its full scale is its steps), and whether its switch is pressed (1,
+   boolean). */
+#define ENCODER_PAYLOAD_LEN     6
+#define ENCODER_NO_BUTTON       0xFF
+#define ENCODER_DETENT_MASK     0x03
+#define ENCODER_DETENT_4        0x00    /* a whole cycle of its pins a click: most encoders, a KY-040 */
+#define ENCODER_DETENT_2        0x01    /* half a cycle a click */
+#define ENCODER_DETENT_1        0x02    /* each change of a pin; or an encoder without clicks */
+#define ENCODER_REVERSE         0x04
+#define ENCODER_WRAP            0x08
+#define ENCODER_STEPS_MAX       1000
+
+/* Clock (MSG_HW_CLOCK): the device has one clock, a time of day, which every clock node
+   reads. Three outputs, each a whole number: its hour (0, 0 to 23), its minute (1) and its
+   second (2), 0 to 59; on the device they drive outputs from 0 to CLOCK_HOURS,
+   CLOCK_MINUTES and CLOCK_SECONDS. Its payload, CLOCK_PAYLOAD_LEN bytes (or none, saved
+   before it had settings: internet time off, UTC): byte 0 options, CLOCK_SYNC: set the
+   clock from an internet time server; bytes 1-2 its time zone, minutes ahead of UTC, a
+   signed 16-bit big-endian number from CLOCK_ZONE_MIN to CLOCK_ZONE_MAX, a multiple of
+   CLOCK_ZONE_STEP. The first clock in a config sets the device's. A command (PKT_COMMAND)
+   from a clock sets the clock: CLOCK_SET_LEN bytes, the hour, minute and second, now. */
+#define CLOCK_HOURS             24
+#define CLOCK_MINUTES           60
+#define CLOCK_SECONDS           60
+#define CLOCK_SET_LEN           3
+#define CLOCK_PAYLOAD_LEN       3
+#define CLOCK_SYNC              0x01    /* options bit 0: internet time */
+#define CLOCK_ZONE_MIN          (-720)  /* UTC-12 */
+#define CLOCK_ZONE_MAX          840     /* UTC+14 */
+#define CLOCK_ZONE_STEP         15      /* minutes: zones such as UTC+5:45 */
+
 /* Logic elements. A compare (MSG_LOGIC_COMPARE): a source reference, then its condition
    (COMPARE_ABOVE or COMPARE_BELOW), its threshold and its hysteresis, each a 32-bit
    float, big endian. An AND or OR: 1 to LOGIC_INPUTS_MAX source references. A NOT: one.
@@ -210,13 +253,17 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    blinks), then its time on and time off, each 1 to DELAY_MAX_MS. A toggle: a source
    reference. A latch: its set source reference, then its reset one. A counter: its
    count source reference, its reset one, then its preset, a 32-bit big-endian number,
-   1 to COUNTER_MAX. */
+   1 to COUNTER_MAX. A sine (MSG_LOGIC_SINE): a source reference (0: it always runs),
+   then its period, a 32-bit big-endian number of milliseconds, SINE_PERIOD_MIN_MS to
+   DELAY_MAX_MS, then its amplitude, its offset and its phase in degrees, each a finite
+   32-bit big-endian float; one saved without its phase has phase 0. */
 #define COMPARE_ABOVE           0x00    /* on above the threshold; off below it less the hysteresis */
 #define COMPARE_BELOW           0x01    /* on below the threshold; off above it plus the hysteresis */
 #define LOGIC_INPUTS_MAX        4
 #define DELAY_MAX_MS            86400000    /* a day */
 #define SCALE_CLAMP             0x01    /* options bit 0: keep the output within its range */
 #define COUNTER_MAX             1000000 /* the highest preset */
+#define SINE_PERIOD_MIN_MS      20      /* a sine's shortest period: two scans */
 
 /* GPIO input (MSG_HW_GPI) payload byte 0: the GPIO pin, a usable one (pin_usable). Byte 1:
    options. Bits 0-1: the pin's pull (GPI_PULL_). Bit 2 (GPI_INVERT): 0 = on while the pin
@@ -267,7 +314,10 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 /* NeoPixel (MSG_HW_NEOPIXEL) payload. A chain of WS2812 LEDs on one pin, laid out as
    an array (rows of columns), a circle (rings, one inside the other) or a doughnut (one
    ring); its graphic draws its input on them, while its on/off input is on (or not
-   wired). PROTOCOL.md, "NeoPixels", has the bytes. */
+   wired). Its data line in, a reference to another NeoPixel node (output 0, its data
+   line out), chains them: it draws over what that one drew, and only the last of a
+   chain, whose data line out goes nowhere, drives its pin. PROTOCOL.md, "NeoPixels",
+   has the bytes. */
 #define NEOPIXEL_ARRAY          0x00    /* layout: rows × columns; LED 0 at the top left, along the top row */
 #define NEOPIXEL_CIRCLE         0x01    /* layout: 1 to NEOPIXEL_RINGS_MAX rings, in the order they are wired */
 #define NEOPIXEL_DOUGHNUT       0x02    /* layout: one ring of LEDs */
@@ -287,6 +337,32 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define NEOPIXEL_BAR_COLUMN     0x01    /* a bar up an array's column; across a circle's rings, from the centre out */
 
 static inline int pin_usable(uint8_t pin) { return pin < 32 && (PIN_USABLE_MASK >> pin & 1); }
+
+/* Read a clock's payload: its options (CLOCK_SYNC) and its time zone, minutes ahead of
+   UTC. Returns 0 if it is not one the device runs; none is internet time off, UTC. */
+static inline int clock_payload_read(const uint8_t *pay, uint8_t len, uint8_t *options, int16_t *zone) {
+    *options = 0;
+    *zone = 0;
+    if (len == 0) return 1;
+    if (len != CLOCK_PAYLOAD_LEN || (pay[0] & ~CLOCK_SYNC)) return 0;
+    int16_t z = (int16_t)(uint16_t)(pay[1] << 8 | pay[2]);
+    if (z < CLOCK_ZONE_MIN || z > CLOCK_ZONE_MAX || z % CLOCK_ZONE_STEP) return 0;
+    *options = pay[0];
+    *zone = z;
+    return 1;
+}
+
+/* Whether a rotary encoder payload is one the device runs: its length, its A and B on
+   usable pins, its switch on one or ENCODER_NO_BUTTON, the three apart, known options
+   and transitions a click, and 1 to ENCODER_STEPS_MAX steps. */
+static inline int encoder_payload_valid(const uint8_t *pay, uint8_t len) {
+    if (len != ENCODER_PAYLOAD_LEN || !pin_usable(pay[0]) || !pin_usable(pay[1]) || pay[0] == pay[1]) return 0;
+    if (pay[2] != ENCODER_NO_BUTTON && (!pin_usable(pay[2]) || pay[2] == pay[0] || pay[2] == pay[1])) return 0;
+    if (pay[3] & ~(ENCODER_DETENT_MASK | ENCODER_REVERSE | ENCODER_WRAP)) return 0;
+    if ((pay[3] & ENCODER_DETENT_MASK) > ENCODER_DETENT_1) return 0;
+    uint16_t steps = (uint16_t)(pay[4] << 8 | pay[5]);
+    return steps >= 1 && steps <= ENCODER_STEPS_MAX;
+}
 
 /* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which
    closes a loop. Logic reads it as the last scan left it. Bits 0-6 are the output. */
@@ -459,6 +535,7 @@ typedef struct {
     uint8_t from[2], to[2];                 /* a point or patch: where it starts and ends: an array's row and
                                                column; a circle's ring and its LED; a doughnut's 0 and LED */
     uint8_t colour[2][3];                   /* red, green, blue: its colour (at 0), and at 1 */
+    msg_ref under;                          /* its data line in: the NeoPixel node it draws over; 0 = none */
 } neopixel_payload;
 
 /* Whether a NeoPixel's point position fits its layout: an array's row and column, a
@@ -481,7 +558,8 @@ static inline int neopixel_place_valid(const neopixel_payload *px, const uint8_t
    an array that it has, around a ring of a circle that it has or across its rings, or
    around a doughnut from one of its LEDs; a point or patch from one place on it to
    another. A
-   graphic with NEOPIXEL_GFX_COLOUR_INPUT has a second colour. */
+   graphic with NEOPIXEL_GFX_COLOUR_INPUT has a second colour. After its graphic, a
+   third source reference may follow: its data line in (see `under`). */
 static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t flags, neopixel_payload *out) {
     uint8_t r = msg_ref_len(flags);
     if (len < 2 * r + 5) return 0;
@@ -489,8 +567,10 @@ static inline int neopixel_payload_read(const uint8_t *pay, uint8_t len, uint8_t
     uint8_t k = q[4];                       /* the bytes of its size */
     if (k < 1 || k > NEOPIXEL_RINGS_MAX || len < 2 * r + 5 + k + 2) return 0;
     const uint8_t *g = q + 5 + k;           /* its graphic */
-    if (len != 2 * r + 5 + k + 2 + g[1]) return 0;
+    unsigned end = 2u * r + 5 + k + 2 + g[1];  /* past its graphic */
+    if (len != end && len != end + r) return 0;
     memset(out, 0, sizeof *out);
+    if (len == end + r) out->under = msg_ref_at(pay + end, flags);
     out->source = msg_ref_at(pay, flags);
     out->enable = msg_ref_at(pay + r, flags);
     out->pin = q[0];
@@ -599,6 +679,13 @@ static inline int logic_payload_valid(uint8_t type, const uint8_t *pay, uint8_t 
     case MSG_LOGIC_BLINK:
         return len == r + 8 && msg_u32_at(pay + r) >= 1 && msg_u32_at(pay + r) <= DELAY_MAX_MS
             && msg_u32_at(pay + r + 4) >= 1 && msg_u32_at(pay + r + 4) <= DELAY_MAX_MS;
+    case MSG_LOGIC_SINE: {
+        if ((len != r + 12 && len != r + 16) || msg_u32_at(pay + r) < SINE_PERIOD_MIN_MS
+            || msg_u32_at(pay + r) > DELAY_MAX_MS) return 0;
+        float amplitude = msg_float_at(pay + r + 4), offset = msg_float_at(pay + r + 8);
+        float phase = len == r + 16 ? msg_float_at(pay + r + 12) : 0;
+        return amplitude - amplitude == 0 && offset - offset == 0 && phase - phase == 0;     /* finite */
+    }
     case MSG_LOGIC_SCALE: {
         if (len != r + 17 || (pay[r] & ~SCALE_CLAMP)) return 0;
         float k[4];

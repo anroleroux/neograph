@@ -8,6 +8,15 @@
 
 void core1_worker();
 
+// Set the device's clock (MSG_HW_CLOCK) to h:m:s now, or to `ms` from midnight; core 0
+// does. False, leaving it, if that is not a time of day.
+bool clock_set(uint8_t h, uint8_t m, uint8_t s);
+void clock_set_ms(uint32_t ms);
+
+// Its time zone, minutes ahead of UTC: a clock that was set moves by the change, so a
+// time from an internet time server, in UTC, shows as the time there.
+void clock_set_zone(int32_t zone);
+
 // Pause core 1 so core 0 can write flash. Core 1 executes from flash, so it must
 // not run while flash is erased or programmed. core1_pause waits (up to 1 s) until
 // core 1 is parked in RAM with interrupts off; it returns false if core 1 did not

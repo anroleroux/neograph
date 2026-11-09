@@ -45,10 +45,46 @@ static uint8_t control_type(const uint8_t *p, size_t len, uint16_t id) {
     return 0;
 }
 
+/* The NeoPixel payload of element `id`; 0 if it has none, or one the device wouldn't run. */
+static int neopixel_of(const uint8_t *p, size_t len, uint16_t id, neopixel_payload *px) {
+    config_element_iterator it;
+    config_element_iterator_init(&it, p + 3, len - 3);
+    while (it.next(&it))
+        if (it.type == MSG_HW_NEOPIXEL && it.id == id) return neopixel_payload_read(it.pay, it.len, it.flags, px);
+    return 0;
+}
+
+/* A NeoPixel node's data line in, as the UI writes it: another NeoPixel node's data line
+   out (its output 0, not a feedback wire), with the same LEDs (layout, size and wiring),
+   which feeds no other, and not leading back to this one. */
+static void check_under(const uint8_t *p, size_t len, uint16_t id, const neopixel_payload *px) {
+    neopixel_payload up;
+    if (!neopixel_of(p, len, px->under.id, &up)) { fail("NeoPixels' data line in names no NeoPixel node"); return; }
+    if (px->under.output != 0 || px->under.feedback) fail("NeoPixels' data line in is not another's output 0");
+    if (up.layout != px->layout || up.options != px->options || up.size_len != px->size_len
+        || memcmp(up.size, px->size, px->size_len)) fail("chained NeoPixels have different LEDs");
+    config_element_iterator it;
+    config_element_iterator_init(&it, p + 3, len - 3);
+    int feeds = 0;
+    neopixel_payload other;
+    while (it.next(&it))
+        if (it.type == MSG_HW_NEOPIXEL && neopixel_payload_read(it.pay, it.len, it.flags, &other)
+            && other.under.id == px->under.id) feeds++;
+    if (feeds > 1) fail("a NeoPixel node's data line out goes to more than one");
+    uint16_t at = px->under.id;
+    for (int steps = 0; at && steps < 256; steps++) {
+        if (at == id) { fail("chained NeoPixels go round in a loop"); return; }
+        at = neopixel_of(p, len, at, &up) ? up.under.id : 0;
+    }
+}
+
 /* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
-   count, a DS18B20's temperature and found, one for the others. */
+   count, a DS18B20's temperature and found, an encoder's position and pressed, one for
+   the others. */
 static uint8_t outputs_of(uint8_t type) {
-    return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20 ? 2 : 1;
+    if (type == MSG_HW_CLOCK) return 3;     /* its hour, minute and second */
+    return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20
+        || type == MSG_HW_ENCODER ? 2 : 1;
 }
 
 /* Whether a message holds source references, which the UI writes with their outputs. */
@@ -64,9 +100,10 @@ static bool has_refs(uint8_t type) {
    may be, ending in 0. */
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
                                    MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
-                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20, 0 };
-static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20,
-                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, 0 };
+                                   MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20,
+                                   MSG_HW_ENCODER, 0 };
+static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20, MSG_HW_ENCODER, MSG_HW_CLOCK,
+                                    MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, MSG_LOGIC_SINE, 0 };
 
 /* What a reference to a block's output stands for, as the device reads it
    (resolve_ref in src/program.c): the reference in the block's table. */
@@ -117,6 +154,8 @@ static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_
     if (type == MSG_LOGIC_COUNTER && src.output != (types == BOOLEAN ? 0 : 1)) { fail(what); return; }
     /* A DS18B20's temperature (0) is floating, its found (1) boolean. */
     if (type == MSG_HW_DS18B20 && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
+    /* An encoder's position (0) is floating, its pressed (1) boolean. */
+    if (type == MSG_HW_ENCODER && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
     for (; *types; types++) if (type == *types) return;
     fail(what);
 }
@@ -178,6 +217,16 @@ static void check_config(const uint8_t *p, size_t len) {
             else if (!pin_usable(it.pay[0])) fail("DS18B20 pin is not in PIN_USABLE_MASK");
             else if (it.pay[1] & ~(DS18B20_RES_MASK | DS18B20_PULLUP)) fail("DS18B20 options have unknown bits");
             break;
+        case MSG_HW_ENCODER:
+            if (!encoder_payload_valid(it.pay, it.len)) fail("encoder message is not one the device runs");
+            break;
+        case MSG_HW_CLOCK: {
+            uint8_t options;
+            int16_t zone;
+            if (it.len != CLOCK_PAYLOAD_LEN) fail("clock message is not its settings, as the UI writes it");
+            else if (!clock_payload_read(it.pay, it.len, &options, &zone)) fail("clock settings the device would skip");
+            break;
+        }
         case MSG_HW_ADC:
             if (it.len != 1) fail("ADC message is not 1 byte; the device would skip it");
             else if (it.pay[0] >= ADC_CHANNELS) fail("ADC channel is not below ADC_CHANNELS");
@@ -194,10 +243,12 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_LOGIC_BLINK:
         case MSG_LOGIC_TOGGLE:
         case MSG_LOGIC_LATCH:
-        case MSG_LOGIC_COUNTER: {
+        case MSG_LOGIC_COUNTER:
+        case MSG_LOGIC_SINE: {
             /* program_compile runs only logic logic_payload_valid accepts */
             if (!logic_payload_valid(it.type, it.pay, it.len, it.flags)) { fail("logic payload is not one the device runs; it would skip it"); break; }
-            bool floating_in = it.type == MSG_LOGIC_COMPARE || program_logic_floating(it.type);
+            /* A sine is floating out, but its input runs it: boolean. */
+            bool floating_in = it.type == MSG_LOGIC_COMPARE || (program_logic_floating(it.type) && it.type != MSG_LOGIC_SINE);
             uint8_t refs = it.type == MSG_LOGIC_AND || it.type == MSG_LOGIC_OR || it.type == MSG_LOGIC_MIN
                 || it.type == MSG_LOGIC_MAX ? it.len / r : it.type == MSG_LOGIC_LATCH || it.type == MSG_LOGIC_COUNTER ? 2 : 1;
             for (uint8_t k = 0; k < refs; k++) {
@@ -286,6 +337,7 @@ static void check_config(const uint8_t *p, size_t len) {
             else {
                 check_source(p, len, px.source, FLOATING, "NeoPixels are wired from something not floating");
                 check_source(p, len, px.enable, BOOLEAN, "NeoPixels' on/off is wired from something not on/off");
+                if (px.under.id) check_under(p, len, it.id, &px);
             }
             break;
         }
@@ -324,6 +376,13 @@ static void check_command(const uint8_t *p, size_t len) {
     config_element_iterator it;
     config_element_iterator_init(&it, p + 3, len - 3);
     while (it.next(&it)) {
+        /* A clock's sets the device's clock: its hour, minute and second. */
+        if (it.type == MSG_HW_CLOCK) {
+            if (it.len != CLOCK_SET_LEN) fail("clock command is not an hour, a minute and a second");
+            else if (it.pay[0] >= CLOCK_HOURS || it.pay[1] >= CLOCK_MINUTES || it.pay[2] >= CLOCK_SECONDS)
+                fail("clock command is not a time of day; the device would ignore it");
+            continue;
+        }
         if ((it.type & (MSG_HW_BIT | MSG_INPUT_BIT)) != MSG_INPUT_BIT) fail("command from an element that is not a UI input");
         /* handle_packet sends one action word per payload byte: a value for each output */
         if (it.len != outputs_of(it.type)) fail("command payload is not one byte per output of its element");
@@ -405,7 +464,7 @@ int main(int argc, char **argv) {
         while (it.next(&it))
             if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN | MSG_FLAG_PART)) fail("a message's flags set an unknown bit");
             else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
-                     && it.type != MSG_HW_DS18B20
+                     && it.type != MSG_HW_DS18B20 && it.type != MSG_HW_ENCODER && it.type != MSG_HW_CLOCK
                      && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_LAST))
                 fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");

@@ -9,6 +9,8 @@
 #include "protocol.h"
 #include "program.h"
 #include "ds18b20.h"
+#include "encoder.h"
+#include "clock.h"
 #include "neopixel.h"
 #include "servo.h"
 #include "stepper.h"
@@ -353,8 +355,10 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
     if (src.id == 0) return;
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
-                             || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || program_logic_floating(type), ex->name);
-    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : 1), ex->name);   /* a DS18B20's temperature */
+                             || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
+                             || type == MSG_HW_CLOCK || program_logic_floating(type), ex->name);
+    /* A DS18B20's temperature, an encoder's position: their output 0; a clock's three. */
+    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : type == MSG_HW_CLOCK ? 3 : 1), ex->name);
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
@@ -370,7 +374,7 @@ void test_wires_join_matching_types(void)
         messages(&it, ex);
         while (it.next(&it)) {
             bool floating_in = it.type == MSG_LOGIC_COMPARE || it.type == MSG_HW_STEPPER || it.type == MSG_HW_SERVO
-                || program_logic_floating(it.type);
+                || (program_logic_floating(it.type) && it.type != MSG_LOGIC_SINE);   /* a sine's input is on/off */
             bool boolean_in = it.type == MSG_HW_LED || it.type == MSG_HW_GPO || it.type == MSG_HW_KEYBOARD
                 || it.type == MSG_UI_INDICATOR || (program_logic(it.type) && !floating_in);
             uint8_t r = msg_ref_len(it.flags);
@@ -382,9 +386,12 @@ void test_wires_join_matching_types(void)
                     msg_ref src = through_block(ex, msg_ref_at(it.pay + k * r, it.flags));
                     uint8_t type = element_type(ex, src.id);
                     if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI || type == MSG_HW_DS18B20
+                                                         || type == MSG_HW_ENCODER
                                                          || (program_logic(type) && !program_logic_floating(type)), ex->name);
-                    /* A DS18B20's found is its output 1; the others' only boolean output is 0. */
-                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 ? 1 : 0, src.output, ex->name);
+                    /* A DS18B20's found, an encoder's pressed, is its output 1; the others' only
+                       boolean output is 0. */
+                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER ? 1 : 0,
+                                                    src.output, ex->name);
                 }
             } else if (floating_in) {
                 for (uint8_t k = 0; k < refs; k++) assert_floating_hw(ex, msg_ref_at(it.pay + k * r, it.flags));
@@ -423,6 +430,8 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_DS18B20 & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ENCODER & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_CLOCK & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_INDICATOR & (MSG_HW_BIT | MSG_INPUT_BIT));
 }
@@ -1714,6 +1723,85 @@ void test_neopixel_colour_input_and_switch(void)
     TEST_ASSERT_TRUE(neopixel_enabled(n, 0));
 }
 
+/* A NeoPixel message: node `id` on a 4 × 4 array (or `size`), from ADC n1, a graphic,
+   and with `under` its data line in. Returns its length. */
+static uint8_t chained_neopixel(uint8_t *msg, uint16_t id, uint16_t under, const uint8_t *size,
+                                uint8_t graphic, const uint8_t *set, uint8_t glen)
+{
+    msg[0] = MSG_HW_NEOPIXEL;
+    msg[1] = MSG_FLAG_OUTPUT;
+    msg[2] = (uint8_t)(id >> 8);
+    msg[3] = (uint8_t)id;
+    uint8_t len = neopixel_pay(msg + 5, NEOPIXEL_ARRAY, 0, size, 2, graphic, set, glen);
+    if (under) {
+        msg[5 + len] = (uint8_t)(under >> 8);
+        msg[6 + len] = (uint8_t)under;
+        msg[7 + len] = 0;
+        len += 3;
+    }
+    msg[4] = len;
+    return (uint8_t)(5 + len);
+}
+
+void test_neopixel_chain(void)
+{
+    static hw_program p;
+    static const uint8_t grid[] = { 4, 4 }, small[] = { 2, 2 };
+    static const uint8_t patch[] = { 0, 0, 3, 3, 0, 10, 20, 30 };          /* all of it, red 10, green 20, blue 30 */
+    static const uint8_t point[] = { 0, 0, 0, 3, 0, 200, 0, 0 };           /* along the top row, red 200 */
+    uint8_t cfg[512] = { MSG_HW_ADC, 0, 0, 1, 1, 0 };
+    size_t n = 6;
+    n += chained_neopixel(cfg + n, 2, 0, grid, NEOPIXEL_GFX_PATCH, patch, sizeof patch);  /* the first */
+    n += chained_neopixel(cfg + n, 3, 2, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* over n2 */
+    n += chained_neopixel(cfg + n, 4, 3, small, NEOPIXEL_GFX_PATCH, (const uint8_t[]){ 0, 0, 1, 1, 0, 1, 2, 3 }, 8);
+    n += chained_neopixel(cfg + n, 5, 2, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* n2 feeds n3 already */
+    n += chained_neopixel(cfg + n, 6, 6, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* itself */
+    n += chained_neopixel(cfg + n, 7, 8, grid, NEOPIXEL_GFX_POINT, point, sizeof point);  /* n7 and n8: a loop */
+    n += chained_neopixel(cfg + n, 8, 7, grid, NEOPIXEL_GFX_POINT, point, sizeof point);
+    n += chained_neopixel(cfg + n, 9, 30, grid, NEOPIXEL_GFX_POINT, point, sizeof point); /* no such node */
+    program_compile(cfg, n, &p);
+    TEST_ASSERT_EQUAL_UINT8(9, p.node_count);
+    const prog_node *first = &p.nodes[1], *over = &p.nodes[2];
+    TEST_ASSERT_TRUE(first->px_feeds);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, first->px_under);
+    TEST_ASSERT_EQUAL_UINT8(1, over->px_under);
+    TEST_ASSERT_FALSE(over->px_feeds);                      /* n4's LEDs differ: it isn't joined */
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[3].px_under);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[4].px_under);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[5].px_under);
+    TEST_ASSERT_EQUAL_UINT8(7, p.nodes[6].px_under);        /* n7 over n8; n8 over n7 would close the loop */
+    TEST_ASSERT_TRUE(p.nodes[7].px_feeds);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[7].px_under);
+    TEST_ASSERT_EQUAL_UINT8(PROG_NO_NODE, p.nodes[8].px_under);
+    static char text[2048];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "NEOPIXEL n2 pin 16 array 4x4 brightness 255 patch 0,0-3,3 colour 0A141E <- s0 / 3.3 on <- - feeds\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "NEOPIXEL n3 pin 16 array 4x4 brightness 255 point 0,0-0,3 colour C80000 <- s0 / 3.3 on <- - over n2\n"));
+
+    /* The point over the patch: half way, between LEDs 1 and 2, each half way from the
+       patch's colour to its own; the rest of the patch shows through. */
+    uint32_t out[16];
+    memset(out, 0, sizeof out);
+    neopixel_draw(&first->px, 0, true, out);
+    neopixel_draw(&over->px, 0.5f, true, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[0]);
+    TEST_ASSERT_EQUAL_HEX32(10u << 24 | 105u << 16 | 15u << 8, out[1]);
+    TEST_ASSERT_EQUAL_HEX32(10u << 24 | 105u << 16 | 15u << 8, out[2]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[3]);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[15]);
+    /* On the end: all its colour. Off: it draws nothing, and the patch shows. */
+    neopixel_draw(&over->px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(200u << 16, out[3]);
+    memset(out, 0, sizeof out);
+    neopixel_draw(&first->px, 0, true, out);
+    neopixel_draw(&over->px, 1, false, out);
+    TEST_ASSERT_EQUAL_HEX32(LIT(1), out[3]);
+    /* neopixel_render is a draw over all off. */
+    neopixel_render(&over->px, 1, true, out);
+    TEST_ASSERT_EQUAL_HEX32(200u << 16, out[3]);
+    TEST_ASSERT_EQUAL_HEX32(0, out[0]);
+}
+
 /* ── DS18B20 temperature sensors ──────────────────────────────────────── */
 
 /* A scratchpad holding a temperature (its LSB and MSB), with its CRC. */
@@ -1804,6 +1892,244 @@ void test_ds18b20_program(void)
     char text[512];
     program_describe(&p, text, sizeof text);
     TEST_ASSERT_NOT_NULL(strstr(text, "DS18B20 n1 pin 15 10-bit pull-up -> s0 found s1\n"));
+}
+
+/* ── Sine ─────────────────────────────────────────────────────────────── */
+
+void test_sine(void)
+{
+    static hw_program p;
+    /* Sine n2 <- button n1: a 40 ms period (4 scans), amplitude 2, offset 1. */
+    const uint8_t cfg[] = {
+        MSG_UI_BUTTON, 0, 0, 1, 0,
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 2, 15, 0, 1, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0,
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 3, 15, 0, 0, 0, 0, 0, 0, 19, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0,   /* too short */
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 4, 15, 0, 0, 0, 0, 0, 0, 40, 0x7F, 0xC0, 0, 0, 0, 0, 0, 0,     /* NaN amplitude */
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 5, 11, 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0,                    /* no offset */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(2, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(1, p.node_count);
+    TEST_ASSERT_TRUE(program_logic_floating(MSG_LOGIC_SINE));
+    const prog_node *n = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_LOGIC_SINE, n->type);
+    TEST_ASSERT_EQUAL_UINT32(40, n->on_ms);
+
+    /* Off: its offset. On: from its offset, up to offset + amplitude a quarter period
+       on, back, down to offset - amplitude, and round again. */
+    prog_logic_state st;
+    program_logic_start(&p, n, &st);
+    float out = 0;
+    out = program_logic_step(&p, n, out, &st, 10);
+    TEST_ASSERT_EQUAL_FLOAT(1, out);
+    p.signals[0].value = 1;
+    const float wave[] = { 1, 3, 1, -1, 1, 3 };
+    for (int i = 0; i < 6; i++) {
+        out = program_logic_step(&p, n, out, &st, 10);
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, wave[i], out);
+    }
+    /* Off again: its offset; on, it starts from the beginning. */
+    p.signals[0].value = 0;
+    TEST_ASSERT_EQUAL_FLOAT(1, program_logic_step(&p, n, out, &st, 10));
+    p.signals[0].value = 1;
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 1, program_logic_step(&p, n, out, &st, 10));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 3, program_logic_step(&p, n, out, &st, 10));
+
+    char text[256];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "SINE n2 period 40 amplitude 2 offset 1 phase 0 <- s0 -> s1\n"));
+
+    /* A phase of 90°: it starts, and rests, at its top; one saved with its phase. */
+    const uint8_t phased[] = {
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 1, 19, 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0, 0x42, 0xB4, 0, 0,
+    };
+    TEST_ASSERT_TRUE(logic_payload_valid(MSG_LOGIC_SINE, phased + 5, 19, MSG_FLAG_OUTPUT));
+    program_compile(phased, sizeof phased, &p);
+    TEST_ASSERT_EQUAL_FLOAT(90, p.nodes[0].scale[2]);
+    program_logic_start(&p, &p.nodes[0], &st);
+    const float shifted[] = { 3, 1, -1, 1, 3 };
+    for (int i = 0; i < 5; i++)
+        TEST_ASSERT_FLOAT_WITHIN(1e-5f, shifted[i], program_logic_step(&p, &p.nodes[0], 0, &st, 10));
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "SINE n1 period 40 amplitude 2 offset 1 phase 90 <- - -> s0\n"));
+    const uint8_t phase_nan[] = { 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0, 0x7F, 0xC0, 0, 0 };
+    TEST_ASSERT_FALSE(logic_payload_valid(MSG_LOGIC_SINE, phase_nan, 19, MSG_FLAG_OUTPUT));
+
+    /* With nothing wired in it always runs. */
+    const uint8_t free_running[] = {
+        MSG_LOGIC_SINE, MSG_FLAG_OUTPUT, 0, 1, 15, 0, 0, 0, 0, 0, 0, 40, 0x40, 0, 0, 0, 0x3F, 0x80, 0, 0,
+    };
+    program_compile(free_running, sizeof free_running, &p);
+    program_logic_start(&p, &p.nodes[0], &st);
+    program_logic_step(&p, &p.nodes[0], 0, &st, 10);
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, 3, program_logic_step(&p, &p.nodes[0], 0, &st, 10));
+}
+
+/* ── The clock ────────────────────────────────────────────────────────── */
+
+void test_clock(void)
+{
+    uint8_t parts[3];
+    clock_parts(0, parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 0, 0, 0 }), parts, 3);
+    clock_parts((13 * 3600 + 5 * 60 + 9) * 1000u + 999, parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 13, 5, 9 }), parts, 3);
+    clock_parts(CLOCK_DAY_MS - 1, parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 23, 59, 59 }), parts, 3);
+
+    /* Set at a timer count of 10 days and 5 s: then that time, and on from there, round
+       midnight. */
+    uint64_t now = 10ull * CLOCK_DAY_MS + 5000;
+    uint32_t offset = 0;
+    TEST_ASSERT_TRUE(clock_offset_for(now, 23, 59, 58, &offset));
+    TEST_ASSERT_EQUAL_UINT32((23 * 3600 + 59 * 60 + 58) * 1000u, clock_time_of_day(now, offset));
+    clock_parts(clock_time_of_day(now + 3000, offset), parts);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(((uint8_t[]){ 0, 0, 1 }), parts, 3);
+    TEST_ASSERT_FALSE(clock_offset_for(now, 24, 0, 0, &offset));
+    TEST_ASSERT_FALSE(clock_offset_for(now, 0, 60, 0, &offset));
+    TEST_ASSERT_FALSE(clock_offset_for(now, 0, 0, 60, &offset));
+    TEST_ASSERT_EQUAL_UINT32((23 * 3600 + 59 * 60 + 58) * 1000u, clock_time_of_day(now, offset));   /* left */
+
+    /* A time zone moves a clock, forwards or back, round midnight; a time server's Unix
+       time is a time of day in the zone. */
+    TEST_ASSERT_EQUAL_UINT32(2 * 3600000u, clock_shift(0, 120));
+    TEST_ASSERT_EQUAL_UINT32(CLOCK_DAY_MS - 30 * 60000u, clock_shift(0, -30));
+    TEST_ASSERT_EQUAL_UINT32(30 * 60000u, clock_shift(CLOCK_DAY_MS - 60 * 60000u, 90));
+    /* 1762700400: 2025-11-09 15:00:00 UTC, 17:00 at UTC+2, 09:30 at UTC-5:30. */
+    TEST_ASSERT_EQUAL_UINT32(17 * 3600000u, clock_from_unix(1762700400u, 120));
+    TEST_ASSERT_EQUAL_UINT32(15 * 3600000u, clock_from_unix(1762700400u, 0));
+    TEST_ASSERT_EQUAL_UINT32(9 * 3600000u + 30 * 60000u, clock_from_unix(1762700400u, -330));
+    TEST_ASSERT_EQUAL_UINT32(1 * 3600000u, clock_from_unix(1762700400u, 600));     /* past midnight: 01:00 */
+    TEST_ASSERT_EQUAL_UINT32(7 * 1000u, clock_offset_to(5 * CLOCK_DAY_MS + 3000, 10000));
+
+    /* Its settings: internet time and its zone; none (saved before it had them) is off, UTC. */
+    uint8_t options;
+    int16_t zone;
+    TEST_ASSERT_TRUE(clock_payload_read((const uint8_t[]){ CLOCK_SYNC, 0x00, 0x78 }, 3, &options, &zone));
+    TEST_ASSERT_EQUAL_HEX8(CLOCK_SYNC, options);
+    TEST_ASSERT_EQUAL_INT16(120, zone);
+    TEST_ASSERT_TRUE(clock_payload_read((const uint8_t[]){ 0, 0xFE, 0xB6 }, 3, &options, &zone));
+    TEST_ASSERT_EQUAL_INT16(-330, zone);
+    TEST_ASSERT_TRUE(clock_payload_read(NULL, 0, &options, &zone));
+    TEST_ASSERT_EQUAL_HEX8(0, options);
+    TEST_ASSERT_EQUAL_INT16(0, zone);
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0x02, 0, 0 }, 3, &options, &zone));    /* unknown option */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0x03, 0x84 }, 3, &options, &zone)); /* UTC+15 */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0xFD, 0x2F }, 3, &options, &zone)); /* UTC-12:01 */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0x00, 0x7B }, 3, &options, &zone)); /* 123: not in 15s */
+    TEST_ASSERT_FALSE(clock_payload_read((const uint8_t[]){ 0, 0 }, 2, &options, &zone));
+
+    /* A clock node: three signals in a row; a PWM takes its hour as a fraction of 24. */
+    static hw_program p;
+    const uint8_t cfg[] = {
+        MSG_HW_CLOCK, MSG_FLAG_SHOWN, 0, 1, 0,
+        MSG_HW_PWM, MSG_FLAG_OUTPUT, 0, 2, 17, 0, 1, 0, 2, 0x03, 0xE8, PWM_DUTY_INPUT | PWM_FREQ_INPUT, 50, 0, 100,
+        0, 1, 2, 0, 100, 0x27, 0x10,                                         /* duty <- its hour, freq <- its second */
+        MSG_HW_CLOCK, 0, 0, 3, 1, 0,                                         /* not its settings: skipped */
+        MSG_HW_CLOCK, 0, 0, 4, 3, 0x04, 0, 0,                                /* an unknown option: skipped */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(3, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(2, p.node_count);
+    TEST_ASSERT_EQUAL_UINT8(0, p.nodes[0].out);
+    TEST_ASSERT_EQUAL_UINT8(2, program_signal(&p, 1, 2));
+    TEST_ASSERT_EQUAL_FLOAT(CLOCK_HOURS, p.nodes[1].in_full[0]);
+    TEST_ASSERT_EQUAL_FLOAT(CLOCK_SECONDS, p.nodes[1].in_full[1]);
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "CLOCK n1 -> s0 s1 s2\n"));
+}
+
+/* ── Rotary encoders ──────────────────────────────────────────────────── */
+
+/* Feed a decoder its pins' states in turn (A in bit 1, B in bit 0); the clicks they make. */
+static int32_t encoder_feed(encoder_decoder *d, const uint8_t *ab, int n, uint8_t detent)
+{
+    int32_t clicks = 0;
+    for (int i = 0; i < n; i++) clicks += encoder_decode(d, ab[i], detent);
+    return clicks;
+}
+
+void test_encoder_decode(void)
+{
+    /* From rest (both high), A falls first: clockwise on a KY-040, +1. */
+    static const uint8_t cw[] = { 1, 0, 2, 3 }, ccw[] = { 2, 0, 1, 3 };
+    encoder_decoder d;
+    encoder_start(&d, 3);
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, cw, 4, ENCODER_DETENT_4));
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, cw, 4, ENCODER_DETENT_4));
+    TEST_ASSERT_EQUAL_INT32(-1, encoder_feed(&d, ccw, 4, ENCODER_DETENT_4));
+    /* Only once it rests: three transitions are no click yet. */
+    TEST_ASSERT_EQUAL_INT32(0, encoder_feed(&d, cw, 3, ENCODER_DETENT_4));
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, cw + 3, 1, ENCODER_DETENT_4));
+
+    /* A bouncing contact goes to and fro: it nets out, and back at rest is no click. */
+    static const uint8_t bounce[] = { 1, 3, 1, 3, 1, 3 };
+    TEST_ASSERT_EQUAL_INT32(0, encoder_feed(&d, bounce, 6, ENCODER_DETENT_4));
+    /* Half way and back: none. */
+    static const uint8_t back[] = { 1, 0, 1, 3 };
+    TEST_ASSERT_EQUAL_INT32(0, encoder_feed(&d, back, 4, ENCODER_DETENT_4));
+    /* A missed edge (both pins at once counts 0) still clicks: 3 → 1 → 2 → 3 is +1 0 +1. */
+    static const uint8_t missed[] = { 1, 2, 3 };
+    TEST_ASSERT_EQUAL_INT32(1, encoder_feed(&d, missed, 3, ENCODER_DETENT_4));
+
+    /* Half a cycle a click: it rests at 00 too. */
+    encoder_start(&d, 3);
+    TEST_ASSERT_EQUAL_INT32(2, encoder_feed(&d, cw, 4, ENCODER_DETENT_2));
+    TEST_ASSERT_EQUAL_INT32(-2, encoder_feed(&d, ccw, 4, ENCODER_DETENT_2));
+    /* Each edge: every transition. */
+    TEST_ASSERT_EQUAL_INT32(4, encoder_feed(&d, cw, 4, ENCODER_DETENT_1));
+    TEST_ASSERT_EQUAL_INT32(-4, encoder_feed(&d, ccw, 4, ENCODER_DETENT_1));
+    TEST_ASSERT_EQUAL_INT8(0, encoder_decode(&d, 3, ENCODER_DETENT_1));    /* no change */
+    TEST_ASSERT_EQUAL_INT8(0, encoder_decode(&d, 0, ENCODER_DETENT_1));    /* both pins */
+
+    /* Its position: clamped to 0 to its steps, or wrapped round 0 to steps - 1. */
+    TEST_ASSERT_EQUAL_INT32(5, encoder_position(3, 2, 20, false));
+    TEST_ASSERT_EQUAL_INT32(0, encoder_position(1, -3, 20, false));
+    TEST_ASSERT_EQUAL_INT32(20, encoder_position(19, 4, 20, false));
+    TEST_ASSERT_EQUAL_INT32(15, encoder_position(30, 0, 15, false));    /* fewer steps after a save */
+    TEST_ASSERT_EQUAL_INT32(1, encoder_position(19, 2, 20, true));
+    TEST_ASSERT_EQUAL_INT32(18, encoder_position(1, -3, 20, true));
+    TEST_ASSERT_EQUAL_INT32(0, encoder_position(19, 1, 20, true));
+    TEST_ASSERT_EQUAL_INT32(19, encoder_position(0, -41, 20, true));
+    TEST_ASSERT_EQUAL_INT32(0, encoder_position(7, 3, 1, true));
+}
+
+void test_encoder_program(void)
+{
+    static hw_program p;
+    const uint8_t cfg[] = {
+        MSG_HW_ENCODER, 0, 0, 1, 6, 6, 7, 8, ENCODER_WRAP | ENCODER_DETENT_2, 0, 24,     /* n1: 24 steps */
+        MSG_HW_SERVO, MSG_FLAG_OUTPUT, 0, 2, 12, 0, 1, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
+        MSG_HW_GPO, MSG_FLAG_OUTPUT, 0, 3, 4, 0, 1, 1, 5,                   /* GPO n3 on GPIO 5 <- n1's pressed */
+        MSG_HW_ENCODER, 0, 0, 4, 6, 10, 11, ENCODER_NO_BUTTON, ENCODER_REVERSE, 0x03, 0xE8,  /* no switch, 1000 */
+        MSG_HW_ENCODER, 0, 0, 5, 6, 12, 12, 13, 0, 0, 20,                    /* A and B on one pin */
+        MSG_HW_ENCODER, 0, 0, 6, 6, 12, 13, 12, 0, 0, 20,                    /* the switch on A */
+        MSG_HW_ENCODER, 0, 0, 7, 6, 12, 13, 25, 0, 0, 20,                    /* GPIO 25: not usable */
+        MSG_HW_ENCODER, 0, 0, 8, 6, 12, 13, 14, 0x03, 0, 20,                 /* no such detent */
+        MSG_HW_ENCODER, 0, 0, 9, 6, 12, 13, 14, 0x10, 0, 20,                 /* an unknown option */
+        MSG_HW_ENCODER, 0, 0, 10, 6, 12, 13, 14, 0, 0, 0,                    /* no steps */
+        MSG_HW_ENCODER, 0, 0, 11, 6, 12, 13, 14, 0, 0x03, 0xE9,              /* over ENCODER_STEPS_MAX */
+        MSG_HW_ENCODER, 0, 0, 12, 5, 12, 13, 14, 0, 0,                       /* too short */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(4, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(4, p.node_count);
+    const prog_node *enc = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_ENCODER, enc->type);
+    TEST_ASSERT_EQUAL_UINT8(6, enc->pin);
+    TEST_ASSERT_EQUAL_UINT8(8, enc->enc_pins[2]);
+    TEST_ASSERT_EQUAL_UINT16(24, enc->enc_steps);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 0), enc->out);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 1), enc->out_count);
+    TEST_ASSERT_EQUAL_UINT16(1000, p.nodes[1].enc_steps);
+    /* A servo takes its position as a fraction of its steps; a GPO reads its pressed. */
+    TEST_ASSERT_EQUAL_FLOAT(24, p.nodes[2].in_full[0]);
+    TEST_ASSERT_EQUAL_UINT8(enc->out_count, p.nodes[3].in[0]);
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "ENCODER n1 pins 6 7 button 8 2/click steps 24 wrap -> s0 pressed s1\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "ENCODER n4 pins 10 11 no button 4/click steps 1000 reverse -> s2 pressed s3\n"));
 }
 
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
@@ -2056,12 +2382,17 @@ int main(void)
     RUN_TEST(test_servo_angle_and_pulse);
     RUN_TEST(test_ds18b20_scratchpad);
     RUN_TEST(test_ds18b20_program);
+    RUN_TEST(test_sine);
+    RUN_TEST(test_clock);
+    RUN_TEST(test_encoder_decode);
+    RUN_TEST(test_encoder_program);
     RUN_TEST(test_neopixel_payload_read);
     RUN_TEST(test_neopixel_bar);
     RUN_TEST(test_neopixel_point);
     RUN_TEST(test_neopixel_point_blends);
     RUN_TEST(test_neopixel_patch);
     RUN_TEST(test_neopixel_colour_input_and_switch);
+    RUN_TEST(test_neopixel_chain);
     RUN_TEST(test_feedback_reference);
     RUN_TEST(test_program_counter);
     RUN_TEST(test_program_feedback_loop);
