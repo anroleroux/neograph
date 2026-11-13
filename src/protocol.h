@@ -6,7 +6,7 @@
  *
  * The PKT_, MSG_, FIELD_, DEV_OPT_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
  * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
- * ENCODER_, SINE_, CLOCK_ and SUB_ constants are mirrored in
+ * ENCODER_, ULTRASONIC_, SINE_, CLOCK_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -38,7 +38,7 @@
 #define MSG_FLAG_OUTPUT         0x01
 
 /* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
-   rotary encoder, clock) or
+   rotary encoder, clock, ultrasonic ranger) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
@@ -75,6 +75,7 @@
 #define MSG_HW_DS18B20          0x33    /* a DS18B20 temperature sensor on a 1-Wire pin; two outputs */
 #define MSG_HW_ENCODER          0x34    /* a rotary encoder and its push switch; two outputs */
 #define MSG_HW_CLOCK            0x35    /* the device's clock, a time of day: hour, minute, second */
+#define MSG_HW_ULTRASONIC       0x36    /* an ultrasonic ranger on one pin: a distance; two outputs */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
    source itself, with one output, 0: boolean, or floating for a scale, min, max or sine. A
@@ -227,6 +228,16 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ENCODER_WRAP            0x08
 #define ENCODER_STEPS_MAX       1000
 
+/* Ultrasonic ranger (MSG_HW_ULTRASONIC), such as Seeed's Grove Ultrasonic Ranger, whose
+   trigger and echo share one pin, payload: byte 0 the GPIO of its signal pin (SIG), a
+   usable one (pin_usable). Bytes 1-2: its range in cm, big endian, ULTRASONIC_RANGE_MIN
+   to ULTRASONIC_RANGE_MAX: as far as it looks. Two outputs: the distance to the nearest
+   thing in cm (0, floating; its full scale is its range, which it reads with nothing
+   nearer), and echo (1, boolean): on while something is within its range. */
+#define ULTRASONIC_PAYLOAD_LEN  3
+#define ULTRASONIC_RANGE_MIN    10      /* cm */
+#define ULTRASONIC_RANGE_MAX    400     /* cm: as far as the ranger hears */
+
 /* Clock (MSG_HW_CLOCK): the device has one clock, a time of day, which every clock node
    reads. Three outputs, each a whole number: its hour (0, 0 to 23), its minute (1) and its
    second (2), 0 to 59; on the device they drive outputs from 0 to CLOCK_HOURS,
@@ -367,6 +378,14 @@ static inline int encoder_payload_valid(const uint8_t *pay, uint8_t len) {
     if ((pay[3] & ENCODER_DETENT_MASK) > ENCODER_DETENT_1) return 0;
     uint16_t steps = (uint16_t)(pay[4] << 8 | pay[5]);
     return steps >= 1 && steps <= ENCODER_STEPS_MAX;
+}
+
+/* Whether an ultrasonic ranger's payload is one the device runs: its length, a usable
+   pin, and a range from ULTRASONIC_RANGE_MIN to ULTRASONIC_RANGE_MAX. */
+static inline int ultrasonic_payload_valid(const uint8_t *pay, uint8_t len) {
+    if (len != ULTRASONIC_PAYLOAD_LEN || !pin_usable(pay[0])) return 0;
+    uint16_t range = (uint16_t)(pay[1] << 8 | pay[2]);
+    return range >= ULTRASONIC_RANGE_MIN && range <= ULTRASONIC_RANGE_MAX;
 }
 
 /* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which

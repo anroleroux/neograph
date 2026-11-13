@@ -9,6 +9,7 @@
 #include "protocol.h"
 #include "program.h"
 #include "ds18b20.h"
+#include "ultrasonic.h"
 #include "encoder.h"
 #include "clock.h"
 #include "neopixel.h"
@@ -363,8 +364,10 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
                              || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
-                             || type == MSG_HW_CLOCK || program_logic_floating(type), ex->name);
-    /* A DS18B20's temperature, an encoder's position: their output 0; a clock's three. */
+                             || type == MSG_HW_CLOCK || type == MSG_HW_ULTRASONIC
+                             || program_logic_floating(type), ex->name);
+    /* A DS18B20's temperature, an encoder's position, an ultrasonic ranger's distance:
+       their output 0; a clock's three. */
     TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : type == MSG_HW_CLOCK ? 3 : 1), ex->name);
 }
 
@@ -393,11 +396,12 @@ void test_wires_join_matching_types(void)
                     msg_ref src = through_block(ex, msg_ref_at(it.pay + k * r, it.flags));
                     uint8_t type = element_type(ex, src.id);
                     if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI || type == MSG_HW_DS18B20
-                                                         || type == MSG_HW_ENCODER
+                                                         || type == MSG_HW_ENCODER || type == MSG_HW_ULTRASONIC
                                                          || (program_logic(type) && !program_logic_floating(type)), ex->name);
-                    /* A DS18B20's found, an encoder's pressed, is its output 1; the others' only
-                       boolean output is 0. */
-                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER ? 1 : 0,
+                    /* A DS18B20's found, an encoder's pressed, an ultrasonic ranger's echo, is
+                       its output 1; the others' only boolean output is 0. */
+                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
+                                                    || type == MSG_HW_ULTRASONIC ? 1 : 0,
                                                     src.output, ex->name);
                 }
             } else if (floating_in) {
@@ -437,6 +441,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_GPI & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_DS18B20 & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ULTRASONIC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ENCODER & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_CLOCK & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -2139,6 +2144,83 @@ void test_encoder_program(void)
     TEST_ASSERT_NOT_NULL(strstr(text, "ENCODER n4 pins 10 11 no button 4/click steps 1000 reverse -> s2 pressed s3\n"));
 }
 
+/* ── Ultrasonic rangers ───────────────────────────────────────────────── */
+
+void test_ultrasonic_echo(void)
+{
+    /* 58.3 µs a cm, to 0.1 cm. */
+    TEST_ASSERT_EQUAL_FLOAT(0, ultrasonic_cm(0));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 10.0f, ultrasonic_cm(583));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 100.0f, ultrasonic_cm(5831));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 400.0f, ultrasonic_cm(23324));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 17.2f, ultrasonic_cm(1000));
+
+    /* An echo within its range: its distance, echo on. */
+    float cm = 100;
+    bool echo = false;
+    uint8_t misses = 2;
+    ultrasonic_take(true, 2915, 100, &cm, &echo, &misses);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 50.0f, cm);
+    TEST_ASSERT_TRUE(echo);
+    TEST_ASSERT_EQUAL_UINT8(0, misses);
+
+    /* A ping without one keeps them, until ULTRASONIC_MISSES_LOST in a row: then echo
+       off, at its range. No pulse, one from beyond its range and one too short all miss. */
+    ultrasonic_take(false, 0, 100, &cm, &echo, &misses);
+    ultrasonic_take(true, 7000, 100, &cm, &echo, &misses);      /* 120 cm */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 50.0f, cm);
+    TEST_ASSERT_TRUE(echo);
+    TEST_ASSERT_EQUAL_UINT8(2, misses);
+    ultrasonic_take(true, ULTRASONIC_PULSE_MIN_US - 1, 100, &cm, &echo, &misses);
+    TEST_ASSERT_EQUAL_FLOAT(100, cm);
+    TEST_ASSERT_FALSE(echo);
+    ultrasonic_take(false, 0, 100, &cm, &echo, &misses);        /* and stays so */
+    TEST_ASSERT_EQUAL_UINT8(ULTRASONIC_MISSES_LOST, misses);
+    TEST_ASSERT_EQUAL_FLOAT(100, cm);
+
+    /* One echo brings it back; one at its range counts. */
+    ultrasonic_take(true, 5831, 100, &cm, &echo, &misses);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 100.0f, cm);
+    TEST_ASSERT_TRUE(echo);
+    TEST_ASSERT_EQUAL_UINT8(0, misses);
+    ultrasonic_take(true, 1000, 100, &cm, &echo, &misses);
+    ultrasonic_take(true, 30000, 100, &cm, &echo, &misses);     /* one lost ping doesn't show */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 17.2f, cm);
+    TEST_ASSERT_TRUE(echo);
+}
+
+void test_ultrasonic_program(void)
+{
+    static hw_program p;
+    const uint8_t cfg[] = {
+        MSG_HW_ULTRASONIC, 0, 0, 1, 3, 16, 0, 150,                          /* n1: GPIO 16, 150 cm */
+        MSG_HW_PWM, MSG_FLAG_OUTPUT, 0, 2, 17, 0, 1, 0, 2, 0x03, 0xE8, PWM_DUTY_INPUT, 50, 0, 100, 0, 0, 0, 0, 100, 0x27, 0x10,
+        MSG_HW_GPO, MSG_FLAG_OUTPUT, 0, 3, 4, 0, 1, 1, 5,                   /* GPO n3 on GPIO 5 <- n1's echo */
+        MSG_HW_ULTRASONIC, 0, 0, 4, 3, 17, 0x01, 0x90,                      /* 400 cm, its most */
+        MSG_HW_ULTRASONIC, 0, 0, 5, 3, 25, 0, 100,                          /* GPIO 25: not usable */
+        MSG_HW_ULTRASONIC, 0, 0, 6, 3, 18, 0, 9,                            /* under ULTRASONIC_RANGE_MIN */
+        MSG_HW_ULTRASONIC, 0, 0, 7, 3, 18, 0x01, 0x91,                      /* over ULTRASONIC_RANGE_MAX */
+        MSG_HW_ULTRASONIC, 0, 0, 8, 1, 18,                                  /* no range */
+    };
+    program_compile(cfg, sizeof cfg, &p);
+    TEST_ASSERT_EQUAL_UINT8(4, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(4, p.node_count);
+    const prog_node *us = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_ULTRASONIC, us->type);
+    TEST_ASSERT_EQUAL_UINT8(16, us->pin);
+    TEST_ASSERT_EQUAL_UINT16(150, us->range);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 0), us->out);
+    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 1), us->out_count);
+    TEST_ASSERT_EQUAL_UINT16(400, p.nodes[1].range);
+    /* A PWM takes its distance as a fraction of its range; a GPO reads its echo. */
+    TEST_ASSERT_EQUAL_FLOAT(150, p.nodes[2].in_full[0]);
+    TEST_ASSERT_EQUAL_UINT8(us->out_count, p.nodes[3].in[0]);
+    char text[512];
+    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "ULTRASONIC n1 pin 16 range 150 cm -> s0 echo s1\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "ULTRASONIC n4 pin 17 range 400 cm -> s2 echo s3\n"));
+}
+
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
 void test_counter_payload_valid(void)
 {
@@ -2389,6 +2471,8 @@ int main(void)
     RUN_TEST(test_servo_angle_and_pulse);
     RUN_TEST(test_ds18b20_scratchpad);
     RUN_TEST(test_ds18b20_program);
+    RUN_TEST(test_ultrasonic_echo);
+    RUN_TEST(test_ultrasonic_program);
     RUN_TEST(test_sine);
     RUN_TEST(test_clock);
     RUN_TEST(test_encoder_decode);

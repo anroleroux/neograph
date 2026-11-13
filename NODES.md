@@ -13,7 +13,7 @@ the TMP button in the HWI group.
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
-| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC |
+| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC, US |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY |
 | **TM** | Time: logic that waits, or runs for a set time; the clock | DLY, PLS, BLK, CLK |
@@ -476,6 +476,49 @@ Things to know:
   pin, and the switch's other side, go to GND.
 - **It starts at 0,** and a save keeps its position (within the new Steps).
 - **Up to 8 encoders** in a graph.
+
+### Ultrasonic ranger: `HWI-US`
+
+| | |
+|---|---|
+| Category | Hardware input |
+| Outputs | **cm**: number, the distance to the nearest thing, up to its Range; **Echo**: on/off, on while something is within its Range |
+| Default label | Ultrasonic |
+
+An ultrasonic distance sensor with one signal pin, such as Seeed's Grove Ultrasonic
+Ranger. About 16 times a second the device sends a ping and times its echo: the
+distance to the nearest thing in front of it, from about 3 cm, to 0.1 cm. The offline
+demo moves a hand to and fro in front of it.
+
+It has two outputs. Pick the one the next wire leaves from in **Wire from**, and each
+wire is labelled with it:
+
+- **cm** goes to anything that takes a number: a compare (on when something is nearer
+  than 30 cm), a plot, a scale, or a PWM, servo or NeoPixels, which take it as a
+  fraction of Range.
+- **Echo** goes to anything that takes on/off: an LED, a light, a counter or other
+  logic. On its own it is a presence detector: set Range to the distance that should
+  trip it.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| GPIO pin | GPIO 0–22, 26–28, not used by another node | 16, or the lowest free pin | The pin its signal wire (SIG) is on. |
+| Range (cm) | 10–400 | 400 | As far as it looks. With nothing nearer, cm reads Range and Echo is off. |
+| Wire from | cm, Echo | cm | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile with the distance, or "Nothing within 100 cm". |
+
+Things to know:
+
+- **Wiring:** SIG to the pin, VCC to power, GND to GND; NC stays free. A ranger
+  powered from 5 V (v1.0 is made for 5 V; v2.0 also runs from 3.3 V) signals at 5 V: put
+  1 kΩ between SIG and the pin, and 2 kΩ from the pin to GND.
+- **One lost ping doesn't show:** Echo goes off, and cm goes to Range, after three
+  pings in a row without an echo (about 0.2 s). An unplugged ranger reads the same.
+- **What it hears:** hard, flat things facing it, in a cone of about 15°. Soft or
+  slanted surfaces may not echo, and under about 3 cm it reads wrong.
+- **Several rangers** ping in turn, so one doesn't hear another's: each reads less
+  often. Up to 4 in a graph.
+- **After a save** it keeps its reading until the next one.
 
 ---
 
@@ -981,8 +1024,8 @@ for a longer kick, or to a Counter to count the ticks.
 
 | From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT, SIN |
 |---|---|---|---|---|
-| BTN, GPI, DS (Found), ENC (Pressed) | ✓ | | | ✓ |
-| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position) | | ✓ | ✓ | |
+| BTN, GPI, DS (Found), ENC (Pressed), US (Echo) | ✓ | | | ✓ |
+| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position), US (cm) | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
 | SCL, MIN, MAX, SIN, CNT (Count), CLK (Hour, Minute or Second) | | ✓ | ✓ | |
 

@@ -243,8 +243,8 @@ function toggleWebSocket(n,d) {
             gfig = data.slice(3);
             unmarshalConfigs(gfig);
             // and signals, as telemetry: a chip temperature drifting around 30 °C, a
-            // DS18B20 around 22 °C, a rotary encoder's knob turned to and fro, and on
-            // each ADC channel a slow wave, in volts.
+            // DS18B20 around 22 °C, a rotary encoder's knob turned to and fro, a hand in
+            // front of an ultrasonic ranger, and on each ADC channel a slow wave, in volts.
             let tick = 0;
             offlineTelemetry = setInterval(() => {
                 const t = performance.now() / 1000;
@@ -264,6 +264,11 @@ function toggleWebSocket(n,d) {
                         const top = e.wrap ? e.steps - 1 : e.steps;
                         receiveTelemetry(`sig ${e.id} 0 ${Math.round(top * (0.5 - 0.5 * Math.cos(t / 6)))}`);
                         if (e.pins[2] !== ENCODER_NO_BUTTON) receiveTelemetry(`sig ${e.id} 1 ${t % 8 < 0.6 ? 1 : 0}`);
+                    } else if (e instanceof uiUltrasonic && tick % 2 === 0) {
+                        // A hand moved to and fro in front of it, from 5 cm to 1.2 times its range.
+                        const cm = Math.round((5 + (1.2 * e.range - 5) * (0.5 - 0.5 * Math.cos(t / 3)) + Math.random() - 0.5) * 10) / 10;
+                        receiveTelemetry(`sig ${e.id} 0 ${Math.min(cm, e.range)}`);
+                        receiveTelemetry(`sig ${e.id} 1 ${cm <= e.range ? 1 : 0}`);
                     } else if (e instanceof uiADC) {
                         const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * e.channel)) + 0.01 * (Math.random() - 0.5);
                         receiveTelemetry(`sig ${e.id} 0 ${(level * ADC_VREF).toFixed(3)}`);
