@@ -396,6 +396,10 @@ static void check_update(const uint8_t *p, size_t len, bool secret) {
     int n = 0;
     while (it.next(&it)) {
         n++;
+        if (it.type == MSG_DEVICE_FIELD && it.len > 0 && it.pay[0] == FIELD_DEVICE_OPTIONS) {
+            if (it.len != 2) fail("device options are not 1 byte; the device would ignore them");
+            else if (it.pay[1] & ~DEV_OPT_NODELAY) fail("device options have unknown bits");
+        }
         if (it.type != MSG_NETWORK_FIELD || it.len == 0) continue;
         uint8_t field = it.pay[0];
         if (field == FIELD_NETWORK_PASSWORD && !secret) fail("a password sent to the config store, which the UI reads back");

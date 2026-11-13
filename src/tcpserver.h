@@ -10,6 +10,7 @@ typedef struct tcpserver {
     // struct tcp_pcb *client_pcb;
     struct tcpclient *clients[10];
     bool complete;
+    bool nodelay;       // DEV_OPT_NODELAY: new connections send each frame at once
     // uint8_t buffer_sent[BUF_SIZE];
     // uint8_t buffer_recv[BUF_SIZE];
     int sent_len;
@@ -39,6 +40,9 @@ typedef struct tcpclient {
 } tcpclient;
 
 tcpserver* tcp_server_init(void);
+// Send each frame at once (DEV_OPT_NODELAY), or with Nagle's algorithm: on the
+// connected clients, and those that connect later.
+void tcp_server_set_nodelay(tcpserver *state, bool on);
 err_t tcp_server_close(void *arg);
 err_t tcp_client_close(void *arg);
 err_t tcp_server_result(void *arg, int status);

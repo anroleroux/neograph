@@ -36,6 +36,21 @@ tcpclient* tcp_client_init(void) {
     return state;
 }
 
+// With Nagle's algorithm on (lwIP's default), a small frame waits while an earlier one
+// is unacknowledged, so one lost WiFi packet holds the telemetry frames after it until
+// it is sent again, and the browser gets them in a burst. Off, each frame is sent at
+// once, in a packet and a TCP segment (MEMP_NUM_TCP_SEG) of its own.
+void tcp_server_set_nodelay(tcpserver *state, bool on) {
+    state->nodelay = on;
+    for (int i = 0; i < 10; i++) {
+        tcpclient *client = state->clients[i];
+        if (!client || !client->client_pcb) continue;
+        if (on) tcp_nagle_disable(client->client_pcb);
+        else tcp_nagle_enable(client->client_pcb);
+    }
+    printf("sending frames %s\n", on ? "at once (Nagle's algorithm off)" : "with Nagle's algorithm");
+}
+
 err_t tcp_client_close(void *arg) {
     tcpclient *clientstate = (tcpclient*)arg;
 
@@ -264,10 +279,7 @@ err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     // Associate per-client state with this client PCB
     tcp_arg(client_pcb, clientstate);
 
-    // Send each small frame at once. With Nagle's algorithm on, telemetry frames
-    // wait while an earlier one is unacknowledged, so one lost WiFi packet holds
-    // them all until it is sent again, and the browser gets them in a burst.
-    tcp_nagle_disable(client_pcb);
+    if (state->nodelay) tcp_nagle_disable(client_pcb);
 
     // tcp_sent(client_pcb, tcp_server_sent);
     tcp_recv(client_pcb, tcp_server_recv);

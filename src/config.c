@@ -418,6 +418,11 @@ int unmarshal_network_config(
                 out->network.id = itr.pay[1]<<8 | itr.pay[2];
                 continue;
             }
+
+            if (field_number == FIELD_DEVICE_OPTIONS && itr.len == 2) {
+                out->device.opts = itr.pay[1];
+                continue;
+            }
         }
     }
 
@@ -550,6 +555,23 @@ void retrieve_networking_config(network_setup *out) {
     // printf("retrieved secrets (%d bytes) from rom\n", data_length);
 
     unmarshal_network_config(secrets_buffer+3,data_length,board_id.id,out);
+}
+
+uint8_t stored_device_options(void) {
+    // Static: a config is up to PKT_CONFIG_MAX bytes, too big for core 0's stack.
+    static uint8_t config[FLASH_SIZE];
+    uint8_t header[3];
+    read_config(header, 3);
+    uint16_t data_length = stored_length(header, FLASH_SIZE);
+    if (data_length == 0) return 0;
+    read_config(config, data_length + 3);
+
+    pico_unique_board_id_t board_id;
+    pico_get_unique_board_id(&board_id);
+    network_setup setup;
+    memset(&setup, 0, sizeof setup);
+    unmarshal_network_config(config + 3, data_length, board_id.id, &setup);
+    return setup.device.opts;
 }
 
 uint16_t retrieve_store(uint8_t* data_buffer) {

@@ -209,7 +209,8 @@ ID and field ID** (first payload byte), and replaces that message with the new o
   result would not fit its flash region, nothing changes, and nothing is reported.
 - The UI applies each `0B` to its copy of the config too, so saving the graph, which
   sends the networking messages back, keeps the change.
-- The change is only written to flash. Networking reads it at the next boot.
+- The change is only written to flash. Networking reads it at the next boot, except
+  the device's [options](#networking) (`B1`, field `03`), which it takes at once.
 
 ```hex example=update-ssid
 0B 00 08                    # Update config field, 8 bytes
@@ -224,6 +225,11 @@ B2 00 00 00 02  00 00       # network 0, field options = 0 (access point)
 ```hex example=update-ap-address
 0B 00 0A                    # Update config field, 10 bytes
 B3 00 00 00 05  04 0A 00 00 01   # network 0, field access point address = 10.0.0.1
+```
+
+```hex example=update-device-options
+0B 00 07                    # Update config field, 7 bytes
+B1 00 00 00 02  03 01       # device 0, field options = send each frame at once
 ```
 
 ```hex example=update-password
@@ -1671,6 +1677,7 @@ Four element types describe devices and networks. The payload of each starts wit
 | `B0`/`B1` device | `00` DID | `FIELD_DEVICE_DID` | 8 bytes | config |
 | | `01` name | `FIELD_DEVICE_NAME` | ASCII, up to 31 bytes | config |
 | | `02` network | `FIELD_DEVICE_NETWORK` | 2-byte network ID | config |
+| | `03` options | `FIELD_DEVICE_OPTIONS` | 1 byte, see below | config |
 | `B2`/`B3` network | `00` options | `FIELD_NETWORK_OPTIONS` | 1 byte, see below | config |
 | | `01` name | `FIELD_NETWORK_NAME` | ASCII, up to 31 bytes | config |
 | | `02` SSID | `FIELD_NETWORK_SSID` | ASCII, up to 31 bytes | config |
@@ -1678,6 +1685,18 @@ Four element types describe devices and networks. The payload of each starts wit
 | | `04` access point address | `FIELD_NETWORK_AP_ADDRESS` | 4 bytes, IPv4 | config |
 | | `05` fixed address | `FIELD_NETWORK_STATIC_ADDRESS` | 4 bytes, IPv4 | config |
 | | `06` gateway | `FIELD_NETWORK_GATEWAY` | 4 bytes, IPv4 | config |
+
+Device options, bit 0 (`DEV_OPT_NODELAY`): `0` = TCP's Nagle algorithm is on, as it is
+for a device without the field: a small frame, such as a [telemetry](#telemetry-text-frames)
+one, waits while an earlier one is unacknowledged, so after a lost WiFi packet the
+frames behind it reach the browser in a burst (a plot holds, then jumps). `1` = each
+frame is sent at once, in a packet and a TCP segment of its own (lwIP has
+`MEMP_NUM_TCP_SEG`, 48, for all connections), which a graph with many changing signals
+can use up while a packet is lost; a frame that then can't be queued is dropped. The
+UI's switch for it is in the device's row of the Network view. Unlike the other
+networking fields the device takes it at once, on the open connections and new ones
+(`tcp_server_set_nodelay`), and again at boot and when a config is saved. Other bits
+are unused.
 
 Network options, bit 0 (`NET_OPT_JOIN`): `0` = start an access point (with a DHCP
 server) using the SSID and password; `1` = join an existing network. Other bits are

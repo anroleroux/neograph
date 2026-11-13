@@ -154,6 +154,13 @@ void test_update_examples(void)
     TEST_ASSERT_EQUAL_HEX8(FIELD_NETWORK_OPTIONS, it.pay[0]);
     TEST_ASSERT_EQUAL_HEX8(0, it.pay[1] & NET_OPT_JOIN);
 
+    const struct protocol_example *dev = example("update-device-options");
+    TEST_ASSERT_EQUAL_HEX8(PKT_UPDATE_CONFIG, dev->bytes[0]);
+    messages(&it, dev);
+    assert_message(&it, MSG_DEVICE_FIELD, 0, 2);
+    TEST_ASSERT_EQUAL_HEX8(FIELD_DEVICE_OPTIONS, it.pay[0]);
+    TEST_ASSERT_EQUAL_HEX8(DEV_OPT_NODELAY, it.pay[1]);
+
     const struct protocol_example *pass = example("update-password");
     TEST_ASSERT_EQUAL_HEX8(PKT_UPDATE_SECRET, pass->bytes[0]);
     messages(&it, pass);

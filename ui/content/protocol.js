@@ -107,6 +107,7 @@ const MSG_NETWORK_FIELD      = 0xB3;
 const FIELD_DEVICE_DID       = 0x00;
 const FIELD_DEVICE_NAME      = 0x01;
 const FIELD_DEVICE_NETWORK   = 0x02;
+const FIELD_DEVICE_OPTIONS   = 0x03;  // 1 byte, DEV_OPT_ bits; without it, 0
 const FIELD_NETWORK_OPTIONS  = 0x00;
 const FIELD_NETWORK_NAME     = 0x01;
 const FIELD_NETWORK_SSID     = 0x02;
@@ -262,6 +263,10 @@ const NEOPIXEL_PATCH_LEN     = 8;     // a patch's settings: its start and end c
 const NEOPIXEL_COLOUR_LEN    = 3;     // red, green, blue; a second colour with NEOPIXEL_GFX_COLOUR_INPUT
 const NEOPIXEL_BAR_ROW       = 0x00;  // a bar along an array's row; around a circle's ring; around a doughnut
 const NEOPIXEL_BAR_COLUMN    = 0x01;  // a bar up an array's column; across a circle's rings, from the centre out
+
+// Device options (FIELD_DEVICE_OPTIONS) bit 0: 0 = TCP holds a small frame back while an
+// earlier one is unacknowledged (Nagle's algorithm), 1 = each frame is sent at once.
+const DEV_OPT_NODELAY        = 0x01;
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;

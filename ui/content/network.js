@@ -48,6 +48,11 @@ function networkingTemplate(state) {
             <div>
                 <h4>Device: ${device.name}</h4>
                 <p>IP: ${device.ip}</p>
+                <label class="device-option" title="Send each value as soon as it is ready, by turning off Nagle's algorithm, which holds small messages back while an earlier one is unacknowledged. Plots stall less on WiFi; a graph with many changing signals sends more packets.">
+                    <input type="checkbox" ${device.options & DEV_OPT_NODELAY ? "checked" : ""} ${device.state === "connected" ? "" : "disabled"}
+                        onchange="setDeviceOption(${nindex},${dindex},DEV_OPT_NODELAY,this.checked)" />
+                    Send at once (Nagle off)
+                </label>
                 ${device.message ? `<p class="device-message" role="alert">${escapeHtml(device.message)}</p>` : ""}
             </div>
             <div class="device-connect ${device.state}" title="${SWITCH_TITLES[device.state]}" onclick="toggleWebSocket(${nindex},${dindex})">
@@ -113,6 +118,8 @@ const networks = mount(document.getElementById("network"), [
         devices:[
             {
                 name:"unknown",
+                id:0,                   // its element ID in the config
+                options:0,              // DEV_OPT_ bits
                 ip:location.host,
                 state:"disconnected",   // "connecting", "connected"
                 message:""              // why the last connection failed or ended
@@ -176,6 +183,17 @@ function updateNetworkFields(pt,type,netID,field) {
     // Keep the config in step with the device's, as saving the graph sends its
     // networking messages back: an old copy would undo this change.
     if (pt === PKT_UPDATE_CONFIG && gfig) gfig = configSetField(gfig, data.slice(PKT_HEADER_LEN));
+}
+
+// Turn one of a device's options (DEV_OPT_) on or off. The device takes it at once.
+function setDeviceOption(netID, devID, option, on) {
+    const device = networks[netID].devices[devID];
+    device.options = on ? device.options | option : device.options & ~option;
+    const data = new Uint8Array([PKT_UPDATE_CONFIG, 0, MSG_HEADER_LEN + 2,
+        MSG_DEVICE_FIELD, 0, (device.id >> 8) & 0xFF, device.id & 0xFF, 2, FIELD_DEVICE_OPTIONS, device.options]);
+    console.log(data); //debug
+    socket.send(data); //online
+    if (gfig) gfig = configSetField(gfig, data.slice(PKT_HEADER_LEN));
 }
 
 // A config payload with one field message set, as the device sets it
@@ -303,6 +321,8 @@ function unmarshalConfigs(binary) {
 
         if (areByteArraysEqual(device.pay.slice(1), did)) {
             const devId = device.id;
+            networks[0].devices[0].id = devId;
+            networks[0].devices[0].options = 0;     // not in the config: none
 
             let iElm = 0;
             while (iElm < configs[MSG_DEVICE_FIELD].length) {
@@ -320,6 +340,10 @@ function unmarshalConfigs(binary) {
                 
                     case FIELD_DEVICE_NETWORK:
                         netId = devParam.pay[1] << 8 || devParam.pay[2];
+                        break;
+
+                    case FIELD_DEVICE_OPTIONS:
+                        if (devParam.len === 2) networks[0].devices[0].options = devParam.pay[1];
                         break;
                 
                     default:

@@ -797,13 +797,33 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await page.locator('.editable .value', { hasText: '10.0.0.1' }).count() === 1,
         'the access point does not show its new address');
 
+    // The device's row: its option to send each frame at once (Nagle's algorithm off),
+    // which the first-boot config doesn't have. On, then off, then on again.
+    const nodelay = page.locator('.device-option input');
+    expect(await nodelay.isChecked() === false && await nodelay.isEnabled(),
+        'a device without options does not show Send at once off, and enabled while connected');
+    // Each change renders the row again, so the box is looked up each time.
+    for (const on of [true, false, true]) {
+        await page.evaluate((on) => {
+            const box = document.querySelector('.device-option input');
+            box.checked = on;
+            box.dispatchEvent(new Event('change', { bubbles: true }));
+        }, on);
+    }
+    const options = await sent(page);
+    expect(options.map(hex).join() === ['01', '00', '01'].map(o => '0b0007b100000002' + '03' + o).join(),
+        'the device option updates were ' + options.map(hex));
+    expect(await page.locator('.device-option input').isChecked(), 'Send at once does not show on');
+    packets.push(...options);
+
     // Saving the graph sends the networking messages back: with the updates in them.
     await page.locator('#graph .write svg').dispatchEvent('click');
     const withAddresses = await sent(page);
     const fields = hex(withAddresses[0]);
     expect(withAddresses.length === 1 && fields.includes('b300000005' + '05c0a80132')
         && fields.includes('b300000005' + '06c0a80101') && fields.includes('b300000005' + '040a000001')
-        && fields.includes('b2000000020000'), 'saving the graph lost the network updates: ' + fields);
+        && fields.includes('b2000000020000') && fields.includes('b100000002' + '0301'),
+        'saving the graph lost the network updates: ' + fields);
     packets.push(...withAddresses);
 
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a

@@ -4,7 +4,7 @@
 /*
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
- * The PKT_, MSG_, FIELD_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
+ * The PKT_, MSG_, FIELD_, DEV_OPT_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
  * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
  * ENCODER_, SINE_, CLOCK_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
@@ -124,6 +124,7 @@
 #define FIELD_DEVICE_DID        0x00
 #define FIELD_DEVICE_NAME       0x01
 #define FIELD_DEVICE_NETWORK    0x02
+#define FIELD_DEVICE_OPTIONS    0x03    /* 1 byte, DEV_OPT_ bits; without it, 0 */
 #define FIELD_NETWORK_OPTIONS   0x00
 #define FIELD_NETWORK_NAME      0x01
 #define FIELD_NETWORK_SSID      0x02
@@ -131,6 +132,10 @@
 #define FIELD_NETWORK_AP_ADDRESS     0x04    /* access point: its IPv4 address, 4 bytes */
 #define FIELD_NETWORK_STATIC_ADDRESS 0x05    /* joining: a fixed IPv4 address, 4 bytes */
 #define FIELD_NETWORK_GATEWAY        0x06    /* joining with a fixed address: the gateway, 4 bytes */
+
+/* Device options (FIELD_DEVICE_OPTIONS) bit 0: 0 = TCP holds a small frame back while an
+   earlier one is unacknowledged (Nagle's algorithm), 1 = each frame is sent at once. */
+#define DEV_OPT_NODELAY         0x01
 
 /* Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network. */
 #define NET_OPT_JOIN            0x01
