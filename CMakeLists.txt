@@ -23,6 +23,7 @@ add_executable(twitcher
     src/neopixel.c
     src/ds18b20.c
     src/encoder.c
+    src/ultrasonic.c
     src/clock.c
     src/timesync.c
     src/keyboard.c

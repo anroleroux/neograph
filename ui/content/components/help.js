@@ -63,6 +63,12 @@ const NODE_HELP = {
         "Each click moves Position by 1, up to Steps; At the ends Wrap (the default) goes round from Steps − 1 back to 0, as the knob turns freely; Stop holds it at 0 and at Steps. Wired into a PWM, servo or NeoPixels, it counts as a fraction of Steps: 20 steps sweeps a servo across in 20 clicks. If it counts the wrong way, set Direction to Reversed.",
         "A click is: Full cycle for most encoders (a KY-040, an EC11); if it counts only every other click, Half cycle; Each edge for an encoder without clicks. A save keeps its position.",
     ],
+    ultrasonic: [
+        "An ultrasonic distance sensor with one signal pin, such as Seeed's Grove Ultrasonic Ranger: the device sends a ping about 16 times a second and times its echo. It has two outputs: cm, the distance to the nearest thing (a number), and Echo (on/off), on while something is within its Range. Pick the one the next wire leaves from in Wire from.",
+        "Wire it: SIG to the pin, VCC to power and GND to GND; NC stays free. A ranger powered from 5 V (v1.0 is made for 5 V; v2.0 also runs from 3.3 V) signals at 5 V: put 1 kΩ between SIG and the pin, and 2 kΩ from the pin to GND.",
+        "Range, 10 to 400 cm, is as far as it looks. With nothing nearer, cm reads Range and Echo goes off, after three pings in a row without an echo, so one lost ping doesn't show. Wired into a PWM, servo or NeoPixels, cm counts as a fraction of Range. Echo alone is a presence detector: set Range to the distance that should trip it.",
+        "It hears things from about 3 cm, in a cone of about 15°; soft or slanted surfaces may not echo. With several rangers, they ping in turn, so each reads less often.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",

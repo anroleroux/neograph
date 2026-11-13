@@ -23,7 +23,7 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 const MSG_FLAG_OUTPUT        = 0x01;
 
 // Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
-// rotary encoder, clock) or
+// rotary encoder, clock, ultrasonic ranger) or
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
@@ -64,6 +64,7 @@ const MSG_HW_ADC             = 0x32;  // an analog input pin
 const MSG_HW_DS18B20         = 0x33;  // a DS18B20 temperature sensor on a 1-Wire pin; two outputs
 const MSG_HW_ENCODER         = 0x34;  // a rotary encoder and its push switch; two outputs
 const MSG_HW_CLOCK           = 0x35;  // the device's clock, a time of day: hour, minute, second
+const MSG_HW_ULTRASONIC      = 0x36;  // an ultrasonic ranger on one pin: a distance; two outputs
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -107,6 +108,7 @@ const MSG_NETWORK_FIELD      = 0xB3;
 const FIELD_DEVICE_DID       = 0x00;
 const FIELD_DEVICE_NAME      = 0x01;
 const FIELD_DEVICE_NETWORK   = 0x02;
+const FIELD_DEVICE_OPTIONS   = 0x03;  // 1 byte, DEV_OPT_ bits; without it, 0
 const FIELD_NETWORK_OPTIONS  = 0x00;
 const FIELD_NETWORK_NAME     = 0x01;
 const FIELD_NETWORK_SSID     = 0x02;
@@ -166,6 +168,14 @@ const ENCODER_DETENT_1       = 0x02;  // each change of a pin; or an encoder wit
 const ENCODER_REVERSE        = 0x04;
 const ENCODER_WRAP           = 0x08;
 const ENCODER_STEPS_MAX      = 1000;
+
+// Ultrasonic ranger (MSG_HW_ULTRASONIC) payload: the GPIO of its signal pin (SIG), then
+// its range in cm (2 bytes, BE), ULTRASONIC_RANGE_MIN to ULTRASONIC_RANGE_MAX. Outputs:
+// the distance to the nearest thing in cm (0; its range with nothing nearer), and echo
+// (1): whether something is within its range.
+const ULTRASONIC_PAYLOAD_LEN = 3;
+const ULTRASONIC_RANGE_MIN   = 10;    // cm
+const ULTRASONIC_RANGE_MAX   = 400;   // cm: as far as the ranger hears
 
 // Clock (MSG_HW_CLOCK): the device has one clock, which every clock node reads. Outputs:
 // its hour (0), minute (1) and second (2), whole numbers. Its payload: options
@@ -262,6 +272,10 @@ const NEOPIXEL_PATCH_LEN     = 8;     // a patch's settings: its start and end c
 const NEOPIXEL_COLOUR_LEN    = 3;     // red, green, blue; a second colour with NEOPIXEL_GFX_COLOUR_INPUT
 const NEOPIXEL_BAR_ROW       = 0x00;  // a bar along an array's row; around a circle's ring; around a doughnut
 const NEOPIXEL_BAR_COLUMN    = 0x01;  // a bar up an array's column; across a circle's rings, from the centre out
+
+// Device options (FIELD_DEVICE_OPTIONS) bit 0: 0 = TCP holds a small frame back while an
+// earlier one is unacknowledged (Nagle's algorithm), 1 = each frame is sent at once.
+const DEV_OPT_NODELAY        = 0x01;
 
 // Network options (FIELD_NETWORK_OPTIONS) bit 0: 0 = start an access point, 1 = join a network.
 const NET_OPT_JOIN           = 0x01;

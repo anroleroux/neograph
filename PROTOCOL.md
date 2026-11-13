@@ -209,7 +209,8 @@ ID and field ID** (first payload byte), and replaces that message with the new o
   result would not fit its flash region, nothing changes, and nothing is reported.
 - The UI applies each `0B` to its copy of the config too, so saving the graph, which
   sends the networking messages back, keeps the change.
-- The change is only written to flash. Networking reads it at the next boot.
+- The change is only written to flash. Networking reads it at the next boot, except
+  the device's [options](#networking) (`B1`, field `03`), which it takes at once.
 
 ```hex example=update-ssid
 0B 00 08                    # Update config field, 8 bytes
@@ -224,6 +225,11 @@ B2 00 00 00 02  00 00       # network 0, field options = 0 (access point)
 ```hex example=update-ap-address
 0B 00 0A                    # Update config field, 10 bytes
 B3 00 00 00 05  04 0A 00 00 01   # network 0, field access point address = 10.0.0.1
+```
+
+```hex example=update-device-options
+0B 00 07                    # Update config field, 7 bytes
+B1 00 00 00 02  03 01       # device 0, field options = send each frame at once
 ```
 
 ```hex example=update-password
@@ -249,7 +255,9 @@ Core 0 sends the most recently connected client WebSocket text frames:
   element hands the value to the nodes wired to it: a [core temperature](#core-temperature)
   in °C, a [DS18B20](#ds18b20-temperature-sensors) its temperature in °C (output 0) and
   whether it answers (output 1), a [rotary encoder](#rotary-encoders) its position in
-  clicks (output 0) and whether it is pressed (output 1), a [clock](#clocks) its hour,
+  clicks (output 0) and whether it is pressed (output 1), an [ultrasonic
+  ranger](#ultrasonic-rangers) its distance in cm (output 0) and whether something is
+  within its range (output 1), a [clock](#clocks) its hour,
   minute and second (outputs 0–2), an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
   [logic](#logic) on from 0.5. Other nodes, such as a button or slider, ignore theirs,
   and so does an element the page doesn't have. The UI ignores `uptime N`, and shows
@@ -264,6 +272,8 @@ sig 4 1 2                   # counter n4, its count: 2
 sig 7 0 22.44               # DS18B20 n7: 22.44 °C (4 significant digits)
 sig 7 1 1                   # DS18B20 n7: found
 sig 8 0 12                  # rotary encoder n8: 12 clicks
+sig 9 0 42.5                # ultrasonic ranger n9: 42.5 cm
+sig 9 1 1                   # ultrasonic ranger n9: something is within its range
 ```
 
 ### Limits
@@ -379,6 +389,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `33` | `MSG_HW_DS18B20` | HW input: a DS18B20 temperature sensor on a 1-Wire pin; two outputs | Implemented |
 | `34` | `MSG_HW_ENCODER` | HW input: a rotary encoder and its push switch; two outputs | Implemented |
 | `35` | `MSG_HW_CLOCK` | HW input: the device's clock, a time of day; three outputs, hour, minute and second | Implemented |
+| `36` | `MSG_HW_ULTRASONIC` | HW input: an ultrasonic ranger on one pin, a distance; two outputs | Implemented |
 | `40` | `MSG_LOGIC_COMPARE` | Logic: a floating input above or below a threshold | Implemented |
 | `41` | `MSG_LOGIC_AND` | Logic: on while every input is on | Implemented |
 | `42` | `MSG_LOGIC_OR` | Logic: on while any input is on | Implemented |
@@ -420,6 +431,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `33` DS18B20 | 2 | Byte 0: the GPIO pin of its data line (DQ), a [usable](#gpio-pins) one (UI default 15). Byte 1: options; bits 0–1 (`DS18B20_RES_MASK`) its resolution, `DS18B20_RES_9` (0) to `DS18B20_RES_12` (3, UI default); bit 2 (`DS18B20_PULLUP`): the pin's internal pull-up on (UI default off: a 4.7 kΩ resistor). Other bits are 0. See [DS18B20 temperature sensors](#ds18b20-temperature-sensors). |
 | `34` Rotary encoder | 6 (`ENCODER_PAYLOAD_LEN`) | Byte 0: the GPIO of its A (CLK) pin (UI default 6); byte 1: of its B (DT) pin (UI default 7); byte 2: of its push switch (SW, UI default 8), or `ENCODER_NO_BUTTON` (`FF`) for none: [usable](#gpio-pins) pins that differ. Byte 3: options; bits 0–1 (`ENCODER_DETENT_MASK`) its pins' transitions a click, `ENCODER_DETENT_4` (0, UI default), `ENCODER_DETENT_2` (1) or `ENCODER_DETENT_1` (2); bit 2 (`ENCODER_REVERSE`): it counts the other way; bit 3 (`ENCODER_WRAP`): past its ends it goes on from the other (UI default on). Other bits are 0. Bytes 4–5: its steps, big endian, 1 to `ENCODER_STEPS_MAX` (1000; UI default 20). See [Rotary encoders](#rotary-encoders). |
 | `35` Clock | 3 (`CLOCK_PAYLOAD_LEN`; or 0) | Byte 0: options; bit 0 (`CLOCK_SYNC`): internet time (UI default on). Other bits are 0. Bytes 1–2: its time zone, minutes ahead of UTC, a signed 16-bit big-endian number, `CLOCK_ZONE_MIN` (−720) to `CLOCK_ZONE_MAX` (840), a multiple of `CLOCK_ZONE_STEP` (15) (UI default 120: UTC+2). None, saved before clocks had settings, is internet time off, UTC. The device has one clock: the first clock in the config sets it. Set the time with a [command](#01-command). See [Clocks](#clocks). |
+| `36` Ultrasonic ranger | 3 (`ULTRASONIC_PAYLOAD_LEN`) | Byte 0: the GPIO of its signal pin (SIG), a [usable](#gpio-pins) one (UI default 16). Bytes 1–2: its range in cm, big endian, `ULTRASONIC_RANGE_MIN` (10) to `ULTRASONIC_RANGE_MAX` (400; UI default 400). See [Ultrasonic rangers](#ultrasonic-rangers). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -528,9 +540,9 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4D` logic | 0 or 1 (`00` / `FF`) |
+| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `36` ultrasonic ranger's echo (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4D` logic | 0 or 1 (`00` / `FF`) |
 | NeoPixel data | `26` NeoPixels' data line out (output 0) | `26` NeoPixels' data line in (after their settings) | What its chain draws on its LEDs; see [NeoPixel chains](#neopixel-chains) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `35` clock's hour, minute and second (outputs 0–2), `45` scale, `46` min, `47` max, `4C` counter's count (output 1), `4D` sine | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps; a clock's hour 0 to 23, its minute and second 0 to 59 |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `35` clock's hour, minute and second (outputs 0–2), `36` ultrasonic ranger's distance (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1), `4D` sine | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps; a clock's hour 0 to 23, its minute and second 0 to 59; an ultrasonic ranger's distance in cm, up to its range |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -539,6 +551,7 @@ GPIO input an LED, GPO or USB keyboard on the device and a light in the browser.
 maps a floating value onto its range as a fraction of the source's full scale: 1 for
 a slider or a scale, 3.3 V for an ADC, `CORE_TEMP_FULL` (100) °C for the core temperature,
 `DS18B20_FULL` (100) °C for a DS18B20, its steps for a rotary encoder's position,
+its range for an ultrasonic ranger's distance,
 `CLOCK_HOURS` (24) for a clock's hour and `CLOCK_MINUTES` (60) for its minute or second,
 for a min or max that of its first wired input, and for a counter's count its preset.
 The UI only draws wires between matching types, and drops mismatched source references
@@ -606,7 +619,7 @@ When a config arrives, the UI rebuilds the graph from it:
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
   `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `30` core temperature, `31` GPIO input,
-  `32` ADC, `33` DS18B20, `34` rotary encoder, `35` clock, the logic `40`–`4D`
+  `32` ADC, `33` DS18B20, `34` rotary encoder, `35` clock, `36` ultrasonic ranger, the logic `40`–`4D`
   and a block's copy `60`) becomes a node with the message's ID. Messages marked
   `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
   definition, which is restored first from its `A3` and `A4` messages (see
@@ -614,7 +627,7 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a rotary encoder its pins, steps and options (pins another node has keep its own), a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a rotary encoder its pins, steps and options (pins another node has keep its own), an ultrasonic ranger its pin and range, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
@@ -680,7 +693,7 @@ s0 n1.0 button = 0
 
 ### Hardware input tiles
 
-A hardware input (core temperature, GPIO input, ADC, DS18B20, rotary encoder, clock) or a [logic](#logic) element shows
+A hardware input (core temperature, GPIO input, ADC, DS18B20, rotary encoder, clock, ultrasonic ranger) or a [logic](#logic) element shows
 a tile in the Command view only if its settings say so: "Command view: Show | Hide", Hide by default. A light or
 plot wired to it shows its values either way. The choice is saved as `MSG_FLAG_SHOWN`
 in its message's flags; a message without it, such as one saved before the choice
@@ -914,6 +927,61 @@ shows when it is pressed:
 25 01 00 02 0C  00 01 00 09 00 B4               # servo n2 ← n1's position, GPIO 9, 0° at 0, 180° at 1
                 01 F4 09 C4 00 00               #   500 µs at 0°, 2500 µs at 180°, no speed limit
 20 01 00 03 03  00 01 01                        # LED n3 ← n1's pressed (output 1)
+```
+
+### Ultrasonic rangers
+
+An ultrasonic ranger node (`36`) reads an ultrasonic distance sensor whose trigger and
+echo share one pin, such as Seeed's Grove Ultrasonic Ranger: it sends a burst of 40 kHz
+sound and times its echo. It is a source with two outputs: **its distance** to the
+nearest thing in cm (output 0, floating, unit `cm`), and **echo** (output 1, boolean):
+on while something is within its range. The Command view can show it on a tile (see
+[Hardware input tiles](#hardware-input-tiles)): `42.5 cm`, or `Nothing within 100 cm`.
+
+**Wiring.** SIG to the pin, VCC to power, GND to GND; the Grove plug's NC stays free.
+Its signal is as high as its supply: a ranger powered from 5 V (v1.0 is made for 5 V;
+v2.0 also runs from 3.3 V) answers with 5 V pulses, so put a divider between them: 1 kΩ
+from SIG to the pin and 2 kΩ from the pin to GND. The pin's internal pull-down is on,
+which holds the line low while neither end drives it.
+
+**A ping.** Core 1 drives the pin low, high for 10 µs (`ULTRASONIC_TRIGGER_US`), low,
+and lets it go. The ranger sends its burst, then holds the pin high for as long as the
+sound takes to come back: 58.3 µs a cm (`ultrasonic_cm`: there and back at 343 m/s, in
+air at 20 °C), so 23 ms at 400 cm. The distance is kept to 0.1 cm.
+
+**Its range**, `ULTRASONIC_RANGE_MIN` (10) to `ULTRASONIC_RANGE_MAX` (400) cm, is as far
+as it looks, and the full scale of its distance: a PWM, servo or NeoPixels wired to it
+take it as a fraction of its range. A ping is a **miss** when the ranger gives no
+pulse, one under `ULTRASONIC_PULSE_MIN_US` (100 µs, under 2 cm: noise), or one from
+beyond its range (`ultrasonic_take`):
+
+- **An echo from within its range** becomes its distance, and echo goes on.
+- **A miss** leaves both as they were, so one lost ping doesn't show. After 3 in a row
+  (`ULTRASONIC_MISSES_LOST`) echo goes off and its distance goes to its range. That is
+  also what an unplugged ranger reads.
+- **It starts** with echo off, at its range. A save keeps both, if the distance is
+  within the new range.
+
+**On the device.** The pulse is longer than the 10 ms scan, so core 1 times its edges
+with an interrupt (`IO_IRQ_BANK0`, the handler the [rotary encoders](#rotary-encoders)
+use): the rising edge is when it started, the falling edge gives its length. A scan
+takes the outcome once the pulse has ended. A ping goes out every 60 ms
+(`ULTRASONIC_PING_MS`), so the last one's echoes have died away; one still without a
+pulse, or with its pulse still high, when the next is due is a miss. With several
+rangers they ping in turn, one each 60 ms, so one doesn't hear another's: each reads
+every 60 ms × the number of rangers. A program runs at most 4 (`ULTRASONICS_MAX`); more
+are skipped. A pause of core 1 for a flash write drops the ping that is out, as a miss.
+
+A ranger `n1` on GPIO 16 that looks 100 cm, its tile shown: its distance turns servo
+`n2` on GPIO 9 across its 180° over the 100 cm, and the onboard LED is on while
+something is within them:
+
+```hex example=ultrasonic-config
+0A 00 21                                        # Config, 33 bytes
+36 02 00 01 03  10 00 64                        # ultrasonic ranger n1, tile shown: GPIO 16, range 100 cm
+25 01 00 02 0C  00 01 00 09 00 B4               # servo n2 ← n1's distance, GPIO 9, 0° at 0, 180° at 1
+                01 F4 09 C4 00 00               #   500 µs at 0°, 2500 µs at 180°, no speed limit
+20 01 00 03 03  00 01 01                        # LED n3 ← n1's echo (output 1)
 ```
 
 ### Clocks
@@ -1671,6 +1739,7 @@ Four element types describe devices and networks. The payload of each starts wit
 | `B0`/`B1` device | `00` DID | `FIELD_DEVICE_DID` | 8 bytes | config |
 | | `01` name | `FIELD_DEVICE_NAME` | ASCII, up to 31 bytes | config |
 | | `02` network | `FIELD_DEVICE_NETWORK` | 2-byte network ID | config |
+| | `03` options | `FIELD_DEVICE_OPTIONS` | 1 byte, see below | config |
 | `B2`/`B3` network | `00` options | `FIELD_NETWORK_OPTIONS` | 1 byte, see below | config |
 | | `01` name | `FIELD_NETWORK_NAME` | ASCII, up to 31 bytes | config |
 | | `02` SSID | `FIELD_NETWORK_SSID` | ASCII, up to 31 bytes | config |
@@ -1678,6 +1747,18 @@ Four element types describe devices and networks. The payload of each starts wit
 | | `04` access point address | `FIELD_NETWORK_AP_ADDRESS` | 4 bytes, IPv4 | config |
 | | `05` fixed address | `FIELD_NETWORK_STATIC_ADDRESS` | 4 bytes, IPv4 | config |
 | | `06` gateway | `FIELD_NETWORK_GATEWAY` | 4 bytes, IPv4 | config |
+
+Device options, bit 0 (`DEV_OPT_NODELAY`): `0` = TCP's Nagle algorithm is on, as it is
+for a device without the field: a small frame, such as a [telemetry](#telemetry-text-frames)
+one, waits while an earlier one is unacknowledged, so after a lost WiFi packet the
+frames behind it reach the browser in a burst (a plot holds, then jumps). `1` = each
+frame is sent at once, in a packet and a TCP segment of its own (lwIP has
+`MEMP_NUM_TCP_SEG`, 48, for all connections), which a graph with many changing signals
+can use up while a packet is lost; a frame that then can't be queued is dropped. The
+UI's switch for it is in the device's row of the Network view. Unlike the other
+networking fields the device takes it at once, on the open connections and new ones
+(`tcp_server_set_nodelay`), and again at boot and when a config is saved. Other bits
+are unused.
 
 Network options, bit 0 (`NET_OPT_JOIN`): `0` = start an access point (with a DHCP
 server) using the SSID and password; `1` = join an existing network. Other bits are
@@ -1790,13 +1871,14 @@ Every source in the config has its signals, wired or not:
 | `33` DS18B20 | 2: its temperature (output 0), found (output 1) | °C; 0 or 1 | 0, then its first reading; as in the program core 1 ran |
 | `34` rotary encoder | 2: its position (output 0), pressed (output 1) | clicks, 0 to its steps; 0 or 1 | its position as in the program core 1 ran, within its steps, or 0; pressed 0 |
 | `35` clock | 3, in a row: hour (output 0), minute (1), second (2) | whole numbers, 0 to 23; 0 to 59 | 0, then the clock at the first scan |
+| `36` ultrasonic ranger | 2: its distance (output 0), echo (output 1) | cm, up to its range; 0 or 1 | its range, and 0; or as in the program core 1 ran, if that distance is within its range |
 
 - **The browser sets a UI source's** (button, slider, 2D slider) with a
   [command](#01-command): each byte becomes byte ÷ 255.
 - **Core 1 sets a hardware input's** from the hardware, and a logic element's from
   its inputs, each scan.
-- **A new program keeps the UI sources' values,** a DS18B20's and a rotary encoder's
-  position: a signal of the same element and output in the program core 1 ran takes its
+- **A new program keeps the UI sources' values,** a DS18B20's, an ultrasonic ranger's
+  and a rotary encoder's position: a signal of the same element and output in the program core 1 ran takes its
   value, so saving the graph doesn't move a slider's outputs or a knob's position, or
   drop a reading until the next. A source new to the graph starts as in the table.
 - **Core 0 reads every signal** for telemetry (see
@@ -1816,6 +1898,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `33` DS18B20 | its pin, 1-Wire | its two signals: its temperature, found | See [DS18B20 temperature sensors](#ds18b20-temperature-sensors) |
 | `34` rotary encoder | its A, B and switch pins | its two signals: its position, pressed | See [Rotary encoders](#rotary-encoders) |
 | `35` clock | the device's clock | its three signals: hour, minute, second | See [Clocks](#clocks) |
+| `36` ultrasonic ranger | its pin: a ping, and its echo | its two signals: its distance, echo | See [Ultrasonic rangers](#ultrasonic-rangers) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
 | `41` AND, `42` OR | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `43` NOT, `44` delay, `48` pulse, `49` blink, `4A` toggle | 1 signal | its signal | See [Logic](#logic) |
@@ -1845,7 +1928,8 @@ of the config; then the **logic**, each after the logic it reads; then the
   wires, networking), messages of the wrong length (the [payloads](#control-payloads)
   give the lengths), an ADC channel over 2, a DS18B20 on a pin that isn't usable or
   with an unknown option, a rotary encoder `encoder_payload_valid` refuses (see
-  [Rotary encoders](#rotary-encoders)), a compare with a threshold or hysteresis
+  [Rotary encoders](#rotary-encoders)), an ultrasonic ranger on a pin that isn't usable
+  or with a range out of its limits, a compare with a threshold or hysteresis
   that isn't a finite number or a hysteresis below 0, a delay, pulse or blink time out
   of its range, a scale whose ranges aren't finite numbers or whose input range is
   empty, a counter preset out of its range, a stepper `stepper_payload_read` refuses
@@ -1926,6 +2010,18 @@ s0 n1.0 encoder = 0
 s1 n1.1 encoder = 0
 ENCODER n1 pins 6 7 button 8 4/click steps 20 -> s0 pressed s1
 SERVO n2 pin 9 angle 0-180 pulse 500-2500 us speed 0 <- s0 / 20
+LED n3 <- s1
+```
+
+For the [ultrasonic-config example](#ultrasonic-rangers): its pin and range, its
+distance's signal, and `echo` its echo's. The servo takes its distance as a fraction of
+its 100 cm:
+
+```program example=ultrasonic-config
+s0 n1.0 ultrasonic = 0
+s1 n1.1 ultrasonic = 0
+ULTRASONIC n1 pin 16 range 100 cm -> s0 echo s1
+SERVO n2 pin 9 angle 0-180 pulse 500-2500 us speed 0 <- s0 / 100
 LED n3 <- s1
 ```
 
@@ -2150,6 +2246,7 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
      off, and is configured at its first scan;
    - a rotary encoder takes its two or three pins, all or none, as inputs with their
      pull-ups on, and core 1 takes the edges of A and B with an interrupt;
+   - an ultrasonic ranger takes its pin as an input with its pull-down on;
    - a GPO takes its pin as an output; a PWM takes its pin, and starts its slice at
      the first scan; a servo takes its pin, and starts its slice at 50 Hz at the
      first scan; a stepper takes its four pins as outputs, and holds its coils
@@ -2180,6 +2277,9 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - **Rotary encoder:** the clicks its interrupt counted since the last scan move its
      position; its switch is read, and a state that differs for 3 reads in a row
      becomes pressed (see [Rotary encoders](#rotary-encoders)).
+   - **Ultrasonic ranger:** the outcome of its ping, once its echo pulse has ended or
+     the next ping is due, becomes its signals; every 60 ms one ranger pings (see
+     [Ultrasonic rangers](#ultrasonic-rangers)).
 3. **The logic**, in program order, writes its signals from the signals it reads
    (see [Logic](#logic)).
 4. **The outputs**, in program order, each from the signals it reads, when the state
