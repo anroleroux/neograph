@@ -112,6 +112,7 @@ int main() {
         return 1;
     }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+    tcp_server_set_nodelay(state, stored_device_options() & DEV_OPT_NODELAY);
     
     printf("\n(core0) launching core1\n");
     multicore_launch_core1(core1_worker);

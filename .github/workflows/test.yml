@@ -20,7 +20,9 @@ jobs:
         run: make test
 
   ui-packets:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: the pinned Playwright installs Chromium only on the Ubuntu
+    # releases it knows, and fails on a newer one.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

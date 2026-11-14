@@ -20,6 +20,7 @@ typedef struct {
     uint8_t did[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
     char name[32];
     uint16_t network;
+    uint8_t opts;               // DEV_OPT_ bits (FIELD_DEVICE_OPTIONS); 0 without the field
 } device_config;
 
 typedef struct {
@@ -42,6 +43,8 @@ void retrieve_networking_config(network_setup *out);
 void apply_config(const uint8_t* data, size_t length);
 void update_config(const uint8_t* new_val, size_t new_len);
 void update_secrets(const uint8_t* new_val, size_t new_len);
+// The stored config's options for this device (DEV_OPT_ bits); 0 if it has none.
+uint8_t stored_device_options(void);
 // Read the stored config packet into data_buffer (FLASH_SIZE bytes) and return
 // its payload length, 0 if none is stored. It is not applied.
 uint16_t retrieve_store(uint8_t* data_buffer);

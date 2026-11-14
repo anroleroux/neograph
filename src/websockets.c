@@ -201,7 +201,7 @@ err_t handle_websocket_req(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_
 }
 
 // Handle one complete binary frame: a packet (see PROTOCOL.md).
-static void handle_packet(uint8_t *payload, size_t length) {
+static void handle_packet(tcpclient *clientstate, uint8_t *payload, size_t length) {
     int data_length = packet_data_length(payload, length);
     if (data_length < 0) {
         if (length < PKT_HEADER_LEN) printf("packet too short (%u bytes), ignored\n", length);
@@ -212,8 +212,12 @@ static void handle_packet(uint8_t *payload, size_t length) {
 
     if (*payload == PKT_CONFIG) {
         apply_config(payload,data_length+3);
+        tcp_server_set_nodelay(clientstate->server, stored_device_options() & DEV_OPT_NODELAY);
     } else if (*payload == PKT_UPDATE_CONFIG) {
         update_config(payload+3,data_length);
+        // The device's options take effect at once; the rest of networking at the next boot.
+        if (data_length > MSG_HEADER_LEN && payload[3] == MSG_DEVICE_FIELD && payload[3+MSG_HEADER_LEN] == FIELD_DEVICE_OPTIONS)
+            tcp_server_set_nodelay(clientstate->server, stored_device_options() & DEV_OPT_NODELAY);
     } else if (*payload == PKT_UPDATE_SECRET) {
         update_secrets(payload+3,data_length);
     } else if (*payload == PKT_COMMAND) {
@@ -261,7 +265,7 @@ static bool handle_frames(tcpclient *clientstate, err_t *result) {
             printf("Text Message: %.*s\n", length, payload);
             break;
         case WS_OP_BINARY:
-            handle_packet(payload, length);
+            handle_packet(clientstate, payload, length);
             break;
         case WS_OP_CLOSE:
             printf("Client requested to close WebSocket\n");

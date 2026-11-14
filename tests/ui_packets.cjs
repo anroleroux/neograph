@@ -224,7 +224,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC, PLT LGT, KEY, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US, PLT LGT, KEY, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -797,13 +797,33 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(await page.locator('.editable .value', { hasText: '10.0.0.1' }).count() === 1,
         'the access point does not show its new address');
 
+    // The device's row: its option to send each frame at once (Nagle's algorithm off),
+    // which the first-boot config doesn't have. On, then off, then on again.
+    const nodelay = page.locator('.device-option input');
+    expect(await nodelay.isChecked() === false && await nodelay.isEnabled(),
+        'a device without options does not show Send at once off, and enabled while connected');
+    // Each change renders the row again, so the box is looked up each time.
+    for (const on of [true, false, true]) {
+        await page.evaluate((on) => {
+            const box = document.querySelector('.device-option input');
+            box.checked = on;
+            box.dispatchEvent(new Event('change', { bubbles: true }));
+        }, on);
+    }
+    const options = await sent(page);
+    expect(options.map(hex).join() === ['01', '00', '01'].map(o => '0b0007b100000002' + '03' + o).join(),
+        'the device option updates were ' + options.map(hex));
+    expect(await page.locator('.device-option input').isChecked(), 'Send at once does not show on');
+    packets.push(...options);
+
     // Saving the graph sends the networking messages back: with the updates in them.
     await page.locator('#graph .write svg').dispatchEvent('click');
     const withAddresses = await sent(page);
     const fields = hex(withAddresses[0]);
     expect(withAddresses.length === 1 && fields.includes('b300000005' + '05c0a80132')
         && fields.includes('b300000005' + '06c0a80101') && fields.includes('b300000005' + '040a000001')
-        && fields.includes('b2000000020000'), 'saving the graph lost the network updates: ' + fields);
+        && fields.includes('b2000000020000') && fields.includes('b100000002' + '0301'),
+        'saving the graph lost the network updates: ' + fields);
     packets.push(...withAddresses);
 
     // Wires join only matching types: a button (boolean) drives an LED or GPO, a
@@ -1885,6 +1905,59 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(encBack.startsWith('6:7:8,24,0,true,false,true,n1:1,n1:0,'), 'an encoder restored as ' + encBack);
     expect(!encBack.endsWith('kept'), 'an encoder took A and B on one pin: ' + encBack);
+
+    // An ultrasonic ranger: its pin and range; its distance wires into a number input,
+    // its Echo into an on/off; its tile shows the device's readings. It marshals as the
+    // ultrasonic-config example in PROTOCOL.md, and restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add an ultrasonic ranger"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|GPIO pin:|Range (cm):|Wire from:|Command view:',
+        'a new ultrasonic ranger does not show its settings: ' + await keyRows());
+    const us = await page.evaluate(() => {
+        const s = selected;
+        const first = s.range;
+        const rejected = [s.setPin('29'), s.setRange(ULTRASONIC_RANGE_MIN - 1), s.setRange(ULTRASONIC_RANGE_MAX + 1),
+            s.setRange('2.5'), s.setRange(''), s.setWireOutput(2)].every(r => r === false) && s.range === first;
+        const cmp = addNode(MSG_LOGIC_COMPARE), led = addNode(MSG_HW_LED);
+        s.setWireOutput(0);
+        const wired = !!createEdge(s.name, cmp.name) && createEdge(s.name, led.name) === null
+            && (s.setWireOutput(1), !!createEdge(s.name, led.name)) && createEdge(s.name, cmp.name) === null;
+        s.setRange('100');
+        s.shown = true;
+        buildCommandInterface();
+        const tile = () => s.tileState.textContent;
+        const tiles = [tile()];
+        receiveTelemetry(`sig ${s.id} 0 42.5`);
+        receiveTelemetry(`sig ${s.id} 1 1`);
+        tiles.push(tile(), String(s.outputValue(0)), String(s.outputValue(1)));
+        receiveTelemetry(`sig ${s.id} 0 100`);
+        receiveTelemetry(`sig ${s.id} 1 0`);
+        tiles.push(tile());
+        const pay = s.marshal().slice(5).map(b => b.toString(16).padStart(2, '0')).join('');
+        saveGraph();
+        return { first, rejected, wired, tiles: tiles.join('|'), pay, pin: s.pin, unit: s.unit };
+    });
+    packets.push(...await sent(page));
+    expect(us.first === 400 && us.unit === 'cm', 'a new ultrasonic ranger looks ' + us.first + ' ' + us.unit);
+    expect(us.rejected, 'an ultrasonic ranger took settings out of range');
+    expect(us.wired, 'an ultrasonic ranger\'s outputs did not wire by type');
+    expect(us.tiles === '–|42.5 cm|42.5|1|Nothing within 100 cm', 'an ultrasonic ranger\'s tile showed ' + us.tiles);
+    expect(us.pay === us.pin.toString(16).padStart(2, '0') + '0064', 'an ultrasonic ranger marshals as ' + us.pay);
+    const usBack = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([
+            0x36, MSG_FLAG_SHOWN, 0, 1, 3, 16, 0, 100,
+            0x25, 1, 0, 2, 12, 0, 1, 0, 9, 0, 180, 0x01, 0xF4, 0x09, 0xC4, 0, 0,
+            0x20, 1, 0, 3, 3, 0, 1, 1,
+            0x36, 0, 0, 4, 3, 17, 0, 5,
+        ])));
+        const s = elements.n1;
+        return [s.pin, s.range, s.shown,
+            elements.n3.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            elements.n2.inConns().map(c => c.start.node.name + ':' + c.start.output).join(),
+            elements.n4.range].join();
+    });
+    expect(usBack === '16,100,true,n1:1,n1:0,400', 'an ultrasonic ranger restored as ' + usBack);
 
     // A sine: an on/off wire in runs it, a number wire leaves it; the browser runs the
     // wave, from its offset; off, it rests at its offset. It marshals as the sine-config

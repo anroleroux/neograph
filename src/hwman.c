@@ -20,6 +20,7 @@
 #include "protocol.h"
 #include "servo.h"
 #include "stepper.h"
+#include "ultrasonic.h"
 #include "ws2812.pio.h"
 
 // Core 1 runs the program core 0 compiled from the config (src/program.h): every
@@ -209,6 +210,8 @@ static volatile bool parked = false;
 
 // Runs from RAM with interrupts off, so nothing on core 1 touches flash until
 // core 0 clears park_request.
+static void ultrasonics_drop(void);
+
 static void __no_inline_not_in_flash_func(core1_park)(void) {
     uint32_t ints = save_and_disable_interrupts();
     parked = true;
@@ -219,6 +222,7 @@ static void __no_inline_not_in_flash_func(core1_park)(void) {
     parked = false;
     __dmb();
     restore_interrupts(ints);
+    ultrasonics_drop();     // an echo timed across the pause is wrong
 }
 
 bool core1_pause(void) {
@@ -363,6 +367,8 @@ typedef struct {
     } ds;                       // DS18B20
     uint8_t encoder;            // rotary encoder: its place in encoders[]; `on` and `differ`
                                 // debounce its switch, as a GPIO input's
+    uint8_t ultrasonic;         // ultrasonic ranger: its place in ultrasonics[]; `on`: a ping is
+                                // out; `differ`: its pings in a row without an echo
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -638,10 +644,10 @@ static inline uint8_t encoder_pins(uint8_t a, uint8_t b) {
     return (uint8_t)(gpio_get(a) << 1 | gpio_get(b));
 }
 
-// IO_IRQ_BANK0 on core 1, shared with core 0's handlers (the WiFi chip's): each
-// encoder whose pins have an edge for this core takes it. It reads the pins after
-// acknowledging their edges, so an edge after the read raises it again.
-static void __not_in_flash_func(encoders_irq)(void) {
+// Part of IO_IRQ_BANK0 on core 1 (pins_irq), shared with core 0's handlers (the WiFi
+// chip's): each encoder whose pins have an edge for this core takes it. It reads the
+// pins after acknowledging their edges, so an edge after the read raises it again.
+static inline __attribute__((always_inline)) void encoders_irq(void) {
     for (uint8_t i = 0; i < encoders_on; i++) {
         uint32_t a = gpio_get_irq_event_mask(encoders[i].a) & ENCODER_EDGES;
         uint32_t b = gpio_get_irq_event_mask(encoders[i].b) & ENCODER_EDGES;
@@ -730,6 +736,144 @@ static void encoder_scan(hw_program *p, const prog_node *n, node_state *st) {
     }
 }
 
+// ── Ultrasonic rangers ──
+// A ranger whose trigger and echo share its pin (Seeed's Grove Ultrasonic Ranger): core 1
+// pulses the pin high for ULTRASONIC_TRIGGER_US and lets it go, and the ranger answers
+// with a pulse as long as its sound took there and back, up to about 25 ms. That is
+// longer than a scan, so the pulse's edges are timed with an interrupt, as an encoder's
+// are taken. A ping goes out every ULTRASONIC_PING_MS, the rangers in turn, so one
+// doesn't hear another's. Between pings the pin is an input with its pull-down on, which
+// holds the line low while neither end drives it.
+#define ULTRASONICS_MAX         4
+#define ULTRASONIC_PING_SCANS   (ULTRASONIC_PING_MS / SCAN_MS)
+
+enum {
+    US_IDLE,            // no ping out
+    US_SENT,            // triggered: waiting for its pulse to start
+    US_HIGH,            // its pulse is high
+    US_DONE,            // its pulse ended: pulse_us is its length
+};
+
+static struct {
+    uint8_t pin;
+    volatile uint8_t stage;     // US_
+    volatile uint64_t rise_us;  // when its pulse started
+    volatile uint32_t pulse_us;
+} ultrasonics[ULTRASONICS_MAX];
+static volatile uint8_t ultrasonics_on = 0;
+
+// The edges of a ranger's echo pulse, on core 1: when it rose, then how long it was. A
+// pulse so short both edges are waiting counts as length 0, which is no echo.
+static inline __attribute__((always_inline)) void ultrasonics_irq(void) {
+    for (uint8_t i = 0; i < ultrasonics_on; i++) {
+        uint32_t edges = gpio_get_irq_event_mask(ultrasonics[i].pin) & ENCODER_EDGES;
+        if (!edges) continue;
+        gpio_acknowledge_irq(ultrasonics[i].pin, edges);
+        uint64_t now = time_us_64();
+        if (ultrasonics[i].stage == US_SENT && (edges & GPIO_IRQ_EDGE_RISE)) {
+            ultrasonics[i].rise_us = now;
+            ultrasonics[i].stage = US_HIGH;
+        }
+        if (ultrasonics[i].stage == US_HIGH && (edges & GPIO_IRQ_EDGE_FALL)) {
+            ultrasonics[i].pulse_us = (uint32_t)(now - ultrasonics[i].rise_us);
+            ultrasonics[i].stage = US_DONE;
+        }
+    }
+}
+
+// IO_IRQ_BANK0 on core 1: the encoders' and the rangers' pins.
+static void __not_in_flash_func(pins_irq)(void) {
+    encoders_irq();
+    ultrasonics_irq();
+}
+
+// Drop the pings that are out: each counts as one without an echo. After core 1 was
+// paused with its interrupts off, when a pulse's edges were taken late.
+static void ultrasonics_drop(void) {
+    for (uint8_t i = 0; i < ultrasonics_on; i++) {
+        gpio_set_irq_enabled(ultrasonics[i].pin, ENCODER_EDGES, false);
+        ultrasonics[i].stage = US_IDLE;
+    }
+}
+
+// Stop timing the last program's rangers, before their pins are released.
+static void ultrasonics_stop(void) {
+    uint32_t ints = save_and_disable_interrupts();
+    for (uint8_t i = 0; i < ultrasonics_on; i++) gpio_set_irq_enabled(ultrasonics[i].pin, ENCODER_EDGES, false);
+    ultrasonics_on = 0;
+    restore_interrupts(ints);
+}
+
+// Its pin, and a place in ultrasonics[]. With an echo from the program before
+// (take_program kept its outputs) it goes on from that distance, if within its range;
+// otherwise it starts with no echo, at its range.
+static bool ultrasonic_setup(hw_program *p, const prog_node *n, node_state *st) {
+    if (ultrasonics_on == ULTRASONICS_MAX) {
+        printf("ultrasonic n%u: more than %u rangers\n", n->id, ULTRASONICS_MAX);
+        return false;
+    }
+    if (!claim_pin(n->pin)) return false;
+    gpio_init(n->pin);
+    gpio_put(n->pin, 0);
+    gpio_set_dir(n->pin, GPIO_IN);
+    gpio_pull_down(n->pin);
+
+    if (p->signals[n->out_count].value < 0.5f || p->signals[n->out].value > (float)n->range) {
+        p->signals[n->out].value = (float)n->range;
+        p->signals[n->out_count].value = 0;
+    }
+
+    uint8_t i = ultrasonics_on;
+    ultrasonics[i].pin = n->pin;
+    ultrasonics[i].stage = US_IDLE;
+    st->ultrasonic = i;
+    uint32_t ints = save_and_disable_interrupts();
+    ultrasonics_on = i + 1;
+    restore_interrupts(ints);
+    printf("ultrasonic ranger on GPIO %u\n", n->pin);
+    return true;
+}
+
+// Send a ping: the pin low, high for the trigger, low, then let go for the ranger to
+// answer on. Its edges are taken from here; the trigger's own are cleared first.
+static void ultrasonic_ping(uint8_t i) {
+    uint8_t pin = ultrasonics[i].pin;
+    gpio_set_irq_enabled(pin, ENCODER_EDGES, false);
+    gpio_put(pin, 0);
+    gpio_set_dir(pin, GPIO_OUT);
+    busy_wait_us_32(2);
+    gpio_put(pin, 1);
+    busy_wait_us_32(ULTRASONIC_TRIGGER_US);
+    gpio_put(pin, 0);
+    busy_wait_us_32(2);
+    gpio_set_dir(pin, GPIO_IN);
+    ultrasonics[i].stage = US_SENT;
+    gpio_set_irq_enabled(pin, ENCODER_EDGES, true);     // acknowledges the trigger's edges first
+}
+
+// One scan of a ranger. Its ping's outcome is taken once its pulse has ended, or when
+// the next ping is due with no pulse, or one still high: no echo. Each
+// ULTRASONIC_PING_SCANS scans one ranger pings, in turn.
+static void ultrasonic_scan(hw_program *p, const prog_node *n, node_state *st, uint32_t count) {
+    uint8_t i = st->ultrasonic;
+    bool due = count % ULTRASONIC_PING_SCANS == 0;
+    if (st->on && (ultrasonics[i].stage == US_DONE || due)) {
+        gpio_set_irq_enabled(n->pin, ENCODER_EDGES, false);
+        bool answered = ultrasonics[i].stage == US_DONE;
+        ultrasonics[i].stage = US_IDLE;
+        float cm = p->signals[n->out].value;
+        bool echo = p->signals[n->out_count].value >= 0.5f;
+        ultrasonic_take(answered, ultrasonics[i].pulse_us, n->range, &cm, &echo, &st->differ);
+        p->signals[n->out].value = cm;
+        p->signals[n->out_count].value = echo;
+        st->on = false;
+    }
+    if (due && (count / ULTRASONIC_PING_SCANS) % ultrasonics_on == i) {
+        ultrasonic_ping(i);
+        st->on = true;
+    }
+}
+
 // Set up a node's hardware. Inputs come before outputs in a program, so an
 // input wins a pin an output also names; otherwise the first node on a pin wins.
 static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
@@ -774,6 +918,9 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
 
     case MSG_HW_ENCODER:
         return encoder_setup(p, n, st);
+
+    case MSG_HW_ULTRASONIC:
+        return ultrasonic_setup(p, n, st);
 
     case MSG_HW_GPO:
         if (!claim_pin(n->pin)) return false;
@@ -857,12 +1004,12 @@ static void take_program(void) {
     const hw_program *old = &programs[running];
     hw_program *p = &programs[running ^ 1];
 
-    // A UI source's signals keep their values, so do a DS18B20's until it is read
-    // again, and an encoder's position, so a save neither moves a slider or a knob's
-    // position nor drops a reading.
+    // A UI source's signals keep their values, so do a DS18B20's and an ultrasonic
+    // ranger's until it is read again, and an encoder's position, so a save neither
+    // moves a slider or a knob's position nor drops a reading.
     for (uint8_t i = 0; i < p->signal_count; i++) {
         prog_signal *s = &p->signals[i];
-        if (!program_ui_source(s->type) && s->type != MSG_HW_DS18B20
+        if (!program_ui_source(s->type) && s->type != MSG_HW_DS18B20 && s->type != MSG_HW_ULTRASONIC
             && !(s->type == MSG_HW_ENCODER && s->output == 0)) continue;
         uint8_t was = program_signal(old, s->id, s->output);
         if (was != PROG_NO_SIGNAL) s->value = old->signals[was].value;
@@ -881,6 +1028,7 @@ static void take_program(void) {
 
     uint32_t neopixel_pins = neopixels_release(old, p);
     encoders_stop();
+    ultrasonics_stop();
     release_pins();
     for (uint gpio = 0; gpio < 32; gpio++) if (neopixel_pins >> gpio & 1) gpio_pull_down(gpio);
     memset(states, 0, sizeof states);
@@ -992,6 +1140,10 @@ static void scan(uint32_t count) {
             encoder_scan(p, n, st);
             break;
 
+        case MSG_HW_ULTRASONIC:
+            ultrasonic_scan(p, n, st, count);
+            break;
+
 
         case MSG_HW_LED: {
             bool on = signal_value(p, n->in[0]) >= 0.5f;
@@ -1101,8 +1253,8 @@ void core1_worker() {
     adc_init();
     adc_set_temp_sensor_enabled(true);
 
-    // The encoders' pin edges, on this core.
-    irq_add_shared_handler(IO_IRQ_BANK0, encoders_irq, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
+    // The encoders' and the ultrasonic rangers' pin edges, on this core.
+    irq_add_shared_handler(IO_IRQ_BANK0, pins_irq, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
     irq_set_enabled(IO_IRQ_BANK0, true);
 
     absolute_time_t start = get_absolute_time();

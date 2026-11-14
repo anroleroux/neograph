@@ -65,7 +65,8 @@
      BTN SLD XY           row 4: the open group's nodes,
      LED GPO PWM STP SRV         e.g. UII's or HWO's
      NPX                  (HW outputs: rows 4 and 5)
-     TMP ADC GPI DS ENC
+     TMP ADC GPI DS ENC   (HW inputs: rows 4 and 5)
+     US
      PLT LGT
      KEY
      DLY PLS BLK CLK

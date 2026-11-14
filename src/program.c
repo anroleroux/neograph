@@ -207,8 +207,8 @@ static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
 // The value of a source's signal that drives an output to its max, such as a
 // PWM's: 1 for a slider (its values are 0 to 1) or a scale, 3.3 V for an ADC,
 // CORE_TEMP_FULL °C for the core temperature, for a min or max that of what it
-// picks from, for a counter's count its preset, and for an encoder's position its
-// steps.
+// picks from, for a counter's count its preset, for an encoder's position its
+// steps, and for an ultrasonic ranger's distance its range.
 static float signal_full(const hw_program *p, uint8_t s) {
     if (s == PROG_NO_SIGNAL) return 1;
     switch (p->signals[s].type) {
@@ -220,6 +220,12 @@ static float signal_full(const hw_program *p, uint8_t s) {
         // Its position: its steps; pressed: 0 or 1.
         for (uint8_t i = 0; i < p->node_count; i++) {
             if (p->nodes[i].type == MSG_HW_ENCODER && p->nodes[i].out == s) return (float)p->nodes[i].enc_steps;
+        }
+        return 1;
+    case MSG_HW_ULTRASONIC:
+        // Its distance: its range; echo: 0 or 1.
+        for (uint8_t i = 0; i < p->node_count; i++) {
+            if (p->nodes[i].type == MSG_HW_ULTRASONIC && p->nodes[i].out == s) return (float)p->nodes[i].range;
         }
         return 1;
     case MSG_LOGIC_COUNTER:
@@ -426,6 +432,21 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_ULTRASONIC: {
+            // Two signals: its distance, and whether something is within its range.
+            if (!ultrasonic_payload_valid(itr.pay, itr.len)) break;
+            uint8_t echo;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((echo = add_signal(p, itr.id, 1, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->out = s;
+                n->out_count = echo;
+                n->pin = itr.pay[0];
+                n->range = (uint16_t)(itr.pay[1] << 8 | itr.pay[2]);
+            }
+            break;
+        }
+
         default:
             // A logic element's signal, for the elements that read it; its node
             // comes after the inputs.
@@ -597,6 +618,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_ADC: return "adc";
     case MSG_HW_DS18B20: return "ds18b20";
     case MSG_HW_ENCODER: return "encoder";
+    case MSG_HW_ULTRASONIC: return "ultrasonic";
     case MSG_HW_CLOCK: return "clock";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
@@ -685,6 +707,12 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put_signal(&t, n->out_count);
             break;
         }
+        case MSG_HW_ULTRASONIC:
+            put(&t, "ULTRASONIC n%u pin %u range %u cm -> ", n->id, n->pin, n->range);
+            put_signal(&t, n->out);
+            put(&t, " echo ");
+            put_signal(&t, n->out_count);
+            break;
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);
