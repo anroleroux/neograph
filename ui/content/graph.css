@@ -209,3 +209,19 @@
 #graph .edge .hide {
     display: none;
 }
+/* With no device connected the graph is empty and takes nothing: its buttons go,
+   and a note says why (see setLinked). */
+.no-device #graph > .buttons,
+.no-device #block-bar {
+    display: none;
+}
+
+#graph > .no-device-note {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    padding: 0 var(--step-0);
+    transform: translateY(-50%);
+    pointer-events: none;
+}

@@ -50,8 +50,8 @@ const TEST_GRAPH = [
     0xA1, 0x00, 0x00, 0x03, 0x04, 0x00, 0xC8, 0x00, 0x00,           //   at (200, 0)
 ];
 
-// Open the page; with `demo` false, replace the demo graph with TEST_GRAPH.
-async function open(browser, demo = false) {
+// Open the page. Until a device is connected it has no graph and takes none.
+async function open(browser) {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -96,12 +96,13 @@ async function open(browser, demo = false) {
         window.WebSocket = FakeWebSocket;
     });
     await page.goto('file://' + path.resolve(page_file));
-    if (!demo) await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
     return { page, errors };
 }
 
-// Connect from the Network view and play the device's greeting.
-async function connect(page, config) {
+// Connect from the Network view and play the device's greeting, and show the Graph
+// view. A first-boot device gets the demo graph: with `demo` false, TEST_GRAPH
+// replaces it.
+async function connect(page, config, demo = false) {
     await page.locator('.device-connect').first().dispatchEvent('click');
     await page.waitForFunction(() => window.__ws && window.__ws.readyState === 1);
     await page.evaluate(([id, cfg]) => {
@@ -109,6 +110,10 @@ async function connect(page, config) {
         window.__ws.receive(cfg);
         window.__ws.receive('uptime 5');     // telemetry text frame
     }, [DEVICE_ID, config]);
+    if (config === FIRST_BOOT_CONFIG && !demo) {
+        await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
+    }
+    await page.evaluate(() => toGraph());
 }
 
 // Show the Network view, once it has slid in.
@@ -132,7 +137,27 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // ── The demo graph: the button drives the LED; below, a second button starts a
     // copy of the block "Blink 3", whose loop blinks the light three times; at the
     // bottom a slider drives a 4 × 4 NeoPixel array ──
-    let { page, errors } = await open(browser, true);
+    let { page, errors } = await open(browser);
+
+    // Before a device is connected the page shows the Network view; the graph is
+    // empty, without its buttons, and takes no nodes; the Command view says so.
+    const noDevice = () => page.evaluate(() => {
+        const shown = (sel) => getComputedStyle(document.querySelector(sel)).display !== 'none';
+        const added = [addNode(MSG_UI_BUTTON), newBlock()].filter(Boolean).length;
+        saveGraph();
+        return { view: container.className, nodes: Object.keys(elements).length, drawn: nodes.childNodes.length, blocks: subDefs.size, added,
+            buttons: shown('#graph > .buttons.add') || shown('#graph > .buttons:not(.add)'),
+            controls: document.getElementById('command').childNodes.length,
+            notes: [shown('.view.command .no-device-note'), shown('#graph > .no-device-note')].join(),
+            text: document.querySelector('.view.command .no-device-note').textContent.slice(0, 21) };
+    });
+    const gone = { nodes: 0, drawn: 0, blocks: 0, added: 0, buttons: false, controls: 0, notes: 'true,true', text: 'No devices connected.' };
+    const atStart = await noDevice();
+    expect(JSON.stringify(atStart) === JSON.stringify({ view: 'network', ...gone }),
+        'with no device connected the page is ' + JSON.stringify(atStart));
+    expect((await sent(page)).length === 0, 'the UI sent something with no device connected');
+
+    await connect(page, FIRST_BOOT_CONFIG, true);
     const demo = await page.evaluate(async () => {
         const wires = gEdges.map(e => e.start.node.name + '>' + e.end.node.name + (e.feedback ? '~' : '')).join(' ');
         const copy = elements.n4, def = copy.def;
@@ -169,6 +194,47 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(JSON.stringify(help) === JSON.stringify({ missing: '', folded: true, kept: true, text: "The Pico 2 W's onb" }),
         'the nodes\' help is not as expected: ' + JSON.stringify(help));
+
+    // Connected, the graph has its buttons and the notes are gone; saving shows the
+    // graph's controls in the Command view.
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const linkedUp = await page.evaluate(() => {
+        const shown = (sel) => getComputedStyle(document.querySelector(sel)).display !== 'none';
+        return [shown('#graph > .buttons.add'), shown('.view.command .no-device-note'), shown('#graph > .no-device-note'),
+            document.getElementById('command').childNodes.length > 0].join();
+    });
+    expect(linkedUp === 'true,false,false,true', 'with a device connected the page shows ' + linkedUp);
+    packets.push(...await sent(page));
+
+    // The connection drops: the graph and the controls go, and nothing can be added.
+    // The same when it is switched off.
+    await page.evaluate(() => { openBlock(elements.n4.def); window.__ws.close(); });
+    const dropped = await noDevice();
+    expect(JSON.stringify(dropped) === JSON.stringify({ view: 'graph', ...gone }) && await page.evaluate(() => !editingBlock),
+        'after the connection dropped the page is ' + JSON.stringify(dropped));
+    await connect(page, FIRST_BOOT_CONFIG, true);
+    expect(await page.evaluate(() => Object.keys(elements).length) === 7, 'connecting again did not bring the graph back');
+    await page.locator('.device-connect').first().dispatchEvent('click');
+    const switchedOff = await noDevice();
+    expect(JSON.stringify(switchedOff) === JSON.stringify({ view: 'graph', ...gone }),
+        'after switching the connection off the page is ' + JSON.stringify(switchedOff));
+    expect((await sent(page)).length === 0, 'the UI sent something with no device connected');
+
+    // The Command view scrolls when its controls don't fit, and only then.
+    await connect(page, FIRST_BOOT_CONFIG, true);
+    const scroll = await page.evaluate(() => {
+        const content = document.querySelector('.view.command > .content');
+        buildCommandInterface();
+        const few = content.scrollHeight > content.clientHeight;
+        for (let i = 0; i < 80; i++) new uiButton(0, 0);
+        buildCommandInterface();
+        content.scrollTop = 1e6;
+        const last = document.getElementById('command').lastElementChild.getBoundingClientRect();
+        return { few, many: content.scrollHeight > content.clientHeight, scrolled: content.scrollTop > 0,
+            lastInView: last.bottom <= content.getBoundingClientRect().bottom + 1 && last.bottom <= innerHeight + 1 };
+    });
+    expect(JSON.stringify(scroll) === JSON.stringify({ few: false, many: true, scrolled: true, lastInView: true }),
+        'the Command view does not scroll as expected: ' + JSON.stringify(scroll));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
 
