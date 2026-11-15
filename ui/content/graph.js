@@ -227,11 +227,14 @@ function buildCommandInterface() {
     commandInterface = document.getElementById('command');
     commandInterface.innerHTML = '';
     if (!linked) return;
-    Object.values(mainElements()).forEach(elm => elm.buildUI(commandInterface));
+    // Nodes with an order number first, lowest first; the sort keeps the rest, and
+    // those with the same number, in the order they were made.
+    const place = (elm) => elm.order || Infinity;
+    Object.values(mainElements()).sort((a, b) => place(a) - place(b)).forEach(elm => elm.buildUI(commandInterface));
 }
 
-// A node's messages: its control message, label, position and wire shapes.
-const nodeMessages = (elm) => [...elm.marshal(), ...elm.marshalLabel(), ...elm.marshalLayout(), ...elm.marshalWire()];
+// A node's messages: its control message, label, position, order number and wire shapes.
+const nodeMessages = (elm) => [...elm.marshal(), ...elm.marshalLabel(), ...elm.marshalLayout(), ...elm.marshalOrder(), ...elm.marshalWire()];
 
 function saveGraph() {
     if (!linked) return;
@@ -303,11 +306,13 @@ function buildGraph(msgs) {
     const controls = new Map();
     const labels = new Map();
     const layouts = new Map();
+    const orders = new Map();
     const wires = new Map();
     for (const m of msgs) {
         if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
         else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
         else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
+        else if (m.type === MSG_ORDER && m.len === 2) orders.set(m.id, m);
         // A wire into an output that takes several carries its source reference.
         else if (m.type === MSG_WIRE && m.len === 4) wires.set(m.id, m);
         else if (m.type === MSG_WIRE && m.len === 4 + refLen(m)) {
@@ -386,6 +391,7 @@ function buildGraph(msgs) {
             elm.setFreqMax(f(2) << 8 | f(3));
         }
         if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
+        if (orders.has(id)) elm.order = orders.get(id).pay[0] << 8 | orders.get(id).pay[1];
     }
     idCounter = Math.max(...controls.keys()) + 1;
 

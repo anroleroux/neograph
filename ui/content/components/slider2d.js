@@ -124,7 +124,12 @@ class uiSlider2D extends uiComponents {
             {type: 'number', min: 0, max: 1, step: 0.01})));
         settings.appendChild(choiceSetting('When let go', {stay: 'Stay', centre: 'Return home'},
             () => this.returns ? 'centre' : 'stay', (r) => { this.setRelease(r); this.createSettings(); }));
-        if (!this.returns) return;
+        if (this.returns) this.returnSettings(settings);
+        settings.appendChild(orderSetting(this));
+    }
+
+    // How it returns home: at once, or eased at a speed.
+    returnSettings(settings) {
         settings.appendChild(choiceSetting('Return', {immediate: 'Immediate', linear: 'Linear', sigmoid: 'Sigmoid'},
             () => this.returnEase, (e) => { this.setReturnEase(e); this.createSettings(); }));
         if (this.returnEase !== 'immediate') {

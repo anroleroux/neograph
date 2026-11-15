@@ -309,7 +309,7 @@ Every packet payload except `0D` is a sequence of messages:
   each page load. In the graph a node shows its ID as `n<ID>`.
 - **Networking elements** (`B0`–`B3`) have their own IDs. The device and network
   created on first boot both have ID 0.
-- **Labels, positions and wires** (`A0`–`A2`) take the ID of the control element
+- **Labels, positions, wires and order numbers** (`A0`–`A2`, `A5`) take the ID of the control element
   they describe (see [Labels, positions and wires](#labels-positions-and-wires)).
 - **Block definitions** (`A3`, `A4`) have their own IDs, 1 to 255. The messages
   inside a definition have IDs of their own too, counting from 1 in each (see
@@ -412,6 +412,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `A2` | `MSG_WIRE` | The shape of the wire into an output | Implemented |
 | `A3` | `MSG_SUB_DEF` | A block's definition: its name | Implemented |
 | `A4` | `MSG_SUB_PART` | One message of a block's definition, whole | Implemented |
+| `A5` | `MSG_ORDER` | A node's order number in the Command view | Implemented |
 | `B0` | `MSG_DEVICE` | Device | Implemented |
 | `B1` | `MSG_DEVICE_FIELD` | Device field | Implemented |
 | `B2` | `MSG_NETWORK` | Network | Implemented |
@@ -562,8 +563,8 @@ When the user saves, the UI sends a `0A` config whose payload is:
 1. the networking messages (`B0`–`B3`) of the last config the device sent, byte
    for byte, then
 2. for each graph node, in the order the nodes were created: its control message,
-   its label (`A0`), its position (`A1`) and, if a wire comes into it, the wire's
-   shape (`A2`).
+   its label (`A0`), its position (`A1`), its order number (`A5`) if it has one and,
+   if a wire comes into it, the wire's shape (`A2`).
 
 Graph messages in the device's previous config are dropped, so a save replaces the
 stored graph rather than adding to it.
@@ -635,6 +636,7 @@ When a config arrives, the UI rebuilds the graph from it:
   each of an AND's, OR's, min's or max's inputs, a latch's set and reset sources, the other logic's input, and the floating sources of a PWM's parameters that follow an input. A reference without an output
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
+- **Order number:** from the node's `A5` message. Without one, the node has none.
 - **Afterwards:** the Command view is rebuilt from the restored inputs, and new nodes
   get IDs above the highest restored one, and above every copy's parts.
 
@@ -1701,7 +1703,7 @@ round over it as slider `n1` goes from 0 to 1 (`n3`, over `n2`):
 
 ### Labels, positions and wires
 
-A node's label, position and incoming wire are each a message whose element ID is
+A node's label, position, order number and incoming wire are each a message whose element ID is
 the ID of the node it describes. The device stores them with the rest of the config and sends them
 back on connect. Core 1's [program](#the-program) leaves them out.
 
@@ -1709,11 +1711,15 @@ back on connect. Core 1's [program](#the-program) leaves them out.
 |---|---|
 | `A0` label | 1–255 bytes of UTF-8 text, not null-terminated |
 | `A1` position | 4 bytes: x then y, each a signed 16-bit big-endian number in graph (SVG) units, rounded |
+| `A5` order number | 2 bytes: an unsigned 16-bit big-endian number, 1 to 65535 |
 | `A2` wire | 4 bytes: the handle angle at the source end, then at the output end, each an unsigned 16-bit big-endian fraction of a full turn (1/65536), counter-clockwise on screen from pointing right. For a wire into a PWM, 7 bytes: the same, then the source reference, with `MSG_FLAG_OUTPUT` set (6 bytes in configs saved without outputs). |
 
 - The UI saves a label and a position for every node, including unchanged defaults,
   and a wire shape for every wire. An LED or GPO has at most one incoming wire, so the
   output's ID identifies it; a PWM has up to two, told apart by their source references.
+- The UI saves an order number only for a node that has one. In the Command view the
+  tiles of nodes with a number come first, lowest first; the rest follow in the order
+  their nodes were created, as do tiles with the same number.
 - The Settings view rejects a label longer than 255 bytes.
 - Each node adds about 15 bytes plus its label to the config, and each wire 9 more.
   A config is at most 4096 bytes (see [Limits](#limits)): about 100 wired nodes with

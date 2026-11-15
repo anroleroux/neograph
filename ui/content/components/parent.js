@@ -117,9 +117,23 @@ function parsePin(pin) {
 
 // A settings field for a hardware input: whether the Command view shows its
 // tile (MSG_FLAG_SHOWN). Picking one shows or hides the tile at once.
+// Then its place there (see orderSetting).
 function shownSetting(node) {
-    return choiceSetting('Command view', {show: 'Show', hide: 'Hide'}, () => node.shown ? 'show' : 'hide',
-        (v) => { node.shown = v === 'show'; buildCommandInterface(); });
+    const rows = document.createDocumentFragment();
+    rows.append(choiceSetting('Command view', {show: 'Show', hide: 'Hide'}, () => node.shown ? 'show' : 'hide',
+        (v) => { node.shown = v === 'show'; buildCommandInterface(); }), orderSetting(node));
+    return rows;
+}
+
+const ORDER_MAX = 65535;
+
+// A settings field for a node with a tile in the Command view: its order number,
+// 1 to ORDER_MAX, or none. Tiles with a number come first, lowest first; the rest
+// follow in the order their nodes were made, as do tiles with the same number.
+// Setting it moves the tile at once.
+function orderSetting(node) {
+    return editableSetting('Order', () => node.order ? String(node.order) : 'none',
+        (v) => node.setOrder(v), {inputmode: 'numeric', title: `1 to ${ORDER_MAX}; empty for none`});
 }
 
 // The PWM slice a GPIO pin is on. The pins of a slice share its counter, so its
@@ -265,6 +279,7 @@ class uiComponents {
         this.name = 'n' + this.id;
         this.label = type.toUpperCase();
         this.labelId = 0;
+        this.order = 0;             // its place in the Command view: 0 for none (see orderSetting)
         this.inputs = [];
         this.outputs = [];
         this.actDir = null;
@@ -365,6 +380,16 @@ class uiComponents {
         this.gElm.children[2].textContent = label;
     }
 
+    // Its order number in the Command view, from a number or its text: 1 to
+    // ORDER_MAX, or 0, nothing or "none" for none.
+    setOrder(order) {
+        order = String(order).trim().toLowerCase();
+        if (order === '' || order === 'none') order = '0';
+        if (!/^\d+$/.test(order) || Number(order) > ORDER_MAX) return false;
+        this.order = Number(order);
+        buildCommandInterface();
+    }
+
     highlight(s) {
         switch (s) {
             case 'select':
@@ -448,6 +473,13 @@ class uiComponents {
             return [(n >> 8) & 0xFF, n & 0xFF];
         };
         return [MSG_LAYOUT, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 4, ...int16(this.x), ...int16(this.y)];
+    }
+
+    // The order number as a MSG_ORDER message keyed by this node's ID: unsigned
+    // 16-bit big-endian (see PROTOCOL.md). Nothing if it has none.
+    marshalOrder() {
+        if (!this.order) return [];
+        return [MSG_ORDER, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, 2, (this.order >> 8) & 0xFF, this.order & 0xFF];
     }
 
     // The shape of each wire into this node, as a MSG_WIRE message keyed by this

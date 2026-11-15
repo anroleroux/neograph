@@ -116,6 +116,7 @@ class uiPlot extends uiComponents {
             {type: 'number', min: PLOT_WINDOW_MIN, max: PLOT_WINDOW_MAX}));
         settings.appendChild(editableSetting('Unit',
             () => this.unitOverride ?? `Auto (${this.sourceUnit() || 'none'})`, (u) => this.setUnit(u)));
+        settings.appendChild(orderSetting(this));
     }
 
     // A new value from the source, any number. One that is not finite leaves a

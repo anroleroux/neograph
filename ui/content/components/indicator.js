@@ -59,6 +59,11 @@ class uiIndicator extends uiComponents {
         this.receive(null);
     }
 
+    createSettings() {
+        super.createSettings();
+        document.getElementById('settings').appendChild(orderSetting(this));
+    }
+
     // In the Command view: a tile with a lamp, lit while the signal is on, the
     // label, and the state below it.
     buildUI(commandInterface) {

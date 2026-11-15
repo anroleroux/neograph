@@ -99,6 +99,7 @@ const MSG_LAYOUT             = 0xA1;  // a node's position, keyed by node ID
 const MSG_WIRE               = 0xA2;  // the shape of an output's wire, keyed by output ID
 const MSG_SUB_DEF            = 0xA3;  // a block's definition: its name, keyed by definition ID
 const MSG_SUB_PART           = 0xA4;  // one message of a block's definition, whole, keyed by definition ID
+const MSG_ORDER              = 0xA5;  // a node's order number in the Command view, keyed by node ID
 const MSG_DEVICE             = 0xB0;
 const MSG_DEVICE_FIELD       = 0xB1;
 const MSG_NETWORK            = 0xB2;
