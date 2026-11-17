@@ -1,3 +1,39 @@
+/* The Command view scrolls below the nav when its controls don't fit. The scroller
+   reaches into the view's side padding, so the tiles' shadows aren't cut off. */
+.view.command {
+    display: flex;
+    flex-direction: column;
+}
+
+.view.command > .content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0 calc(-1 * var(--step-0));
+    padding: 0 var(--step-0) var(--step-0);
+    scrollbar-width: thin;
+    scrollbar-color: var(--clr-face-fade) transparent;
+}
+
+/* Shown in place of the controls, and of the graph's buttons, while no device is
+   connected (see setLinked). */
+.no-device-note {
+    display: none;
+    color: var(--clr-face);
+    opacity: 0.7;
+    text-align: center;
+    padding: var(--step-6) var(--step-0);
+}
+
+.no-device .no-device-note {
+    display: block;
+}
+
+.no-device #command {
+    display: none;
+}
+
 #command {
     margin-top: var(--step-0);
     display: grid;
@@ -140,6 +176,7 @@
     min-height: 0;
     writing-mode: vertical-lr;
     direction: rtl;
+    touch-action: none;     /* a drag along it moves it, and doesn't scroll the view */
     width: auto;
     margin: 0.35em 0 0;
 }

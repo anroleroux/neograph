@@ -367,6 +367,16 @@ static void check_config(const uint8_t *p, size_t len) {
             if (!found) fail("label, position or wire for a node that is not in the config");
             break;
         }
+        case MSG_ORDER: {
+            /* Saved only for a node that has one: 1 to 65535. */
+            if (it.len != 2 || (it.pay[0] | it.pay[1]) == 0) fail("order number is not two bytes, or is 0");
+            bool found = false;
+            config_element_iterator_init(&ctl, p + 3, len - 3);
+            while (ctl.next(&ctl))
+                if (is_control(ctl.type) && ctl.id == it.id) found = true;
+            if (!found) fail("order number for a node that is not in the config");
+            break;
+        }
         default:
             break;
         }

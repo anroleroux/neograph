@@ -50,8 +50,8 @@ const TEST_GRAPH = [
     0xA1, 0x00, 0x00, 0x03, 0x04, 0x00, 0xC8, 0x00, 0x00,           //   at (200, 0)
 ];
 
-// Open the page; with `demo` false, replace the demo graph with TEST_GRAPH.
-async function open(browser, demo = false) {
+// Open the page. Until a device is connected it has no graph and takes none.
+async function open(browser) {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -96,12 +96,13 @@ async function open(browser, demo = false) {
         window.WebSocket = FakeWebSocket;
     });
     await page.goto('file://' + path.resolve(page_file));
-    if (!demo) await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
     return { page, errors };
 }
 
-// Connect from the Network view and play the device's greeting.
-async function connect(page, config) {
+// Connect from the Network view and play the device's greeting, and show the Graph
+// view. A first-boot device gets the demo graph: with `demo` false, TEST_GRAPH
+// replaces it.
+async function connect(page, config, demo = false) {
     await page.locator('.device-connect').first().dispatchEvent('click');
     await page.waitForFunction(() => window.__ws && window.__ws.readyState === 1);
     await page.evaluate(([id, cfg]) => {
@@ -109,6 +110,10 @@ async function connect(page, config) {
         window.__ws.receive(cfg);
         window.__ws.receive('uptime 5');     // telemetry text frame
     }, [DEVICE_ID, config]);
+    if (config === FIRST_BOOT_CONFIG && !demo) {
+        await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
+    }
+    await page.evaluate(() => toGraph());
 }
 
 // Show the Network view, once it has slid in.
@@ -132,7 +137,27 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // ── The demo graph: the button drives the LED; below, a second button starts a
     // copy of the block "Blink 3", whose loop blinks the light three times; at the
     // bottom a slider drives a 4 × 4 NeoPixel array ──
-    let { page, errors } = await open(browser, true);
+    let { page, errors } = await open(browser);
+
+    // Before a device is connected the page shows the Network view; the graph is
+    // empty, without its buttons, and takes no nodes; the Command view says so.
+    const noDevice = () => page.evaluate(() => {
+        const shown = (sel) => getComputedStyle(document.querySelector(sel)).display !== 'none';
+        const added = [addNode(MSG_UI_BUTTON), newBlock()].filter(Boolean).length;
+        saveGraph();
+        return { view: container.className, nodes: Object.keys(elements).length, drawn: nodes.childNodes.length, blocks: subDefs.size, added,
+            buttons: shown('#graph > .buttons.add') || shown('#graph > .buttons:not(.add)'),
+            controls: document.getElementById('command').childNodes.length,
+            notes: [shown('.view.command .no-device-note'), shown('#graph > .no-device-note')].join(),
+            text: document.querySelector('.view.command .no-device-note').textContent.slice(0, 21) };
+    });
+    const gone = { nodes: 0, drawn: 0, blocks: 0, added: 0, buttons: false, controls: 0, notes: 'true,true', text: 'No devices connected.' };
+    const atStart = await noDevice();
+    expect(JSON.stringify(atStart) === JSON.stringify({ view: 'network', ...gone }),
+        'with no device connected the page is ' + JSON.stringify(atStart));
+    expect((await sent(page)).length === 0, 'the UI sent something with no device connected');
+
+    await connect(page, FIRST_BOOT_CONFIG, true);
     const demo = await page.evaluate(async () => {
         const wires = gEdges.map(e => e.start.node.name + '>' + e.end.node.name + (e.feedback ? '~' : '')).join(' ');
         const copy = elements.n4, def = copy.def;
@@ -169,6 +194,107 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(JSON.stringify(help) === JSON.stringify({ missing: '', folded: true, kept: true, text: "The Pico 2 W's onb" }),
         'the nodes\' help is not as expected: ' + JSON.stringify(help));
+
+    // Connected, the graph has its buttons and the notes are gone; saving shows the
+    // graph's controls in the Command view.
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const linkedUp = await page.evaluate(() => {
+        const shown = (sel) => getComputedStyle(document.querySelector(sel)).display !== 'none';
+        return [shown('#graph > .buttons.add'), shown('.view.command .no-device-note'), shown('#graph > .no-device-note'),
+            document.getElementById('command').childNodes.length > 0].join();
+    });
+    expect(linkedUp === 'true,false,false,true', 'with a device connected the page shows ' + linkedUp);
+    packets.push(...await sent(page));
+
+    // The connection drops: the graph and the controls go, and nothing can be added.
+    // The same when it is switched off.
+    await page.evaluate(() => { openBlock(elements.n4.def); window.__ws.close(); });
+    const dropped = await noDevice();
+    expect(JSON.stringify(dropped) === JSON.stringify({ view: 'graph', ...gone }) && await page.evaluate(() => !editingBlock),
+        'after the connection dropped the page is ' + JSON.stringify(dropped));
+    await connect(page, FIRST_BOOT_CONFIG, true);
+    expect(await page.evaluate(() => Object.keys(elements).length) === 7, 'connecting again did not bring the graph back');
+    await page.locator('.device-connect').first().dispatchEvent('click');
+    const switchedOff = await noDevice();
+    expect(JSON.stringify(switchedOff) === JSON.stringify({ view: 'graph', ...gone }),
+        'after switching the connection off the page is ' + JSON.stringify(switchedOff));
+    expect((await sent(page)).length === 0, 'the UI sent something with no device connected');
+
+    // The Command view scrolls when its controls don't fit, and only then.
+    await connect(page, FIRST_BOOT_CONFIG, true);
+    const scroll = await page.evaluate(() => {
+        const content = document.querySelector('.view.command > .content');
+        buildCommandInterface();
+        const few = content.scrollHeight > content.clientHeight;
+        for (let i = 0; i < 80; i++) new uiButton(0, 0);
+        buildCommandInterface();
+        content.scrollTop = 1e6;
+        const last = document.getElementById('command').lastElementChild.getBoundingClientRect();
+        return { few, many: content.scrollHeight > content.clientHeight, scrolled: content.scrollTop > 0,
+            lastInView: last.bottom <= content.getBoundingClientRect().bottom + 1 && last.bottom <= innerHeight + 1 };
+    });
+    expect(JSON.stringify(scroll) === JSON.stringify({ few: false, many: true, scrolled: true, lastInView: true }),
+        'the Command view does not scroll as expected: ' + JSON.stringify(scroll));
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    // ── Order numbers: tiles with one come first in the Command view, lowest first;
+    // the rest follow as they were made. Saved, and restored ──
+    ({ page, errors } = await open(browser));
+    await connect(page, FIRST_BOOT_CONFIG);          // button n1, LED n2 ← n1, GPO n3
+    const tileOrder = () => page.evaluate(() => [...document.getElementById('command').children]
+        .map(t => t.querySelector('.name').textContent).join());
+    const setting = (label) => page.locator('#settings .editable', { has: page.locator(`.label:text-is("${label}:")`) });
+    const order = await page.evaluate(() => {
+        addNode(MSG_UI_SLIDER).setLabel('Speed');           // n4
+        addNode(MSG_UI_INDICATOR).setLabel('Lamp');         // n5
+        addNode(MSG_HW_CORE).setLabel('Chip');              // n6
+        addNode(MSG_UI_BUTTON).setLabel('Stop');            // n7
+        elements.n6.shown = true;
+        buildCommandInterface();
+        selectById(2);
+        const led = [...document.querySelectorAll('#settings .label')].some(l => l.textContent === 'Order:');
+        const bad = ['-1', '1.5', 'x', '65536'].map(v => elements.n1.setOrder(v) === false).join();
+        return { led, bad, kept: elements.n1.order };
+    });
+    expect(JSON.stringify(order) === JSON.stringify({ led: false, bad: 'true,true,true,true', kept: 0 }),
+        'the order setting is not as expected: ' + JSON.stringify(order));
+    expect(await tileOrder() === 'BUTTON,Speed,Lamp,Chip,Stop', 'without order numbers the tiles are ' + await tileOrder());
+
+    // Set in a node's settings, the tile moves at once.
+    for (const [id, number] of [[7, '1'], [5, '2'], [6, '2'], [1, '300']]) {
+        await page.evaluate((id) => selectById(id), id);
+        await setting('Order').locator('svg').dispatchEvent('click');
+        await setting('Order').locator('input').fill(number);
+        await setting('Order').locator('input').press('Enter');
+    }
+    expect(await setting('Order').locator('.value').textContent() === '300', 'the Order setting does not show its number');
+    expect(await tileOrder() === 'Stop,Lamp,Chip,BUTTON,Speed', 'with order numbers the tiles are ' + await tileOrder());
+
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const orderSaved = await sent(page);
+    const orderMsgs = (pkt) => pkt.map(b => b.toString(16).padStart(2, '0')).join('').match(/a500....02..../g)?.join() ?? '';
+    expect(orderSaved.length === 1 && orderMsgs(orderSaved[0]) === 'a500000102012c,a5000005020002,a5000006020002,a5000007020001',
+        'the order numbers were saved as ' + orderMsgs(orderSaved[0] ?? []));
+    packets.push(...orderSaved);
+    expect(errors.length === 0, 'page errors: ' + errors.join('; '));
+    await page.close();
+
+    ({ page, errors } = await open(browser));
+    await connect(page, orderSaved[0]);
+    expect(await tileOrder() === 'Stop,Lamp,Chip,BUTTON,Speed', 'restored, the tiles are ' + await tileOrder());
+    // Emptied, a node has no number again, and none is saved for it.
+    await page.evaluate(() => selectById(7));
+    await setting('Order').locator('svg').dispatchEvent('click');
+    await setting('Order').locator('input').fill('');
+    await setting('Order').locator('input').press('Enter');
+    expect(await setting('Order').locator('.value').textContent() === 'none' && await tileOrder() === 'Lamp,Chip,BUTTON,Speed,Stop',
+        'with its order number cleared the tiles are ' + await tileOrder());
+    await page.locator('#graph .write svg').dispatchEvent('click');
+    const orderResaved = await sent(page);
+    expect(orderResaved.length === 1 && orderMsgs(orderResaved[0]) === 'a500000102012c,a5000005020002,a5000006020002',
+        'after clearing one the order numbers were saved as ' + orderMsgs(orderResaved[0] ?? []));
+    packets.push(...orderResaved);
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
     await page.close();
 
@@ -318,7 +444,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add [title="Add the core temperature"]').dispatchEvent('click');
     // A hardware input's tile is hidden until its settings show it.
     const coreRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
-    expect(coreRows === 'Label:|Command view:' && await page.evaluate(() => elements.n8.shown === false),
+    expect(coreRows === 'Label:|Command view:|Order:' && await page.evaluate(() => elements.n8.shown === false),
         'the core temperature does not start hidden: ' + coreRows);
     await choice('Command view', 'Show');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
@@ -421,7 +547,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // a PWM's duty from its X and frequency from its Y: two wires from one node.
     await page.locator('#add .group[data-group="uii"]').dispatchEvent('click');
     await page.locator('#add [title="Add a 2D slider"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:', 'a 2D slider does not show its settings: ' + await keyRows());
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Order:', 'a 2D slider does not show its settings: ' + await keyRows());
     // Its home: where it starts and returns to. The centre unless set.
     const home = await page.evaluate(() => {
         const s = elements.n15;
@@ -437,7 +563,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(home.centre === '128,128|0.50,0.50' && home.rejected && home.home === '64,191' && home.shown === '0.25,0.75',
         'the home settings gave ' + JSON.stringify(home));
     await choice('When let go', 'Return home');
-    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:|Speed (%/s):',
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:|Speed (%/s):|Order:',
         'returning to the centre does not show its shape and speed: ' + await keyRows());
     // The speed's input has room to type in.
     await page.locator('#settings .editable', { has: page.locator('.label:text-is("Speed (%/s):")') })
@@ -456,7 +582,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(speeds.typed === 120 && speeds.rejected && speeds.ease === 'linear', 'the return settings gave ' + JSON.stringify(speeds));
     await choice('Return', 'Immediate');        // for the exact commands below
-    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:', 'an immediate return shows ' + await keyRows());
+    expect(await keyRows() === 'Label:|Wire from:|Home X:|Home Y:|When let go:|Return:|Order:', 'an immediate return shows ' + await keyRows());
     await choice('Wire from', 'Y');
     await page.locator('#add .group[data-group="uio"]').dispatchEvent('click');
     await page.locator('#add [title="Add a plot"]').dispatchEvent('click');
@@ -539,7 +665,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // for it. A GPIO input is boolean: it drives a light, not a PWM.
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add a GPIO input"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|GPIO pin:|Pull:|On when:|Command view:', 'a GPIO input does not show its settings: ' + await keyRows());
+    expect(await keyRows() === 'Label:|GPIO pin:|Pull:|On when:|Command view:|Order:', 'a GPIO input does not show its settings: ' + await keyRows());
     // Its default, GPIO 3, is free; the pins of the GPO (7), the PWMs (15 and 2)
     // and the ADC (ADC1, GPIO 27) are not offered.
     const gpiPins = await pinOptions();
@@ -1005,7 +1131,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
     await page.locator('#add [title="Add a compare"]').dispatchEvent('click');       // n4
     const compareRows = await page.$$eval('#settings .editable .label', ls => ls.map(l => l.textContent).join('|'));
-    expect(compareRows === 'Label:|On while:|Threshold:|Hysteresis:|Command view:', 'a compare\'s settings are ' + compareRows);
+    expect(compareRows === 'Label:|On while:|Threshold:|Hysteresis:|Command view:|Order:', 'a compare\'s settings are ' + compareRows);
     const logic = await page.evaluate(() => {
         const cmp = elements.n4;
         const rejected = cmp.setThreshold('x') === false && cmp.setThreshold('1e39') === false
@@ -1796,7 +1922,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add a DS18B20 temperature sensor"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|GPIO pin:|Resolution:|Pull-up:|Wire from:|Command view:',
+    expect(await keyRows() === 'Label:|GPIO pin:|Resolution:|Pull-up:|Wire from:|Command view:|Order:',
         'a new DS18B20 does not show its settings: ' + await keyRows());
     expect(await page.locator('#settings .setting-note').textContent() === '12 bits: 0.0625 °C steps, a reading every 750 ms',
         'a DS18B20 at 12 bits says ' + await page.locator('#settings .setting-note').textContent());
@@ -1847,7 +1973,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add a rotary encoder"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|A (CLK) pin:|B (DT) pin:|Switch (SW) pin:|Steps:|A click is:|At the ends:|Direction:|Wire from:|Command view:',
+    expect(await keyRows() === 'Label:|A (CLK) pin:|B (DT) pin:|Switch (SW) pin:|Steps:|A click is:|At the ends:|Direction:|Wire from:|Command view:|Order:',
         'a new encoder does not show its settings: ' + await keyRows());
     expect(await page.evaluate(() => selected.wrap && (selected.options() & ENCODER_WRAP) !== 0),
         'a new encoder does not wrap at its ends');
@@ -1912,7 +2038,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add an ultrasonic ranger"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|GPIO pin:|Range (cm):|Wire from:|Command view:',
+    expect(await keyRows() === 'Label:|GPIO pin:|Range (cm):|Wire from:|Command view:|Order:',
         'a new ultrasonic ranger does not show its settings: ' + await keyRows());
     const us = await page.evaluate(() => {
         const s = selected;
@@ -1965,7 +2091,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
     await page.locator('#add [title="Add a sine wave"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|Period (s):|Amplitude:|Offset:|Phase (°):|Command view:',
+    expect(await keyRows() === 'Label:|Period (s):|Amplitude:|Offset:|Phase (°):|Command view:|Order:',
         'a new sine does not show its settings: ' + await keyRows());
     expect(await page.locator('#settings .setting-note').textContent() === 'From 0 to 1 and back every 2 s',
         'a new sine says ' + await page.locator('#settings .setting-note').textContent());
@@ -2027,7 +2153,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="tm"]').dispatchEvent('click');
     await page.locator('#add [title="Add a clock"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|Internet time:|Time zone:|Hours:|Minutes:|Seconds:|Wire from:|Command view:',
+    expect(await keyRows() === 'Label:|Internet time:|Time zone:|Hours:|Minutes:|Seconds:|Wire from:|Command view:|Order:',
         'a new clock does not show its settings: ' + await keyRows());
     // Type the hour into its field, as a user would.
     await page.locator('#settings .editable', { has: page.locator('.label:text-is("Hours:")') })

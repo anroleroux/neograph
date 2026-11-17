@@ -47,6 +47,7 @@ class uiButton extends uiComponents {
         const settings = document.getElementById('settings');
         settings.appendChild(choiceSetting('Action', {toggle: 'Toggle', momentary: 'Momentary'},
             () => this.momentary ? 'momentary' : 'toggle', (a) => this.setAction(a)));
+        settings.appendChild(orderSetting(this));
     }
 
     // In the Command view: a tile with the label, the state below it, and a

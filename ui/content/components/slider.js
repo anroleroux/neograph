@@ -56,6 +56,7 @@ class uiSlider extends uiComponents {
         const settings = document.getElementById('settings');
         settings.appendChild(choiceSetting('Orientation', {horizontal: 'Horizontal', vertical: 'Vertical'},
             () => this.vertical ? 'vertical' : 'horizontal', (o) => this.setOrientation(o)));
+        settings.appendChild(orderSetting(this));
     }
 
     // In the Command view: a tile like a button's, with the label, the value

@@ -38,6 +38,11 @@ the TMP button in the HWI group.
 - **Command view tile.** A hardware input or logic node has a "Command view: Show |
   Hide" setting, Hide by default. Show puts a tile with its live value in the Command
   view.
+- **Order.** Every node with a tile in the Command view (UI inputs, UI outputs,
+  hardware inputs and logic) has an Order setting: a number from 1 to 65535, or none,
+  which is the default. Tiles with a number come first, lowest first. The rest follow
+  in the order their nodes were added, as do tiles with the same number. Empty the
+  field to take the number away.
 - **The device runs the graph.** Once you save, the device runs everything except the
   UI outputs every 10 ms, with or without a browser connected. It also runs the
   stored graph from power-on.

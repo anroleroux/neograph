@@ -116,6 +116,7 @@
 #define MSG_WIRE                0xA2    /* the shape of an output's wire, keyed by output ID */
 #define MSG_SUB_DEF             0xA3    /* a block's definition: its name, keyed by definition ID */
 #define MSG_SUB_PART            0xA4    /* one message of a block's definition, whole, keyed by definition ID */
+#define MSG_ORDER               0xA5    /* a node's order number in the Command view, keyed by node ID */
 #define MSG_DEVICE              0xB0
 #define MSG_DEVICE_FIELD        0xB1
 #define MSG_NETWORK             0xB2

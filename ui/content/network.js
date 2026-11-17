@@ -441,6 +441,7 @@ function connectWebSocket(device) {
         currentSocket = null;
         device.state = "disconnected";
         device.message = message;
+        setLinked(false);       // its graph and controls go with it
     };
 
     try {
@@ -476,8 +477,7 @@ function connectWebSocket(device) {
             console.log("Received binary data:", data);
 
             if (data[0] === PKT_CONFIG) {
-                gfig = data.slice(3);
-                unmarshalConfigs(gfig);
+                deviceConfig(data.slice(3));
                 // console.log(config);
                 // reconstructConfigInterface(config);
                 // buildInterface(config);
@@ -511,5 +511,6 @@ function disconnectWebSocket(device) {
     clearTimeout(connectTimer);
     currentSocket = null;
     if (socket && socket.readyState !== WebSocket.CLOSED) socket.close();
+    setLinked(false);
 }
 //online-end

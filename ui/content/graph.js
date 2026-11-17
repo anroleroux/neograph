@@ -123,6 +123,7 @@ function refreshSubMenu() {
 
 // A new block, "Block N", with an input and an output; a copy of it is added.
 function newBlock() {
+    if (!linked) return null;
     let n = 1;
     while ([...subDefs.values()].some(d => d.name === `Block ${n}`)) n++;
     const def = new uiSubDef(`Block ${n}`);
@@ -136,7 +137,7 @@ function newBlock() {
 
 // Add a copy of a block, as addNode adds a node.
 function addBlock(def) {
-    if (editingBlock) return null;
+    if (editingBlock || !linked) return null;
     const [x, y] = freeSpot();
     const elm = new uiSub(x, y);
     elm.setDef(def);
@@ -189,17 +190,54 @@ const NODE_CLASSES = {
 // Whether a control message type is a logic element's.
 const isLogic = (type) => type >= MSG_LOGIC_COMPARE && type <= MSG_LOGIC_LAST;
 
+// Whether there is a device to work on: one that is connected and has sent its
+// config. Without one the graph is empty and takes no nodes, and the Command view
+// shows no controls, only that no device is connected (see setLinked). The
+// browser-only build has no device to wait for, so there the graph can always be
+// edited and tried.
+let linked = false;
+linked = true; //offline
+
+// Take a device as there or gone. Gone, its graph and controls go with it.
+function setLinked(on) {
+    linked = on;
+    document.body.classList.toggle('no-device', !linked);
+    if (linked) return;
+    clearGraph();
+    showBlockBar();             // folds the add menu
+    buildCommandInterface();
+}
+
+// Empty the graph: its nodes, wires and blocks.
+function clearGraph() {
+    closeBlock(false);
+    Object.values(elements).forEach(e => e.dropParts?.());
+    nodes.innerHTML = '';
+    elements = {};
+    gEdges = [];
+    idCounter = 1;
+    idEdgeCounter = 1;
+    selected = null;
+    selectedEdge = null;
+    subDefs.clear();
+}
+
 // Rebuild the Command view from the graph's UI inputs and outputs.
 function buildCommandInterface() {
     commandInterface = document.getElementById('command');
     commandInterface.innerHTML = '';
-    Object.values(mainElements()).forEach(elm => elm.buildUI(commandInterface));
+    if (!linked) return;
+    // Nodes with an order number first, lowest first; the sort keeps the rest, and
+    // those with the same number, in the order they were made.
+    const place = (elm) => elm.order || Infinity;
+    Object.values(mainElements()).sort((a, b) => place(a) - place(b)).forEach(elm => elm.buildUI(commandInterface));
 }
 
-// A node's messages: its control message, label, position and wire shapes.
-const nodeMessages = (elm) => [...elm.marshal(), ...elm.marshalLabel(), ...elm.marshalLayout(), ...elm.marshalWire()];
+// A node's messages: its control message, label, position, order number and wire shapes.
+const nodeMessages = (elm) => [...elm.marshal(), ...elm.marshalLabel(), ...elm.marshalLayout(), ...elm.marshalOrder(), ...elm.marshalWire()];
 
 function saveGraph() {
+    if (!linked) return;
     if (editingBlock) editingBlock.update();       // its copies take the definition as it is now
     buildCommandInterface();
 
@@ -207,7 +245,7 @@ function saveGraph() {
 
     // Keep the device's networking messages. Graph messages saved before are
     // dropped: the current graph replaces them.
-    configMessages(gfig)
+    configMessages(gfig ?? new Uint8Array())
         .filter(m => NETWORK_TYPES.includes(m.type))
         .forEach(m => output.push(...m.bytes));
 
@@ -250,16 +288,7 @@ function restoreGraph(msgs) {
         else if (m.type === MSG_SUB_PART && defs.has(m.id)) defs.get(m.id).msgs.push(...configMessages(m.pay));
     }
 
-    closeBlock(false);
-    Object.values(elements).forEach(e => e.dropParts?.());
-    nodes.innerHTML = '';
-    elements = {};
-    gEdges = [];
-    idEdgeCounter = 1;
-    selected = null;
-    selectedEdge = null;
-
-    subDefs.clear();
+    clearGraph();
     for (const [id, d] of defs) {
         const def = new uiSubDef(d.name, id);
         withScope(def.scope, () => buildGraph(d.msgs));
@@ -277,11 +306,13 @@ function buildGraph(msgs) {
     const controls = new Map();
     const labels = new Map();
     const layouts = new Map();
+    const orders = new Map();
     const wires = new Map();
     for (const m of msgs) {
         if (NODE_CLASSES[m.type] && m.id !== 0) controls.set(m.id, m);
         else if (m.type === MSG_STRING && m.len > 0) labels.set(m.id, m);
         else if (m.type === MSG_LAYOUT && m.len === 4) layouts.set(m.id, m);
+        else if (m.type === MSG_ORDER && m.len === 2) orders.set(m.id, m);
         // A wire into an output that takes several carries its source reference.
         else if (m.type === MSG_WIRE && m.len === 4) wires.set(m.id, m);
         else if (m.type === MSG_WIRE && m.len === 4 + refLen(m)) {
@@ -360,6 +391,7 @@ function buildGraph(msgs) {
             elm.setFreqMax(f(2) << 8 | f(3));
         }
         if (labels.has(id)) elm.setLabel(decoder.decode(labels.get(id).pay));
+        if (orders.has(id)) elm.order = orders.get(id).pay[0] << 8 | orders.get(id).pay[1];
     }
     idCounter = Math.max(...controls.keys()) + 1;
 
@@ -487,6 +519,7 @@ function freeSpot() {
 // Add a node of a control message type in the middle of the view, and select it.
 // A block's definition takes only logic and its ports; a port goes only there.
 function addNode(type) {
+    if (!linked) return null;
     const port = type === MSG_SUB_INPUT || type === MSG_SUB_OUTPUT;
     if (editingBlock ? !port && !isLogic(type) : port || type === MSG_SUB) return null;
     const elm = new NODE_CLASSES[type](...freeSpot());
@@ -828,6 +861,18 @@ function demoGraph() {
     new uiNeoPixel(100, 420);                   // n11: a 4 × 4 array on GPIO 16, a bar along its top row
     createEdge('n10', 'n11');                   // slider → NeoPixels
 }
-demoGraph();
+// The browser-only build starts on the demo graph. A device's page starts on the
+// Network view, with nothing to show until it is connected: a device that has no
+// graph saved then gets the demo graph (see deviceConfig).
+demoGraph(); //offline
+toGraph(); //offline
+setLinked(linked);
 
-toGraph();
+// A device's config has arrived: show its graph, or the demo graph if it has none
+// and there is none here.
+function deviceConfig(payload) {
+    gfig = payload;
+    setLinked(true);
+    unmarshalConfigs(gfig);
+    if (!Object.keys(mainElements()).length) demoGraph();
+}
