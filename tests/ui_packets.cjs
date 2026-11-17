@@ -2214,62 +2214,121 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(clock.shown === '12:34:56|12:34:56|34|12:34:56', 'a clock showed ' + clock.shown);
     expect(clock.pay === `35 02 00 ${clock.id.toString(16).padStart(2, '0')} 03 01 00 78`, 'a clock marshals as ' + clock.pay);
 
-    // ── A USB mouse: a 2D slider's X and Y move the pointer, buttons press its
-    // buttons. A wire drawn in takes the first input of its type with none yet. ──
+    // ── A USB mouse: a touch pad in the Command view. Its settings, then fingers on
+    // its pad, strips and buttons, and the commands they send. ──
     await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
     await page.locator('#add [title="Add a USB mouse"]').dispatchEvent('click');
-    expect(await keyRows() === 'Label:|X:|Y:|Left:|Right:|Middle:|X and Y:|Top speed (counts/s):',
+    expect(await keyRows() === 'Label:|Preset:|Tap to click:|Scrolling:|Pointer speed:|Scroll step (px):'
+        + '|Two-finger drag:|Keys:|Three-finger drag:|Keys:|Buttons:|Pinch:|Keys:|Two-finger tap:|Keys:|Buttons:'
+        + '|Three-finger tap:|Keys:|Buttons:|Order:',
         'a new mouse does not show its settings: ' + await keyRows());
-    await choice('X and Y', '−1 to 1');
-    const mouse = await page.evaluate(() => {
-        const m = selected;
-        const defaults = [m instanceof uiMouse, m.label, m.speed, m.describe()].join();
-        const pad = addNode(MSG_UI_SLIDER_2D), left = addNode(MSG_UI_BUTTON), right = addNode(MSG_UI_BUTTON),
-            slider = addNode(MSG_UI_SLIDER), plot = addNode(MSG_UI_GRAPH);
-        const wired = [
-            !!createEdge(pad.name, m.name),             // X; the pad then wires from Y
-            !!createEdge(pad.name, m.name),             // Y
-            createEdge(slider.name, m.name) === null,   // no number input left
-            !!createEdge(left.name, m.name),
-            !!createEdge(right.name, m.name),
-            createEdge(m.name, plot.name) === null,     // a mouse is no source
-        ].every(Boolean);
-        const refused = [m.setRole('x', left), m.setRole('left', slider), m.setRole('wheel', left), m.setSpeed('0'),
-            m.setSpeed('5001'), m.setSpeed('1.5'), m.setRange('x')].every(r => r === false);
-        m.setRole('middle', left);                      // one button for two: one wire
-        m.setSpeed('1200');
-        const roles = () => MOUSE_ROLES.map(([role]) => `${m[role + 'Source']?.name ?? '-'}:${m[role + 'Output']}`).join();
-        const before = [roles(), m.inConns().length, m.describe()].join('|');
+    await choice('Preset', 'Blender');
+    expect(await keyRows() === 'Label:|Preset:|Tap to click:|Scrolling:|Pointer speed:|Scroll step (px):'
+        + '|Two-finger drag:|Keys:|Buttons:|Three-finger drag:|Keys:|Buttons:|Pinch:|Keys:|Two-finger tap:|Keys:|Buttons:'
+        + '|Three-finger tap:|Keys:|Buttons:|Order:',
+        'the Blender preset shows ' + await keyRows());
+    const mouse = await page.evaluate(async () => {
+        const m = selected, btn = addNode(MSG_UI_BUTTON), led = addNode(MSG_HW_LED);
+        const settings = [m.preset(), m.gestures[MOUSE_GESTURE_DRAG3].mods, m.gestures[MOUSE_GESTURE_DRAG3].buttons,
+            m.setSpeed('0') === false && m.setSpeed('10.1') === false && m.setStep('3') === false
+                && m.setAct(MOUSE_GESTURE_TAP2, MOUSE_ACT_MOVE) === false && m.setAct(MOUSE_GESTURE_PINCH, MOUSE_ACT_CLICK) === false
+                && m.setMods(0, 0x10) === false && m.setButtons(0, 0x08) === false,
+            !!createEdge(btn.name, m.name), !!createEdge(m.name, led.name)].join();
+        m.setLabel('Blender');
         const pay = m.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ');
-        const ids = [pad.id, left.id, right.id, m.id];
-        // Its messages, and its sources', restore as they were.
-        const msgs = [pad, left, right, m].flatMap(n => n.marshal());
-        // Taking the left button's wire out takes it off both inputs it drove.
-        m.inConns().find(c => c.start.node === left).remove();
-        const unwired = roles();
         saveGraph();
-        restoreGraph(configMessages(Uint8Array.from(msgs)));
-        const back = elements['n' + ids[3]];
-        const restored = [back instanceof uiMouse, back.centred, back.speed, '',
-            MOUSE_ROLES.map(([role]) => `${back[role + 'Source']?.name ?? '-'}:${back[role + 'Output']}`).join(),
-            back.inConns().length, back.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ') === pay].join('|');
-        return { defaults, wired, refused, before, pay, ids, unwired, restored };
+
+        // Synthetic pointers can't be captured: stand in for capture.
+        Element.prototype.setPointerCapture = function () {};
+        Element.prototype.hasPointerCapture = function () { return true; };
+        toCommand();
+        const tile = [...document.querySelectorAll('#command .control-mouse')].find(t => t.title === 'Blender');
+        const pad = tile.querySelector('.mouse-pad'), box = pad.getBoundingClientRect();
+        const at = [box.left + 50, box.top + 50];
+        const frames = (n = 3) => new Promise(r => { const f = () => (n-- ? requestAnimationFrame(f) : r()); f(); });
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const fire = (elm, type, id, x, y) => elm.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, bubbles: true }));
+        const commands = async () => { await frames(); return window.__sent.splice(0).map(p => [...p.slice(8)].map(b => b.toString(16).padStart(2, '0')).join('')); };
+        window.__sent.splice(0);
+        const log = {};
+
+        // One finger: 10 px right and 5 down, at 2 counts a pixel.
+        fire(pad, 'pointerdown', 1, ...at);
+        await wait(MOUSE_TAP_MS);
+        fire(pad, 'pointermove', 1, at[0] + 10, at[1] + 5);
+        fire(pad, 'pointerup', 1, at[0] + 10, at[1] + 5);
+        log.one = await commands();
+
+        // A quick tap: a left click, pressed then let go.
+        fire(pad, 'pointerdown', 1, ...at);
+        fire(pad, 'pointerup', 1, ...at);
+        await frames(); await wait(MOUSE_CLICK_MS + 50);
+        log.tap = await commands();
+
+        // Three fingers: Shift, then the middle button, then 30 px right (10 for the
+        // fingers' middle); let go: the button, then Shift.
+        [1, 2, 3].forEach(id => fire(pad, 'pointerdown', id, at[0] + 20 * id, at[1]));
+        await frames();
+        fire(pad, 'pointermove', 1, at[0] + 20 + 30, at[1]);
+        await frames();
+        [1, 2, 3].forEach(id => fire(pad, 'pointerup', id, at[0], at[1]));
+        await wait(MOUSE_TAP_MS);
+        log.pan = await commands();
+
+        // Two fingers spreading 48 px apart: a pinch, the wheel up two clicks.
+        fire(pad, 'pointerdown', 1, at[0], at[1]);
+        fire(pad, 'pointerdown', 2, at[0] + 40, at[1]);
+        fire(pad, 'pointermove', 2, at[0] + 40 + 48, at[1]);
+        fire(pad, 'pointerup', 1, ...at);
+        fire(pad, 'pointerup', 2, ...at);
+        log.pinch = await commands();
+
+        // The vertical strip: 24 px up is a click of the wheel up; natural scrolling the other way.
+        const strip = tile.querySelector('.mouse-strip.vertical');
+        fire(strip, 'pointerdown', 4, 10, 200);
+        fire(strip, 'pointermove', 4, 10, 176);
+        fire(strip, 'pointerup', 4, 10, 176);
+        log.strip = await commands();
+        m.reverse = true;
+        fire(strip, 'pointerdown', 4, 10, 200);
+        fire(strip, 'pointermove', 4, 10, 176);
+        fire(strip, 'pointerup', 4, 10, 176);
+        m.reverse = false;
+        log.natural = await commands();
+
+        // Holding Right: the command again every MOUSE_KEEPALIVE_MS, until let go.
+        const right = [...tile.querySelectorAll('.mouse-buttons button')].find(b => b.textContent === 'Right');
+        fire(right, 'pointerdown', 5, 0, 0);
+        await frames();
+        const pressed = right.getAttribute('aria-pressed');
+        await wait(MOUSE_KEEPALIVE_MS + 100);
+        fire(right, 'pointerup', 5, 0, 0);
+        log.hold = await commands();
+        log.held = pressed;
+
+        // Its settings restore as they were.
+        restoreGraph(configMessages(Uint8Array.from(m.marshal())));
+        const back = elements[m.name];
+        log.restored = [back instanceof uiMouse, back.preset(), back.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ') === pay].join();
+        toGraph();
+        return { settings, pay, log, id: m.id };
     });
     packets.push(...await sent(page));
-    const [padId, leftId, rightId, mouseId] = mouse.ids;
-    const nm = (id) => 'n' + id;
-    const byte = (v) => v.toString(16).padStart(2, '0');
-    expect(mouse.defaults === 'true,Mouse,800,Nothing wired', 'a new mouse is ' + mouse.defaults);
-    expect(mouse.wired, 'the mouse took the wrong wires');
-    expect(mouse.refused, 'the mouse took a source or setting it cannot use');
-    expect(mouse.before === [`${nm(padId)}:0,${nm(padId)}:1,${nm(leftId)}:0,${nm(rightId)}:0,${nm(leftId)}:0`, 4,
-        `X: 2D slider X (${nm(padId)}) · Y: 2D slider Y (${nm(padId)}) · Left: BUTTON (${nm(leftId)}) · Right: BUTTON (${nm(rightId)}) · Middle: BUTTON (${nm(leftId)})`].join('|'),
-        'the mouse is wired as ' + mouse.before);
-    expect(mouse.pay === ['27 01 00', byte(mouseId), '12', '00', byte(padId), '00', '00', byte(padId), '01', '00', byte(leftId), '00',
-        '00', byte(rightId), '00', '00', byte(leftId), '00', '00 04 b0'].join(' '), 'a mouse marshals as ' + mouse.pay);
-    expect(mouse.unwired === `${nm(padId)}:0,${nm(padId)}:1,-:0,${nm(rightId)}:0,-:0`, 'taking a wire out left ' + mouse.unwired);
-    expect(mouse.restored === `true|false|1200||${nm(padId)}:0,${nm(padId)}:1,${nm(leftId)}:0,${nm(rightId)}:0,${nm(leftId)}:0|4|true`,
-        'a mouse restored as ' + mouse.restored);
+    const id = mouse.id.toString(16).padStart(2, '0');
+    expect(mouse.settings === 'blender,2,4,true,false,false', 'the mouse\'s settings are ' + mouse.settings);
+    expect(mouse.pay === `27 00 00 ${id} 12 01 14 18 00 04 01 02 04 01 00 00 02 00 02 03 00 04 03`, 'a mouse marshals as ' + mouse.pay);
+    const l = mouse.log;
+    const log = JSON.stringify(l);
+    // Each command: buttons, modifiers, X (2 bytes), Y (2 bytes), wheel, horizontal wheel.
+    expect(l.one.join() === '00000014000a0000', 'one finger 10 px right and 5 down sent ' + log);
+    expect(l.tap.join() === '0100000000000000,0000000000000000', 'a tap did not click the left button: ' + log);
+    expect(l.pan.join() === ['0002000000000000', '0402000000000000', '0402001400000000', '0002000000000000', '0000000000000000'].join(),
+        'three fingers did not hold Shift, then the middle button, move, then let go in turn: ' + log);
+    expect(l.pinch.join() === '0000000000000200', 'a pinch apart did not turn the wheel up: ' + log);
+    expect(l.strip.join() === '0000000000000100' && l.natural.join() === '000000000000ff00', 'the strip scrolled as ' + log);
+    expect(l.held === 'true' && l.hold.join() === '0200000000000000,0200000000000000,0000000000000000',
+        'holding Right did not keep its command coming, then let go: ' + log);
+    expect(l.restored === 'true,blender,true', 'a mouse restored as ' + l.restored);
     const clockBack = await page.evaluate(() => {
         // Clock n1 at UTC-3:30 without internet time; clock n3 differs, and takes n1's.
         restoreGraph(configMessages(Uint8Array.from([0x35, MSG_FLAG_SHOWN, 0, 1, 3, 0, 0xFF, 0x2E, 0x40, 1, 0, 2, 12, 0, 1, 1, 0,

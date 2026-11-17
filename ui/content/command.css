@@ -230,6 +230,101 @@
     pointer-events: none;
 }
 
+/* A USB mouse: the name above a touch pad, with a scroll strip right of it and one
+   below, and the three buttons under them. Four columns wide (a phone's whole width)
+   and four rows tall. */
+#command > .control-mouse {
+    grid-column: span 4;
+    grid-row: span 4;
+    height: calc(24em + 3 * var(--step-0));
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25em;
+    padding: 0.6em 0.6em 0.6em;
+    color: #20202b;
+    text-align: center;
+}
+
+#command > .control-mouse > .name {
+    -webkit-line-clamp: 1;
+}
+
+#command > .control-mouse > .mouse {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 2.4em;
+    grid-template-rows: 1fr 2.4em 3em;
+    gap: 0.4em;
+    margin-top: 0.35em;
+}
+
+#command > .control-mouse .mouse-pad,
+#command > .control-mouse .mouse-strip {
+    border: 1px solid rgba(32, 32, 43, 0.3);
+    border-radius: 0.35em;
+    background-color: rgba(32, 32, 43, 0.06);
+    touch-action: none;     /* fingers drive the mouse, not the page */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+#command > .control-mouse .mouse-pad {
+    grid-column: 1;
+    grid-row: 1;
+    cursor: crosshair;
+}
+
+/* The strips are ribbed across, as a wheel is. */
+#command > .control-mouse .mouse-strip.vertical {
+    grid-column: 2;
+    grid-row: 1;
+    cursor: ns-resize;
+    background-image: repeating-linear-gradient(rgba(32, 32, 43, 0.15) 0 1px, transparent 1px 0.6em);
+}
+
+#command > .control-mouse .mouse-strip.horizontal {
+    grid-column: 1;
+    grid-row: 2;
+    cursor: ew-resize;
+    background-image: repeating-linear-gradient(90deg, rgba(32, 32, 43, 0.15) 0 1px, transparent 1px 0.6em);
+}
+
+#command > .control-mouse .mouse-buttons {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    display: grid;
+    grid-template-columns: 2fr 1fr 2fr;
+    gap: 0.4em;
+}
+
+#command > .control-mouse .mouse-buttons > button {
+    font: inherit;
+    font-weight: bold;
+    color: #20202b;
+    border: 1px solid rgba(32, 32, 43, 0.3);
+    border-radius: 0.35em;
+    background-color: rgba(32, 32, 43, 0.06);
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+#command > .control-mouse .mouse-buttons > button[aria-pressed="true"] {
+    background-color: #20202b;
+    color: var(--clr-face);
+}
+
+#command > .control-mouse .mouse-pad:focus-visible,
+#command > .control-mouse .mouse-buttons > button:focus-visible {
+    outline: 2px solid var(--clr-face);
+    outline-offset: 2px;
+}
+
 /* A plot: the name and value above the signal, three columns wide and two
    rows tall. The trace is the tile's ink, over a faint grid. */
 #command > .control-plot {
@@ -264,3 +359,4 @@
 @media (max-width: 999px)  {#command {grid-template-columns: repeat(5, 1fr)}}
 @media (max-width: 799px)  {#command {grid-template-columns: repeat(4, 1fr)}}
 @media (max-width: 599px)  {#command {grid-template-columns: repeat(3, 1fr)}}
+@media (max-width: 599px)  {#command > .control-mouse {grid-column: 1 / -1}}

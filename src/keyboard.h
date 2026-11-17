@@ -21,6 +21,10 @@ bool keyboard_add(uint16_t id, const uint8_t *stroke, uint8_t len);
 // KEYBOARD_QUEUE keystrokes are already waiting.
 void keyboard_press(uint16_t id);
 
+// Hold these modifiers (HID bits) down until told otherwise, for the mouse's pad:
+// Shift while dragging, say. They are held in what is typed meanwhile too.
+void keyboard_hold(uint8_t modifiers);
+
 // Keep typing; call it from core 0's main loop. True while keystrokes are waiting.
 bool keyboard_task(void);
 

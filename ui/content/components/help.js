@@ -94,8 +94,8 @@ const NODE_HELP = {
         "Wire a momentary button, a GPIO input or logic into it. Text is typed as on a US keyboard; \\n is Enter and \\t is Tab.",
     ],
     mouse: [
-        "Plugged into a PC, the device is also a USB mouse. X and Y set how fast the pointer moves each way, up to the top speed; Left, Right and Middle press its buttons while they are on.",
-        "Wire a 2D slider's X and Y into it, with Return home, for a joystick, and momentary buttons or GPIO inputs for its buttons. With −1 to 1, X and Y are still at 0, as from a scale.",
+        "Plugged into a PC, the device is also a USB mouse. This node is a touch pad in the Command view: one finger moves the pointer and a tap clicks; the strips scroll; the buttons are held while touched.",
+        "Two- and three-finger drags, a pinch and two- and three-finger taps do what you set below, holding keys and buttons: the Blender preset orbits with two fingers (middle-drag) and pans with three (Shift+middle-drag).",
     ],
     compare: [
         "On while its number input is above (or below) the threshold. The threshold is in the input's unit: °C, volts, or 0 to 1 for a slider.",

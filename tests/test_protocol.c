@@ -414,16 +414,6 @@ void test_wires_join_matching_types(void)
                 uint8_t type = element_type(ex, px.enable.id);
                 if (px.enable.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI
                                                            || (program_logic(type) && !program_logic_floating(type)), ex->name);
-            } else if (it.type == MSG_HW_MOUSE) {
-                /* X and Y from floating sources, its buttons from boolean ones. */
-                TEST_ASSERT_TRUE_MESSAGE(mouse_payload_valid(it.pay, it.len, it.flags), ex->name);
-                for (uint8_t k = 0; k < 2; k++) assert_floating_hw(ex, msg_ref_at(it.pay + k * r, it.flags));
-                for (uint8_t k = 2; k < MOUSE_INPUTS; k++) {
-                    msg_ref src = msg_ref_at(it.pay + k * r, it.flags);
-                    uint8_t type = element_type(ex, src.id);
-                    if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI
-                                                         || (program_logic(type) && !program_logic_floating(type)), ex->name);
-                }
             } else if (it.type == MSG_HW_PWM) {
                 pwm_payload pwm;
                 TEST_ASSERT_TRUE_MESSAGE(pwm_payload_read(it.pay, it.len, it.flags, &pwm), ex->name);
@@ -569,76 +559,92 @@ void test_mouse_config(void)
     config_element_iterator it;
     messages(&it, ex);
 
-    assert_message(&it, MSG_UI_SLIDER_2D, 1, 1);
-    TEST_ASSERT_EQUAL_HEX8(SLIDER_RETURN, it.pay[0]);
-    assert_message(&it, MSG_UI_BUTTON, 3, 1);
-    assert_message(&it, MSG_UI_BUTTON, 4, 1);
-    assert_message(&it, MSG_HW_MOUSE, 2, 18);
-    TEST_ASSERT_TRUE(mouse_payload_valid(it.pay, it.len, it.flags));
-    static const uint16_t ids[MOUSE_INPUTS] = { 1, 1, 3, 4, 0 };
-    static const uint8_t outputs[MOUSE_INPUTS] = { 0, 1, 0, 0, 0 };
-    for (uint8_t k = 0; k < MOUSE_INPUTS; k++) {
-        msg_ref ref = msg_ref_at(it.pay + 3 * k, it.flags);
-        TEST_ASSERT_EQUAL_UINT16(ids[k], ref.id);
-        TEST_ASSERT_EQUAL_UINT8(outputs[k], ref.output);
-    }
-    TEST_ASSERT_EQUAL_HEX8(MOUSE_CENTRED, it.pay[15]);
-    TEST_ASSERT_EQUAL_UINT16(800, it.pay[16] << 8 | it.pay[17]);
+    assert_message(&it, MSG_HW_MOUSE, 1, MOUSE_PAYLOAD_LEN);
+    TEST_ASSERT_TRUE(mouse_payload_valid(it.pay, it.len));
+    TEST_ASSERT_EQUAL_HEX8(MOUSE_TAP_CLICK, it.pay[0]);
+    TEST_ASSERT_EQUAL_UINT8(20, it.pay[1]);
+    TEST_ASSERT_EQUAL_UINT8(24, it.pay[2]);
+    const uint8_t *pan = it.pay + 3 + 3 * MOUSE_GESTURE_DRAG3;     /* Shift + middle drag */
+    TEST_ASSERT_EQUAL_HEX8(0x02, pan[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x04, pan[1]);
+    TEST_ASSERT_EQUAL_HEX8(MOUSE_ACT_MOVE, pan[2]);
+    TEST_ASSERT_EQUAL_HEX8(MOUSE_ACT_SCROLL, it.pay[3 + 3 * MOUSE_GESTURE_PINCH + 2]);
+    TEST_ASSERT_FALSE(it.next(&it));
+
+    /* Core 1 runs nothing for it. */
+    static hw_program p;
+    program_compile(ex->bytes + 3, ex->len - 3, &p);
+    TEST_ASSERT_EQUAL_UINT8(0, p.node_count);
+    TEST_ASSERT_EQUAL_UINT8(0, p.signal_count);
+}
+
+void test_command_mouse(void)
+{
+    const struct protocol_example *ex = example("command-mouse");
+    config_element_iterator it;
+    messages(&it, ex);
+
+    assert_message(&it, MSG_HW_MOUSE, 1, MOUSE_REPORT_LEN);
+    TEST_ASSERT_TRUE(mouse_report_valid(it.pay, it.len));
+    TEST_ASSERT_EQUAL_HEX8(0x04, it.pay[0]);                         /* middle */
+    TEST_ASSERT_EQUAL_HEX8(0x02, it.pay[1]);                         /* Shift */
+    TEST_ASSERT_EQUAL_INT16(12, (int16_t)(it.pay[2] << 8 | it.pay[3]));
+    TEST_ASSERT_EQUAL_INT16(-5, (int16_t)(it.pay[4] << 8 | it.pay[5]));
+    TEST_ASSERT_EQUAL_INT8(0, (int8_t)it.pay[6]);
+    TEST_ASSERT_EQUAL_INT8(0, (int8_t)it.pay[7]);
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
-/* Five source references, options the device knows and a top speed in its range; the
- * references are 3 bytes with MSG_FLAG_OUTPUT, 2 without. */
+/* The settings the UI writes: known options, speeds in range, and each gesture doing
+ * what its kind can. */
 void test_mouse_payload_valid(void)
 {
-    for (uint8_t flags = 0; flags <= MSG_FLAG_OUTPUT; flags++) {
-        uint8_t r = msg_ref_len(flags), at = MOUSE_INPUTS * r;
-        uint8_t p[3 * MOUSE_INPUTS + 4] = { 0 };
-        p[at] = MOUSE_CENTRED; p[at + 1] = 0x03; p[at + 2] = 0x20;              /* 800 */
-        TEST_ASSERT_TRUE(mouse_payload_valid(p, at + 3, flags));
-        TEST_ASSERT_FALSE(mouse_payload_valid(p, at + 2, flags));
-        TEST_ASSERT_FALSE(mouse_payload_valid(p, at + 4, flags));
-        p[at] = 0;                                                              /* signed */
-        TEST_ASSERT_TRUE(mouse_payload_valid(p, at + 3, flags));
-        p[at] = 0x02;                                                           /* no such option */
-        TEST_ASSERT_FALSE(mouse_payload_valid(p, at + 3, flags));
-        p[at] = MOUSE_CENTRED;
-        p[at + 1] = 0; p[at + 2] = MOUSE_SPEED_MIN;
-        TEST_ASSERT_TRUE(mouse_payload_valid(p, at + 3, flags));
-        p[at + 2] = MOUSE_SPEED_MIN - 1;
-        TEST_ASSERT_FALSE(mouse_payload_valid(p, at + 3, flags));
-        p[at + 1] = MOUSE_SPEED_MAX >> 8; p[at + 2] = MOUSE_SPEED_MAX & 0xFF;
-        TEST_ASSERT_TRUE(mouse_payload_valid(p, at + 3, flags));
-        p[at + 2]++;
-        TEST_ASSERT_FALSE(mouse_payload_valid(p, at + 3, flags));
+    uint8_t p[MOUSE_PAYLOAD_LEN + 1] = { MOUSE_TAP_CLICK | MOUSE_SCROLL_REVERSE, MOUSE_SPEED_MAX, MOUSE_STEP_MIN };
+    TEST_ASSERT_TRUE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));                /* every gesture off */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN - 1));
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN + 1));
+
+    p[0] = 0x04;                                                                /* no such option */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    p[0] = 0;
+    p[1] = MOUSE_SPEED_MIN - 1;
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    p[1] = MOUSE_SPEED_MAX + 1;
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    p[1] = MOUSE_SPEED_MIN;
+    p[2] = MOUSE_STEP_MIN - 1;
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    p[2] = 255;
+    TEST_ASSERT_TRUE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+
+    for (int g = 0; g < MOUSE_GESTURES; g++) {
+        uint8_t *q = p + 3 + 3 * g;
+        int tap = g == MOUSE_GESTURE_TAP2 || g == MOUSE_GESTURE_TAP3;
+        q[0] = MOUSE_MODIFIERS; q[1] = MOUSE_BUTTONS;
+        for (uint8_t act = 0; act < 5; act++) {
+            q[2] = act;
+            int ok = act == MOUSE_ACT_NONE || (tap ? act == MOUSE_ACT_CLICK : act == MOUSE_ACT_MOVE || act == MOUSE_ACT_SCROLL);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(ok, mouse_payload_valid(p, MOUSE_PAYLOAD_LEN), "gesture and action");
+        }
+        q[2] = MOUSE_ACT_NONE;
+        q[0] = 0x10;                                                            /* a right-hand modifier */
+        TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+        q[0] = 0; q[1] = 0x08;                                                  /* a fourth button */
+        TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+        q[1] = 0;
     }
 }
 
-/* A mouse saved without outputs reads output 0 of each source; one the device can't
- * run is left out. */
-void test_mouse_compiles_legacy_and_skips_invalid(void)
+void test_mouse_report_valid(void)
 {
-    static const uint8_t cfg[] = {
-        0x10, 0x00, 0x00, 0x01, 0x00,                                           /* button n1 */
-        0x12, 0x00, 0x00, 0x03, 0x00,                                           /* slider n3 */
-        0x27, 0x00, 0x00, 0x02, 0x0D,  0x00, 0x03,  0x00, 0x00,  0x00, 0x01,    /* mouse n2: X ← n3, left ← n1 */
-                                       0x00, 0x00,  0x00, 0x00,  0x00,  0x00, 0x05, /* signed, 5 counts a second */
-        0x27, 0x01, 0x00, 0x04, 0x12,  0x00, 0x01, 0x00,  0x00, 0x00, 0x00,  0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00,  0x00, 0x00, 0x00,  0x00, 0x13, 0x89,  /* 5001: too fast */
-    };
-    static hw_program p;
-    program_compile(cfg, sizeof cfg, &p);
-    TEST_ASSERT_EQUAL_UINT8(1, p.node_count);
-    const prog_node *n = &p.nodes[0];
-    TEST_ASSERT_EQUAL_HEX8(MSG_HW_MOUSE, n->type);
-    TEST_ASSERT_EQUAL_UINT8(MOUSE_INPUTS, n->in_count);
-    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 3, 0), n->in[0]);
-    TEST_ASSERT_EQUAL_UINT8(PROG_NO_SIGNAL, n->in[1]);
-    TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, 0), n->in[2]);
-    TEST_ASSERT_EQUAL_UINT8(PROG_NO_SIGNAL, n->in[3]);
-    TEST_ASSERT_EQUAL_UINT8(PROG_NO_SIGNAL, n->in[4]);
-    TEST_ASSERT_EQUAL_HEX8(0, n->options);
-    TEST_ASSERT_EQUAL_UINT16(5, n->speed);
+    uint8_t r[MOUSE_REPORT_LEN + 1] = { MOUSE_BUTTONS, MOUSE_MODIFIERS, 0x80, 0x00, 0x7F, 0xFF, 0x81, 0x7F };
+    TEST_ASSERT_TRUE(mouse_report_valid(r, MOUSE_REPORT_LEN));
+    TEST_ASSERT_FALSE(mouse_report_valid(r, MOUSE_REPORT_LEN - 1));
+    TEST_ASSERT_FALSE(mouse_report_valid(r, MOUSE_REPORT_LEN + 1));
+    r[0] = 0x08;
+    TEST_ASSERT_FALSE(mouse_report_valid(r, MOUSE_REPORT_LEN));
+    r[0] = 0; r[1] = 0x20;
+    TEST_ASSERT_FALSE(mouse_report_valid(r, MOUSE_REPORT_LEN));
 }
 
 /* ── Source references and 2D sliders ─────────────────────────────────── */
@@ -2539,8 +2545,9 @@ int main(void)
     RUN_TEST(test_keyboard_config);
     RUN_TEST(test_keyboard_payload_valid);
     RUN_TEST(test_mouse_config);
+    RUN_TEST(test_command_mouse);
     RUN_TEST(test_mouse_payload_valid);
-    RUN_TEST(test_mouse_compiles_legacy_and_skips_invalid);
+    RUN_TEST(test_mouse_report_valid);
     RUN_TEST(test_slider_2d_config);
     RUN_TEST(test_legacy_config);
     RUN_TEST(test_light_config);

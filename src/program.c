@@ -535,18 +535,6 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             }
             break;
 
-        case MSG_HW_MOUSE: {
-            // Core 0 reads its signals and moves the pointer; core 1 does nothing for it.
-            if (!mouse_payload_valid(itr.pay, itr.len, itr.flags)) break;
-            if (!(n = add_node(p, itr.type, itr.id))) break;
-            n->in_count = MOUSE_INPUTS;
-            for (uint8_t k = 0; k < MOUSE_INPUTS; k++) n->in[k] = ref_signal(p, msg_ref_at(itr.pay + k * r, itr.flags));
-            const uint8_t *q = itr.pay + MOUSE_INPUTS * r;
-            n->options = q[0];
-            n->speed = (uint16_t)(q[1] << 8 | q[2]);
-            break;
-        }
-
         case MSG_HW_PWM: {
             pwm_payload pwm;
             if (!pwm_payload_read(itr.pay, itr.len, itr.flags, &pwm)) break;
@@ -795,12 +783,6 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
         case MSG_HW_LED: put(&t, "LED n%u <- ", n->id); put_signal(&t, n->in[0]); break;
         case MSG_HW_GPO: put(&t, "GPO n%u pin %u <- ", n->id, n->pin); put_signal(&t, n->in[0]); break;
         case MSG_HW_KEYBOARD: put(&t, "KEYBOARD n%u <- ", n->id); put_signal(&t, n->in[0]); break;
-        case MSG_HW_MOUSE: {
-            static const char *const inputs[MOUSE_INPUTS] = { "x", "y", "left", "right", "middle" };
-            put(&t, "MOUSE n%u %s speed %u <-", n->id, n->options & MOUSE_CENTRED ? "centred" : "signed", n->speed);
-            for (uint8_t k = 0; k < MOUSE_INPUTS; k++) { put(&t, " %s ", inputs[k]); put_signal(&t, n->in[k]); }
-            break;
-        }
         case MSG_HW_PWM:
             put(&t, "PWM n%u pin %u options %02X duty %u %u-%u <- ", n->id, n->pin, n->options,
                 n->duty, n->duty_min, n->duty_max);

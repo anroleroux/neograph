@@ -41,6 +41,11 @@ static volatile uint8_t head = 0, tail = 0;
 // down then up, so a key typed twice in a row reads as two presses.
 static uint16_t report = 0;
 
+// Modifiers held down for the mouse's pad (keyboard_hold): in every report, and on
+// their own while nothing is typed. sent_held is what the PC last had of them.
+static volatile uint8_t held = 0;
+static uint8_t sent_held = 0;
+
 static const uint8_t ascii_keys[128][2] = { HID_ASCII_TO_KEYCODE };
 
 // Send the next report, if the PC is ready for it. Runs in TinyUSB's task:
@@ -48,25 +53,36 @@ static const uint8_t ascii_keys[128][2] = { HID_ASCII_TO_KEYCODE };
 static void type_next(void *param) {
     (void)param;
 
+    // Nothing to type: only a change of the modifiers held.
+    if (tail == head) {
+        uint8_t h = held;
+        if (h != sent_held && tud_hid_n_ready(HID_INSTANCE_KEYBOARD)
+            && tud_hid_n_keyboard_report(HID_INSTANCE_KEYBOARD, 0, h, NULL)) sent_held = h;
+        return;
+    }
+
     while (tail != head) {
         if (!tud_hid_n_ready(HID_INSTANCE_KEYBOARD)) return;    // busy, or the PC isn't listening
 
         const keystroke *k = &queue[tail % KEYBOARD_QUEUE];
         uint16_t keys = k->mode == KEYBOARD_COMBO ? 1 : k->len;
         if (report < 2 * keys) {
-            uint8_t modifiers = 0;
+            uint8_t modifiers = held;
             uint8_t codes[6] = {0};
-            if (report % 2 == 0) {      // down; an up report is all zeros
+            if (report % 2 == 0) {      // down; an up report has only the modifiers held
                 if (k->mode == KEYBOARD_COMBO) {
-                    modifiers = k->keys[0];
+                    modifiers |= k->keys[0];
                     codes[0] = k->keys[1];
                 } else {
                     uint8_t c = k->keys[report / 2] & 0x7F;
-                    modifiers = ascii_keys[c][0] ? KEYBOARD_MODIFIER_LEFTSHIFT : 0;
+                    if (ascii_keys[c][0]) modifiers |= KEYBOARD_MODIFIER_LEFTSHIFT;
                     codes[0] = ascii_keys[c][1];
                 }
             }
-            if (tud_hid_n_keyboard_report(HID_INSTANCE_KEYBOARD, 0, modifiers, codes)) report++;
+            if (tud_hid_n_keyboard_report(HID_INSTANCE_KEYBOARD, 0, modifiers, codes)) {
+                report++;
+                if (report % 2 == 0) sent_held = modifiers;     // an up report: the modifiers held alone
+            }
             return;
         }
 
@@ -88,6 +104,7 @@ void tud_hid_report_complete_cb(uint8_t instance, const uint8_t *data, uint16_t 
 void tud_umount_cb(void) {
     report = 0;
     tail = head;
+    sent_held = 0;
     mouse_unplugged();
 }
 
@@ -143,10 +160,14 @@ void keyboard_press(uint16_t id) {
     printf("keyboard %d: typing\n", id);
 }
 
+void keyboard_hold(uint8_t modifiers) {
+    held = modifiers;
+}
+
 // Once each pass. No report is sent while the last is with the PC, so a spare
 // call does nothing, and one that is lost is made again next pass.
 bool keyboard_task(void) {
-    if (tail == head) return false;
+    if (tail == head && held == sent_held) return false;
     usbd_defer_func(type_next, NULL, false);
     stdio_flush();
     return true;

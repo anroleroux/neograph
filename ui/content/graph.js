@@ -397,7 +397,7 @@ function buildGraph(msgs) {
     idCounter = Math.max(...controls.keys()) + 1;
 
     // Wires: each output's source references (a PWM's duty and frequency
-    // sources, NeoPixels' value and on/off, an AND's or OR's several, a latch's, counter's or mouse's roles, another
+    // sources, NeoPixels' value and on/off, an AND's or OR's several, a latch's or counter's roles, another
     // output's or logic's one source), shaped by their MSG_WIRE messages if there
     // are any (otherwise drawn straight between the nodes). Feedback wires come
     // last, so each closes the loop it closed when it was drawn.
@@ -423,7 +423,7 @@ function buildGraph(msgs) {
             elm.syncWires();
         } else if (elm.roles) {
             // A latch's set source, then its reset source; a counter's count, then its reset;
-            // a mouse's X, Y and buttons; a block's inputs, after its definition (refsAt).
+            // a block's inputs, after its definition (refsAt).
             const r = refLen(m), at = elm.refsAt ?? 0;
             if (m.len < at + elm.roles.length * r) continue;
             elm.roles.forEach(([role], k) => {

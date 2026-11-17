@@ -69,7 +69,7 @@
 #define MSG_HW_STEPPER          0x24    /* a stepper motor on four pins, through a ULN2003 */
 #define MSG_HW_SERVO            0x25    /* a hobby servo, such as an SG90, on a PWM pin */
 #define MSG_HW_NEOPIXEL         0x26    /* NeoPixels (WS2812): an array, circle or doughnut, showing a graphic */
-#define MSG_HW_MOUSE            0x27    /* a USB mouse: moves the PC's pointer and presses its buttons */
+#define MSG_HW_MOUSE            0x27    /* the USB mouse, driven by its pad in the Command view */
 #define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
@@ -297,14 +297,39 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define KEYBOARD_TEXT           0x01    /* text: bytes 3… printable ASCII, \t or \n, typed on a US layout */
 #define KEYBOARD_TEXT_MAX       64      /* characters in a text keystroke */
 
-/* USB mouse (MSG_HW_MOUSE) payload: MOUSE_INPUTS source references, X, Y (floating),
-   then its left, right and middle buttons (boolean); then options; then its top speed,
-   2 bytes BE, counts a second, MOUSE_SPEED_MIN to MOUSE_SPEED_MAX. */
-#define MOUSE_INPUTS            5
-#define MOUSE_CENTRED           0x01    /* options bit 0: X and Y run 0 to 1, still at 0.5 (a 2D slider's);
-                                           clear, -1 to 1, still at 0 */
+/* USB mouse (MSG_HW_MOUSE). Its config payload is its pad's settings, for the UI (the
+   device ignores it): options; pointer speed, MOUSE_SPEED_MIN to MOUSE_SPEED_MAX tenths
+   of a count per pixel dragged; scroll step, MOUSE_STEP_MIN to 255 pixels a wheel click;
+   then MOUSE_GESTURES gestures, in MOUSE_GESTURE_ order, each 3 bytes: the keyboard
+   modifiers it holds (HID bits, MOUSE_MODIFIERS), the mouse buttons it holds
+   (MOUSE_BUTTONS) and what it does (MOUSE_ACT_). */
+#define MOUSE_PAYLOAD_LEN       18
+#define MOUSE_TAP_CLICK         0x01    /* options bit 0: a one-finger tap on the pad clicks */
+#define MOUSE_SCROLL_REVERSE    0x02    /* options bit 1: scrolling follows the finger, as on a phone */
 #define MOUSE_SPEED_MIN         1
-#define MOUSE_SPEED_MAX         5000    /* counts a second */
+#define MOUSE_SPEED_MAX         100
+#define MOUSE_STEP_MIN          4
+#define MOUSE_GESTURES          5
+#define MOUSE_GESTURE_DRAG2     0       /* two fingers dragged */
+#define MOUSE_GESTURE_DRAG3     1       /* three fingers dragged */
+#define MOUSE_GESTURE_PINCH     2       /* two fingers spread or pinched */
+#define MOUSE_GESTURE_TAP2      3       /* a two-finger tap */
+#define MOUSE_GESTURE_TAP3      4       /* a three-finger tap */
+#define MOUSE_ACT_NONE          0
+#define MOUSE_ACT_MOVE          1       /* a drag or pinch moves the pointer, holding its modifiers and buttons */
+#define MOUSE_ACT_SCROLL        2       /* a drag or pinch turns the wheels, holding its modifiers */
+#define MOUSE_ACT_CLICK         3       /* a tap clicks its buttons, holding its modifiers */
+#define MOUSE_MODIFIERS         0x0F    /* left Ctrl, Shift, Alt and Win (GUI) */
+#define MOUSE_BUTTONS           0x07    /* left 1, right 2, middle 4, as HID numbers them */
+
+/* A USB mouse's command (PKT_COMMAND), MOUSE_REPORT_LEN bytes: the mouse buttons held
+   (MOUSE_BUTTONS); the keyboard modifiers held (MOUSE_MODIFIERS); the pointer's move in
+   counts, X (right) then Y (down), each a signed 16-bit BE number; then the wheel's
+   clicks (up) and the horizontal wheel's (right), each a signed byte. Moves and clicks
+   add up; what is held holds until the next command, or MOUSE_HOLD_MS without one. */
+#define MOUSE_REPORT_LEN        8
+#define MOUSE_HOLD_MS           1000
+#define MOUSE_KEEPALIVE_MS      300     /* the UI repeats a command this often while anything is held */
 
 /* PWM output (MSG_HW_PWM) payload limits and options. */
 #define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
@@ -438,13 +463,26 @@ static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len, uint8_
     return 1;
 }
 
-/* Whether a USB mouse's payload is one the device runs: its five source references,
-   options it knows, and a top speed from MOUSE_SPEED_MIN to MOUSE_SPEED_MAX. */
-static inline int mouse_payload_valid(const uint8_t *pay, uint8_t len, uint8_t flags) {
-    uint8_t at = MOUSE_INPUTS * msg_ref_len(flags);     /* its options, after the references */
-    if (len != at + 3 || (pay[at] & ~MOUSE_CENTRED)) return 0;
-    uint16_t speed = (uint16_t)(pay[at + 1] << 8 | pay[at + 2]);
-    return speed >= MOUSE_SPEED_MIN && speed <= MOUSE_SPEED_MAX;
+/* Whether a USB mouse's config payload is one the UI writes: its length, options it
+   knows, speeds in range, and each gesture holding known modifiers and buttons and
+   doing what its kind can: a drag or pinch moves or scrolls, a tap clicks. */
+static inline int mouse_payload_valid(const uint8_t *pay, uint8_t len) {
+    if (len != MOUSE_PAYLOAD_LEN || (pay[0] & ~(MOUSE_TAP_CLICK | MOUSE_SCROLL_REVERSE))) return 0;
+    if (pay[1] < MOUSE_SPEED_MIN || pay[1] > MOUSE_SPEED_MAX || pay[2] < MOUSE_STEP_MIN) return 0;
+    for (int g = 0; g < MOUSE_GESTURES; g++) {
+        const uint8_t *q = pay + 3 + 3 * g;
+        int tap = g == MOUSE_GESTURE_TAP2 || g == MOUSE_GESTURE_TAP3;
+        if ((q[0] & ~MOUSE_MODIFIERS) || (q[1] & ~MOUSE_BUTTONS)) return 0;
+        if (q[2] != MOUSE_ACT_NONE && q[2] != (tap ? MOUSE_ACT_CLICK : MOUSE_ACT_MOVE)
+            && !(!tap && q[2] == MOUSE_ACT_SCROLL)) return 0;
+    }
+    return 1;
+}
+
+/* Whether a USB mouse's command is one the device acts on: its length, and only known
+   buttons and modifiers held. */
+static inline int mouse_report_valid(const uint8_t *pay, uint8_t len) {
+    return len == MOUSE_REPORT_LEN && !(pay[0] & ~MOUSE_BUTTONS) && !(pay[1] & ~MOUSE_MODIFIERS);
 }
 
 /* A 2D slider's home, X then Y as values: payload bytes 2-3, or without them the centre. */

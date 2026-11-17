@@ -23,7 +23,7 @@
  *     latch, counter, sine), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
  *     scan left it); then the outputs (LED, GPO, PWM, USB keyboard, stepper,
- *     servo, NeoPixels, USB mouse), which read one or two (a mouse five). NeoPixel nodes may be chained, each
+ *     servo, NeoPixels), which read one or two. NeoPixel nodes may be chained, each
  *     drawing over the one on its data line in; the last drives the LEDs.
  *
  * Core 1 evaluates the nodes in order every scan. Only the signals' values change
@@ -32,7 +32,7 @@
 
 #define PROG_SIGNALS_MAX    96
 #define PROG_NODES_MAX      64
-#define PROG_NODE_INPUTS    MOUSE_INPUTS    /* the most signals a node reads: a USB mouse's */
+#define PROG_NODE_INPUTS    LOGIC_INPUTS_MAX    /* the most signals a node reads: an AND's or OR's */
 #define PROG_NO_SIGNAL      0xFF    /* a node input wired to nothing: it reads 0 */
 #define PROG_NO_NODE        0xFF    /* a NeoPixel node with nothing on its data line in */
 #define PROG_ADC_VOLTS      3.3f    /* an ADC signal at ADC_RAW_FULL */
@@ -49,7 +49,7 @@ typedef struct {
     uint16_t id;
     uint8_t pin;            // GPO, PWM, GPIO input, DS18B20, ultrasonic ranger: its GPIO; ADC: its channel;
                             // an encoder: its A
-    uint8_t options;        // GPIO input: GPI_ options; USB mouse: MOUSE_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options;
+    uint8_t options;        // GPIO input: GPI_ options; PWM: PWM_ options; compare: COMPARE_ABOVE or _BELOW; scale: SCALE_ options;
                             // stepper: STEPPER_ options; an encoder: ENCODER_ options
     uint8_t out;            // an input or logic: the signal it writes; a clock: its hour's, then its
                             // minute's and second's follow
@@ -57,8 +57,7 @@ typedef struct {
                             // an encoder: of pressed, its output 1; an ultrasonic ranger: of echo, its output 1
     uint8_t in_count;       // the signals it reads
     uint8_t in[PROG_NODE_INPUTS];   // logic or an output: the signals it reads; a PWM's duty, then its
-                                    // frequency; a latch's set, then its reset; a counter's count, then its reset;
-                                    // a USB mouse's X, Y, left, right and middle
+                                    // frequency; a latch's set, then its reset; a counter's count, then its reset
     uint8_t feedback;       // logic: bit k set when in[k] comes through a feedback wire
     float in_full[2];       // a PWM: the value of each input that gives its max (a slider's 1, an ADC's 3.3 V);
                             // a servo or NeoPixels: its input's, in_full[0]
@@ -85,10 +84,7 @@ typedef struct {
     uint8_t enc_pins[3];                    // an encoder: the GPIO of A, B and its switch (ENCODER_NO_BUTTON: none)
     uint16_t enc_steps;                     // an encoder: its position's top, its full scale
     uint16_t range;                         // an ultrasonic ranger: as far as it looks, cm, its full scale
-    uint16_t speed;                         // a USB mouse: counts a second at its X's or Y's full tilt
 } prog_node;
-
-_Static_assert(PROG_NODE_INPUTS >= LOGIC_INPUTS_MAX, "a node reads an AND's or OR's inputs");
 
 // What a logic node keeps from one scan to the next, besides its output.
 typedef struct {

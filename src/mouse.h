@@ -2,19 +2,23 @@
 #define MOUSE_H_INCLUDED
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /*
- * USB mouse nodes (MSG_HW_MOUSE), on core 0. Core 1 runs nothing for them: each
- * pass of core 0's main loop reads their signals in the program core 1 runs (X, Y,
- * and the left, right and middle buttons) and moves the PC's pointer over USB.
- * PROTOCOL.md, "USB mice", has more.
+ * The USB mouse (MSG_HW_MOUSE), on core 0. Its pad in the Command view sends
+ * commands (PKT_COMMAND, MOUSE_REPORT_LEN bytes): the buttons and keyboard modifiers
+ * held, and how far to move the pointer and turn the wheels. Core 0 sends them to the
+ * PC over USB; core 1 and the graph take no part. PROTOCOL.md, "USB mice", has more.
  */
 
 // Before the first mouse_task.
 void mouse_init(void);
 
-// Move the pointer and press the buttons as the mouse nodes' signals say; call it
-// from core 0's main loop. True while the pointer moves or a report is waiting.
+// A command from the mouse's pad: a payload mouse_report_valid accepts.
+void mouse_command(const uint8_t *pay);
+
+// Keep the PC up to date, and let go of everything held once commands stop for
+// MOUSE_HOLD_MS; call it from core 0's main loop. True while a report is waiting.
 bool mouse_task(void);
 
 // TinyUSB's HID callbacks for the mouse's interface (src/keyboard.c has them):
