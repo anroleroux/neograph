@@ -40,6 +40,8 @@
 
 /* {{keyboard-js}} */
 
+/* {{mouse-js}} */
+
 /* {{logic-js}} */
 
 /* {{sub-js}} */

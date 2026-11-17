@@ -89,7 +89,8 @@ static uint8_t outputs_of(uint8_t type) {
 
 /* Whether a message holds source references, which the UI writes with their outputs. */
 static bool has_refs(uint8_t type) {
-    return type == MSG_HW_LED || type == MSG_HW_GPO || type == MSG_HW_PWM || type == MSG_HW_KEYBOARD || type == MSG_HW_STEPPER
+    return type == MSG_HW_LED || type == MSG_HW_GPO || type == MSG_HW_PWM || type == MSG_HW_KEYBOARD || type == MSG_HW_MOUSE
+        || type == MSG_HW_STEPPER
         || type == MSG_HW_SERVO || type == MSG_HW_NEOPIXEL
         || type == MSG_UI_GRAPH || type == MSG_UI_INDICATOR || (type & MSG_LOGIC_BIT && type < 0x80);
 }
@@ -310,6 +311,16 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_HW_KEYBOARD:
             if (!keyboard_payload_valid(it.pay, it.len, it.flags)) fail("keyboard payload is not one the device types; it would skip it");
             else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a keyboard is wired from something other than a button or a GPIO input");
+            break;
+        case MSG_HW_MOUSE:
+            if (!mouse_payload_valid(it.pay, it.len, it.flags)) fail("mouse payload is not one the device runs; it would skip it");
+            else {
+                /* X and Y, then the left, right and middle buttons. */
+                for (uint8_t k = 0; k < MOUSE_INPUTS; k++)
+                    check_source(p, len, msg_ref_at(it.pay + k * r, it.flags), k < 2 ? FLOATING : BOOLEAN,
+                                 k < 2 ? "a mouse's X or Y is wired from something that is not a number"
+                                       : "a mouse button is wired from something that is not on/off");
+            }
             break;
         case MSG_HW_PWM: {
             pwm_payload pwm;

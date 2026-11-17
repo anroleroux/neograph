@@ -6,10 +6,10 @@ and listed under [Known issues](#known-issues).
 
 ```mermaid
 flowchart LR
-    UI["Browser UI<br/>(ui/)"] -- "Part 1: packets over WebSocket" --- C0["Core 0<br/>network, flash, WiFi LED,<br/>USB keyboard"]
+    UI["Browser UI<br/>(ui/)"] -- "Part 1: packets over WebSocket" --- C0["Core 0<br/>network, flash, WiFi LED,<br/>USB keyboard and mouse"]
     C0 -- "Part 3: program in shared RAM,<br/>FIFO words" --- C1["Core 1<br/>runs the graph: GPIO, PWM,<br/>ADC, temperature"]
     C0 --- F[("Flash<br/>Part 2: config")]
-    C0 -- "USB keyboard" --- PC["PC"]
+    C0 -- "USB keyboard and mouse" --- PC["PC"]
 ```
 
 | Part | What it covers | Code |
@@ -18,6 +18,7 @@ flowchart LR
 | [2. Config model](#part-2-config-model) | Messages, element types, the graph, networking, flash storage | `src/config.c`, `ui/content/graph.js`, `ui/content/components/` |
 | [3. Core 0 ↔ core 1](#part-3-core-0--core-1) | The program core 1 runs, and the words between the two RP2350 cores | `src/program.c`, `src/hwman.c`, `src/main.c`, `src/config.c` |
 | [USB keyboards](#usb-keyboards) | Keystrokes typed to the PC the device is plugged into | `src/keyboard.c`, `src/usb_descriptors.c`, `ui/content/components/keyboard.js` |
+| [USB mice](#usb-mice) | Moving the pointer of the PC the device is plugged into, and pressing its buttons | `src/mouse.c`, `src/usb_descriptors.c`, `ui/content/components/mouse.js` |
 
 ## Conventions
 
@@ -330,8 +331,8 @@ and which of its outputs. Most sources have one output, 0; a
 | `MSG_FLAG_OUTPUT` (`01`) | The element ID, then its output | 3 |
 | `00` | The element ID; its output is 0 | 2 |
 
-- **The UI writes every reference with its output:** LED, GPO, PWM, USB keyboard and
-  plot messages, and a PWM's `A2` wires, have the flag set.
+- **The UI writes every reference with its output:** LED, GPO, PWM, USB keyboard, USB
+  mouse and plot messages, and a PWM's `A2` wires, have the flag set.
 - **Configs saved before sources had several outputs** have 2-byte references and the
   flag clear. The device and the UI still read them, as output 0, and the next save
   writes them with outputs. A `legacy-config` example is below.
@@ -383,6 +384,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `24` | `MSG_HW_STEPPER` | HW output: a stepper motor on four pins, through a ULN2003 | Implemented |
 | `25` | `MSG_HW_SERVO` | HW output: a hobby servo on a PWM pin | Implemented |
 | `26` | `MSG_HW_NEOPIXEL` | HW output: NeoPixels (WS2812), an array, circle or doughnut showing a graphic | Implemented |
+| `27` | `MSG_HW_MOUSE` | HW output: a USB mouse, moving the PC's pointer and pressing its buttons; five inputs | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
@@ -458,12 +460,14 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `25` Servo | 12 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin · bytes 4–5: angles at input 0 and 1 · bytes 6–9: pulses at 0° and 180° · bytes 10–11: speed limit. See [Servos](#servos). |
 | `26` NeoPixels | 20–38 | Bytes 0–2: source reference · bytes 3–5: on/off source reference (each 0 = not connected) · byte 6: GPIO pin · byte 7: layout · byte 8: options · byte 9: brightness · byte 10: the bytes of its size, *k* · then its size · then its graphic: its type, the bytes of its settings, and those · then, in a chain, its data line in's source reference. See [NeoPixels](#neopixels). |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
+| `27` USB mouse | 18 | Bytes 0–14: five source references (each 0 = not connected): X and Y, floating; then its left, right and middle buttons, boolean · byte 15: options, bit 0 `MOUSE_CENTRED`: X and Y run 0 to 1, still at 0.5 (UI default on); clear, −1 to 1, still at 0. Other bits are 0 · bytes 16–17: its top speed, counts a second, big endian, `MOUSE_SPEED_MIN` (1) to `MOUSE_SPEED_MAX` (5000; UI default 800). See [USB mice](#usb-mice). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
 shorter, and so is everything after it: an LED is 2 bytes, a GPO 3, a PWM 15, a
-stepper 21, a servo 11, NeoPixels 18–33, a plot 3–19 and a keyboard 5 or 4–67.
-`pwm_payload_read`, `stepper_payload_read`, `servo_payload_read`,
-`neopixel_payload_read` and `keyboard_payload_valid` in `src/protocol.h` read either.
+stepper 21, a servo 11, NeoPixels 18–33, a plot 3–19, a keyboard 5 or 4–67 and a
+mouse 13. `pwm_payload_read`, `stepper_payload_read`, `servo_payload_read`,
+`neopixel_payload_read`, `keyboard_payload_valid` and `mouse_payload_valid` in
+`src/protocol.h` read either.
 
 #### GPIO pins
 
@@ -541,9 +545,9 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `36` ultrasonic ranger's echo (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4D` logic | 0 or 1 (`00` / `FF`) |
+| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `36` ultrasonic ranger's echo (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `27` USB mouse's buttons, `01` light, `41`–`44` and `48`–`4D` logic | 0 or 1 (`00` / `FF`) |
 | NeoPixel data | `26` NeoPixels' data line out (output 0) | `26` NeoPixels' data line in (after their settings) | What its chain draws on its LEDs; see [NeoPixel chains](#neopixel-chains) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `35` clock's hour, minute and second (outputs 0–2), `36` ultrasonic ranger's distance (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1), `4D` sine | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps; a clock's hour 0 to 23, its minute and second 0 to 59; an ultrasonic ranger's distance in cm, up to its range |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `35` clock's hour, minute and second (outputs 0–2), `36` ultrasonic ranger's distance (output 0), `45` scale, `46` min, `47` max, `4C` counter's count (output 1), `4D` sine | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `27` USB mouse's X and Y, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps; a clock's hour 0 to 23, its minute and second 0 to 59; an ultrasonic ranger's distance in cm, up to its range |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -619,7 +623,7 @@ When a config arrives, the UI rebuilds the graph from it:
   as a green bar along its top row.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `30` core temperature, `31` GPIO input,
+  `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `27` USB mouse, `30` core temperature, `31` GPIO input,
   `32` ADC, `33` DS18B20, `34` rotary encoder, `35` clock, `36` ultrasonic ranger, the logic `40`–`4D`
   and a block's copy `60`) becomes a node with the message's ID. Messages marked
   `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
@@ -628,12 +632,12 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a rotary encoder its pins, steps and options (pins another node has keep its own), an ultrasonic ranger its pin and range, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a rotary encoder its pins, steps and options (pins another node has keep its own), an ultrasonic ranger its pin and range, a GPO its pin, a USB keyboard its keystroke, a USB mouse its input range and top speed, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
   restored node of the output's [type](#wire-types): an LED's, GPO's, USB keyboard's or light's button, GPIO input or logic, a plot's or compare's slider, 2D slider, ADC or core temperature,
-  each of an AND's, OR's, min's or max's inputs, a latch's set and reset sources, the other logic's input, and the floating sources of a PWM's parameters that follow an input. A reference without an output
+  each of an AND's, OR's, min's or max's inputs, a latch's set and reset sources, a USB mouse's X, Y and buttons, the other logic's input, and the floating sources of a PWM's parameters that follow an input. A reference without an output
   (a config saved before them) is to output 0. Each wire is shaped by its `A2` message; without one,
   the wire is drawn straight between the nodes.
 - **Order number:** from the node's `A5` message. Without one, the node has none.
@@ -1377,6 +1381,54 @@ A momentary button `n1` typing Ctrl+Alt+Delete, and a toggle button `n3` typing
 23 01 00 04 0A  00 03 00 01 68 65 6C 6C 6F 0A   # keyboard n4 ← n3: text "hello\n"
 ```
 
+### USB mice
+
+A USB mouse node (`27`) moves the pointer of the PC the device is plugged into, and
+presses its buttons, over its USB port. It has five inputs: **X** and **Y**, floating,
+how fast the pointer moves each way; and its **left**, **right** and **middle**
+buttons, boolean, each pressed while its input is on.
+
+- **The USB port is three devices.** The PC sees a mouse beside the
+  [keyboard](#usb-keyboards) and the serial console. It comes up whatever the graph;
+  the pointer moves only when a mouse node tells it to.
+- **X and Y are speeds, not places.** Each is how far its input is tilted from still,
+  −1 to 1, times the node's top speed, in counts a second: X moves the pointer right,
+  Y up. With `MOUSE_CENTRED` (the UI default) an input runs 0 to 1 and is still at
+  0.5, as a [2D slider's](#2d-sliders) X and Y: one that returns home is a joystick.
+  Without it, it runs −1 to 1 and is still at 0 (a [scale](#logic) to −1–1, or a
+  [sine](#sine-waves) with offset 0). Beyond those ends it moves as at the end.
+- **Still near the middle.** Within 2 % of still (`MOUSE_DEAD_ZONE` in
+  `src/mouse.c`) an input is still, so a 2D slider at its home (`80`, 0.502) doesn't
+  creep; past it, the speed grows from 0.
+- **Counts are the PC's.** A count is the smallest step a mouse reports; the PC turns
+  counts into pixels with its own pointer speed and acceleration, so the same top speed
+  moves the pointer further on some PCs.
+- **Buttons.** Each is pressed while its input is on (`VALUE_HALF` and up) and let go
+  when it goes off: a momentary button clicks, a toggle button holds a drag.
+- **Not wired** is still, or not pressed.
+- **Several mice** move one pointer: their speeds add, and a button is pressed while
+  any of them presses it.
+- **No PC, no movement.** While nothing is listening on USB nothing builds up, so the
+  pointer doesn't jump when it is plugged in.
+- **On the device.** Core 1 runs nothing for a mouse. Core 0 reads its signals in the
+  program core 1 runs each pass of its main loop (every 1 ms while the pointer moves,
+  10 ms otherwise), adds up the counts over the time since the last, and sends the PC
+  a report of whole counts, up to 127 a report each way, whenever there is a move or a
+  button has changed. A GPIO input or a 2D slider in the browser reaches it alike.
+
+A 2D slider `n1` that returns home moving the pointer at up to 800 counts a second,
+with momentary buttons `n3` and `n4` for the left and right buttons:
+
+```hex example=mouse-config
+0A 00 29                                        # Config, 41 bytes
+13 00 00 01 01  01                              # 2D slider n1, returns home
+10 00 00 03 01  01                              # button n3, momentary
+10 00 00 04 01  01                              # button n4, momentary
+27 01 00 02 12  00 01 00  00 01 01              # mouse n2: X ← n1 X, Y ← n1 Y
+                00 03 00  00 04 00  00 00 00    #   left ← n3, right ← n4, middle not connected
+                01 03 20                        #   centred, top speed 800 counts a second
+```
+
 ### Stepper motors
 
 A stepper node (`24`) turns a unipolar stepper motor, such as a 28BYJ-48, through a
@@ -1834,7 +1886,7 @@ The RP2350 has two cores:
 
 - **Core 0** runs networking and flash, and drives the onboard LED. The LED is
   attached to the WiFi chip, which only core 0 talks to. It also runs USB: the
-  serial console and the [USB keyboards](#usb-keyboards).
+  serial console, the [USB keyboards](#usb-keyboards) and the [USB mice](#usb-mice).
 - **Core 1** runs the graph: it owns the GPIO pins, the PWM slices and the ADC, and
   drives the outputs from the inputs every 10 ms, without the browser.
 
@@ -1920,6 +1972,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `24` stepper | 1 signal | its four pins | See [Stepper outputs](#stepper-outputs) |
 | `25` servo | 1 signal | its pin, a 50 Hz pulse | See [Servos](#servos) |
 | `26` NeoPixels | 2 signals: its value, on/off; in a chain, the node on its data line in | its pin, through a PIO state machine; in a chain, only the last | See [NeoPixels](#neopixels) |
+| `27` USB mouse | 5 signals: X, Y, left, right, middle | the PC's pointer, through core 0 | Core 0 reads its signals; core 1 does nothing. See [USB mice](#usb-mice) |
 
 - **An output reads the signals its source references name.** A reference to an
   element that isn't in the program, or to nothing (ID 0), reads 0. A reference to
@@ -2048,6 +2101,17 @@ s0 n1.0 button = 0
 s1 n3.0 button = 0
 KEYBOARD n2 <- s0
 KEYBOARD n4 <- s1
+```
+
+For the [mouse-config example](#usb-mice): the mouse reads X and Y, `centred` (or
+`signed` without `MOUSE_CENTRED`), and its buttons; `-` is an input not connected:
+
+```program example=mouse-config
+s0 n1.0 slider-2d = 0.502
+s1 n1.1 slider-2d = 0.502
+s2 n3.0 button = 0
+s3 n4.0 button = 0
+MOUSE n2 centred speed 800 <- x s0 y s1 left s2 right s3 middle -
 ```
 
 For the [stepper-config example](#stepper-motors): its pins, drive, full steps a
@@ -2236,6 +2300,8 @@ sequenceDiagram
 - **Core 0 logs each program** it compiles, as text, on the serial console.
 - **USB keyboards:** core 0 keeps each keyboard node's keystroke as it compiles; core 1
   says when to type it.
+- **USB mice:** core 0 reads each mouse node's signals from the program core 1 runs;
+  core 1 does nothing for them.
 
 ### Core 1: the scan
 
@@ -2259,7 +2325,7 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
      from the first scan (unless it releases them); NeoPixels take their pin, a PIO
      state machine and a DMA channel (see [NeoPixels](#neopixels)), except a NeoPixel
      node whose data line out feeds another, which takes nothing;
-   - an LED, keyboard, core temperature, clock or logic takes no pin.
+   - an LED, keyboard, mouse, core temperature, clock or logic takes no pin.
 
    A node whose pin isn't [usable](#gpio-pins), or that an earlier node took, is
    skipped, and logged. Other pins are left alone: on the Pico 2 W, GPIO 23, 24, 25
@@ -2295,6 +2361,7 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - **USB keyboard:** when its signal goes from below 0.5 to 0.5 or up, core 1 sends
      core 0 a keyboard tag (below). A program starts it with its signal as it is, so a
      button left on across a save doesn't type.
+   - **USB mouse:** nothing; core 0 reads its signals (see [USB mice](#usb-mice)).
    - **PWM:** see below.
    - **Servo:** its angle moves towards the one its signal asks for, by at most its
      speed limit × 10 ms, and its pulse follows (see [Servos](#servos)). The pulse is
@@ -2523,10 +2590,16 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 17. **The USB IDs are TinyUSB's test IDs** (vendor `CAFE`, product `4005`). They are
     fine on your own PC; a board for others needs IDs of its own.
 
+**USB mouse**
+
+18. **The pointer's speed depends on the PC.** A mouse reports counts, and the PC's
+    pointer speed and acceleration turn them into pixels, so a top speed that suits
+    one PC is slow or fast on another.
+
 
 **Control**
 
-18. **A browser that connects doesn't see the device's control state.** The device
+19. **A browser that connects doesn't see the device's control state.** The device
     keeps its outputs as they are when a browser connects, but the UI starts its
     controls from the config: a toggle button off, a slider at 0, a 2D slider at its
     home. An output driven by a control shows the control's state again once the

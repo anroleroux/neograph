@@ -27,6 +27,7 @@ add_executable(twitcher
     src/clock.c
     src/timesync.c
     src/keyboard.c
+    src/mouse.c
     src/usb_descriptors.c
     src/networking/dhcpserver.c
     src/networking/ws_frame.c
@@ -61,8 +62,8 @@ target_link_libraries(twitcher
 pico_enable_stdio_usb(twitcher 1)
 pico_enable_stdio_uart(twitcher 0)
 
-# The USB port is also a keyboard (src/keyboard.c). pico_stdio_usb starts TinyUSB and
-# runs its task, as long as the app doesn't link tinyusb_device itself (SDK 2.0 to
+# The USB port is also a keyboard (src/keyboard.c) and a mouse (src/mouse.c).
+# pico_stdio_usb starts TinyUSB and runs its task, as long as the app doesn't link tinyusb_device itself (SDK 2.0 to
 # 2.1 then leave both to the app), so TinyUSB comes in through pico_stdio_usb, with
 # src/tusb_config.h, and only its descriptors are replaced by src/usb_descriptors.c:
 # its descriptors file skips them when it sees LIB_TINYUSB_DEVICE.

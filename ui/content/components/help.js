@@ -93,6 +93,10 @@ const NODE_HELP = {
         "Plugged into a PC, the device is also a USB keyboard. This node types its key combination, or its line of text, each time its input goes on.",
         "Wire a momentary button, a GPIO input or logic into it. Text is typed as on a US keyboard; \\n is Enter and \\t is Tab.",
     ],
+    mouse: [
+        "Plugged into a PC, the device is also a USB mouse. X and Y set how fast the pointer moves each way, up to the top speed; Left, Right and Middle press its buttons while they are on.",
+        "Wire a 2D slider's X and Y into it, with Return home, for a joystick, and momentary buttons or GPIO inputs for its buttons. With −1 to 1, X and Y are still at 0, as from a scale.",
+    ],
     compare: [
         "On while its number input is above (or below) the threshold. The threshold is in the input's unit: °C, volts, or 0 to 1 for a slider.",
         "Hysteresis stops it flickering near the threshold: above 40 with a hysteresis of 1 turns on above 40, and off only below 39.",

@@ -15,7 +15,7 @@ the TMP button in the HWI group.
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC, US |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
-| **USB** | USB: the device acting as a USB device | KEY |
+| **USB** | USB: the device acting as a USB device | KEY, MSE |
 | **TM** | Time: logic that waits, or runs for a set time; the clock | DLY, PLS, BLK, CLK |
 | **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX, SIN |
 | **LGC** | Logic: decisions the device makes | AND, OR, NOT, TGL, LCH, CNT |
@@ -70,7 +70,7 @@ A button tile in the Command view. Click, tap, or press Space or Enter on it.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
-| Action | Toggle, Momentary | Toggle | **Toggle:** each click turns it on or off. **Momentary:** on only while held down. Use Momentary for a USB keyboard, a pulse, a toggle node or a latch reset. |
+| Action | Toggle, Momentary | Toggle | **Toggle:** each click turns it on or off. **Momentary:** on only while held down. Use Momentary for a USB keyboard, a mouse click, a pulse, a toggle node or a latch reset. |
 
 ### Slider: `UII-SLD`
 
@@ -583,6 +583,32 @@ it. Text is typed as on a US keyboard layout.
 | Hold | Ctrl, Shift, Alt, Win (each on or off) | None | With Key: the modifiers held while the key is pressed. |
 | Key | Letters, digits, punctuation, F1–F24, Enter, Escape, arrows and more | Enter | With Key: the key pressed. |
 | Text | Up to 64 characters; `\n` is Enter, `\t` is Tab | Hello | With Text: what it types. |
+
+### USB mouse: `USB-MSE`
+
+| | |
+|---|---|
+| Category | Hardware output (USB) |
+| Inputs | **X** and **Y**: numbers; **Left**, **Right** and **Middle**: on/off |
+| Default label | Mouse |
+
+Plugged into a PC, the device is also a USB mouse. X and Y set how fast the pointer
+moves, right and up, up to the top speed; each button is pressed while its input is
+on. For a joystick, wire a 2D slider's X and Y into it and set the slider to Return
+home; for clicks, momentary buttons or GPIO inputs. A toggle button holds a button
+down, for a drag.
+
+A wire drawn in takes the first input of its kind with nothing wired yet: X, then Y
+for numbers; Left, Right, then Middle for on/off. Pick another source for any input
+in its settings; one source may drive several. An input with nothing wired is still,
+or not pressed. Near still (within 2 % of the way to an end) the pointer doesn't
+move, so a 2D slider back home doesn't creep. Several mouse nodes move one pointer.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| X, Y, Left, Right, Middle | None, or any source of its kind | None | The source of each input. |
+| X and Y | 0 to 1, −1 to 1 | 0 to 1 | **0 to 1:** still at 0.5, as a 2D slider. **−1 to 1:** still at 0, as from a scale or a sine. |
+| Top speed (counts/s) | 1 to 5000 | 800 | How fast the pointer moves with X or Y at an end, in mouse counts a second. The PC's own pointer speed turns counts into pixels. |
 
 ---
 

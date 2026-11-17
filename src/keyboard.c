@@ -6,6 +6,7 @@
 #include "device/usbd_pvt.h"    // usbd_defer_func
 
 #include "keyboard.h"
+#include "mouse.h"
 #include "protocol.h"
 
 #define KEYBOARD_NODES_MAX  16
@@ -48,7 +49,7 @@ static void type_next(void *param) {
     (void)param;
 
     while (tail != head) {
-        if (!tud_hid_ready()) return;    // busy, or the PC isn't listening
+        if (!tud_hid_n_ready(HID_INSTANCE_KEYBOARD)) return;    // busy, or the PC isn't listening
 
         const keystroke *k = &queue[tail % KEYBOARD_QUEUE];
         uint16_t keys = k->mode == KEYBOARD_COMBO ? 1 : k->len;
@@ -65,7 +66,7 @@ static void type_next(void *param) {
                     codes[0] = ascii_keys[c][1];
                 }
             }
-            if (tud_hid_keyboard_report(0, modifiers, codes)) report++;
+            if (tud_hid_n_keyboard_report(HID_INSTANCE_KEYBOARD, 0, modifiers, codes)) report++;
             return;
         }
 
@@ -74,9 +75,12 @@ static void type_next(void *param) {
     }
 }
 
+// TinyUSB's HID callbacks are the keyboard's and the mouse's (src/mouse.c): each
+// passes the mouse's on.
 void tud_hid_report_complete_cb(uint8_t instance, const uint8_t *data, uint16_t len) {
-    (void)instance; (void)data; (void)len;
-    type_next(NULL);
+    (void)data; (void)len;
+    if (instance == HID_INSTANCE_MOUSE) mouse_report_complete();
+    else type_next(NULL);
 }
 
 // Unplugged: what is waiting would be typed, out of context, when it is
@@ -84,10 +88,11 @@ void tud_hid_report_complete_cb(uint8_t instance, const uint8_t *data, uint16_t 
 void tud_umount_cb(void) {
     report = 0;
     tail = head;
+    mouse_unplugged();
 }
 
 // The PC asks for a report or sets the keyboard's LEDs (Caps Lock and the like):
-// neither is used.
+// neither is used, by the keyboard or the mouse.
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type,
                                uint8_t *buffer, uint16_t reqlen) {
     (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)reqlen;

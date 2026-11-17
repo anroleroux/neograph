@@ -350,7 +350,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US, PLT LGT, KEY, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US, PLT LGT, KEY MSE, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -2213,6 +2213,63 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(clock.wired, 'a clock\'s outputs did not wire as numbers');
     expect(clock.shown === '12:34:56|12:34:56|34|12:34:56', 'a clock showed ' + clock.shown);
     expect(clock.pay === `35 02 00 ${clock.id.toString(16).padStart(2, '0')} 03 01 00 78`, 'a clock marshals as ' + clock.pay);
+
+    // ── A USB mouse: a 2D slider's X and Y move the pointer, buttons press its
+    // buttons. A wire drawn in takes the first input of its type with none yet. ──
+    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a USB mouse"]').dispatchEvent('click');
+    expect(await keyRows() === 'Label:|X:|Y:|Left:|Right:|Middle:|X and Y:|Top speed (counts/s):',
+        'a new mouse does not show its settings: ' + await keyRows());
+    await choice('X and Y', '−1 to 1');
+    const mouse = await page.evaluate(() => {
+        const m = selected;
+        const defaults = [m instanceof uiMouse, m.label, m.speed, m.describe()].join();
+        const pad = addNode(MSG_UI_SLIDER_2D), left = addNode(MSG_UI_BUTTON), right = addNode(MSG_UI_BUTTON),
+            slider = addNode(MSG_UI_SLIDER), plot = addNode(MSG_UI_GRAPH);
+        const wired = [
+            !!createEdge(pad.name, m.name),             // X; the pad then wires from Y
+            !!createEdge(pad.name, m.name),             // Y
+            createEdge(slider.name, m.name) === null,   // no number input left
+            !!createEdge(left.name, m.name),
+            !!createEdge(right.name, m.name),
+            createEdge(m.name, plot.name) === null,     // a mouse is no source
+        ].every(Boolean);
+        const refused = [m.setRole('x', left), m.setRole('left', slider), m.setRole('wheel', left), m.setSpeed('0'),
+            m.setSpeed('5001'), m.setSpeed('1.5'), m.setRange('x')].every(r => r === false);
+        m.setRole('middle', left);                      // one button for two: one wire
+        m.setSpeed('1200');
+        const roles = () => MOUSE_ROLES.map(([role]) => `${m[role + 'Source']?.name ?? '-'}:${m[role + 'Output']}`).join();
+        const before = [roles(), m.inConns().length, m.describe()].join('|');
+        const pay = m.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ');
+        const ids = [pad.id, left.id, right.id, m.id];
+        // Its messages, and its sources', restore as they were.
+        const msgs = [pad, left, right, m].flatMap(n => n.marshal());
+        // Taking the left button's wire out takes it off both inputs it drove.
+        m.inConns().find(c => c.start.node === left).remove();
+        const unwired = roles();
+        saveGraph();
+        restoreGraph(configMessages(Uint8Array.from(msgs)));
+        const back = elements['n' + ids[3]];
+        const restored = [back instanceof uiMouse, back.centred, back.speed, '',
+            MOUSE_ROLES.map(([role]) => `${back[role + 'Source']?.name ?? '-'}:${back[role + 'Output']}`).join(),
+            back.inConns().length, back.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ') === pay].join('|');
+        return { defaults, wired, refused, before, pay, ids, unwired, restored };
+    });
+    packets.push(...await sent(page));
+    const [padId, leftId, rightId, mouseId] = mouse.ids;
+    const nm = (id) => 'n' + id;
+    const byte = (v) => v.toString(16).padStart(2, '0');
+    expect(mouse.defaults === 'true,Mouse,800,Nothing wired', 'a new mouse is ' + mouse.defaults);
+    expect(mouse.wired, 'the mouse took the wrong wires');
+    expect(mouse.refused, 'the mouse took a source or setting it cannot use');
+    expect(mouse.before === [`${nm(padId)}:0,${nm(padId)}:1,${nm(leftId)}:0,${nm(rightId)}:0,${nm(leftId)}:0`, 4,
+        `X: 2D slider X (${nm(padId)}) · Y: 2D slider Y (${nm(padId)}) · Left: BUTTON (${nm(leftId)}) · Right: BUTTON (${nm(rightId)}) · Middle: BUTTON (${nm(leftId)})`].join('|'),
+        'the mouse is wired as ' + mouse.before);
+    expect(mouse.pay === ['27 01 00', byte(mouseId), '12', '00', byte(padId), '00', '00', byte(padId), '01', '00', byte(leftId), '00',
+        '00', byte(rightId), '00', '00', byte(leftId), '00', '00 04 b0'].join(' '), 'a mouse marshals as ' + mouse.pay);
+    expect(mouse.unwired === `${nm(padId)}:0,${nm(padId)}:1,-:0,${nm(rightId)}:0,-:0`, 'taking a wire out left ' + mouse.unwired);
+    expect(mouse.restored === `true|false|1200||${nm(padId)}:0,${nm(padId)}:1,${nm(leftId)}:0,${nm(rightId)}:0,${nm(leftId)}:0|4|true`,
+        'a mouse restored as ' + mouse.restored);
     const clockBack = await page.evaluate(() => {
         // Clock n1 at UTC-3:30 without internet time; clock n3 differs, and takes n1's.
         restoreGraph(configMessages(Uint8Array.from([0x35, MSG_FLAG_SHOWN, 0, 1, 3, 0, 0xFF, 0x2E, 0x40, 1, 0, 2, 12, 0, 1, 1, 0,

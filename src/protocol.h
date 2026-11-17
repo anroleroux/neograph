@@ -5,7 +5,7 @@
  * Protocol constants. PROTOCOL.md describes how they are used.
  *
  * The PKT_, MSG_, FIELD_, DEV_OPT_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
- * KEYBOARD_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
+ * KEYBOARD_, MOUSE_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
  * ENCODER_, ULTRASONIC_, SINE_, CLOCK_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
@@ -69,6 +69,7 @@
 #define MSG_HW_STEPPER          0x24    /* a stepper motor on four pins, through a ULN2003 */
 #define MSG_HW_SERVO            0x25    /* a hobby servo, such as an SG90, on a PWM pin */
 #define MSG_HW_NEOPIXEL         0x26    /* NeoPixels (WS2812): an array, circle or doughnut, showing a graphic */
+#define MSG_HW_MOUSE            0x27    /* a USB mouse: moves the PC's pointer and presses its buttons */
 #define MSG_HW_CORE             0x30    /* the chip's temperature */
 #define MSG_HW_GPI              0x31    /* a GPIO input pin */
 #define MSG_HW_ADC              0x32    /* an analog input pin */
@@ -296,6 +297,15 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define KEYBOARD_TEXT           0x01    /* text: bytes 3… printable ASCII, \t or \n, typed on a US layout */
 #define KEYBOARD_TEXT_MAX       64      /* characters in a text keystroke */
 
+/* USB mouse (MSG_HW_MOUSE) payload: MOUSE_INPUTS source references, X, Y (floating),
+   then its left, right and middle buttons (boolean); then options; then its top speed,
+   2 bytes BE, counts a second, MOUSE_SPEED_MIN to MOUSE_SPEED_MAX. */
+#define MOUSE_INPUTS            5
+#define MOUSE_CENTRED           0x01    /* options bit 0: X and Y run 0 to 1, still at 0.5 (a 2D slider's);
+                                           clear, -1 to 1, still at 0 */
+#define MOUSE_SPEED_MIN         1
+#define MOUSE_SPEED_MAX         5000    /* counts a second */
+
 /* PWM output (MSG_HW_PWM) payload limits and options. */
 #define PWM_FREQ_MIN            10      /* Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz */
 #define PWM_DUTY_MAX            100     /* duty cycle in percent */
@@ -426,6 +436,15 @@ static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len, uint8_
         if ((k[i] < 0x20 || k[i] > 0x7E) && k[i] != '\t' && k[i] != '\n') return 0;
     }
     return 1;
+}
+
+/* Whether a USB mouse's payload is one the device runs: its five source references,
+   options it knows, and a top speed from MOUSE_SPEED_MIN to MOUSE_SPEED_MAX. */
+static inline int mouse_payload_valid(const uint8_t *pay, uint8_t len, uint8_t flags) {
+    uint8_t at = MOUSE_INPUTS * msg_ref_len(flags);     /* its options, after the references */
+    if (len != at + 3 || (pay[at] & ~MOUSE_CENTRED)) return 0;
+    uint16_t speed = (uint16_t)(pay[at + 1] << 8 | pay[at + 2]);
+    return speed >= MOUSE_SPEED_MIN && speed <= MOUSE_SPEED_MAX;
 }
 
 /* A 2D slider's home, X then Y as values: payload bytes 2-3, or without them the centre. */

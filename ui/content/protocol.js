@@ -58,6 +58,7 @@ const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_STEPPER         = 0x24;  // a stepper motor on four pins, through a ULN2003
 const MSG_HW_SERVO           = 0x25;  // a hobby servo, such as an SG90, on a PWM pin
 const MSG_HW_NEOPIXEL        = 0x26;  // NeoPixels (WS2812): an array, circle or doughnut, showing a graphic
+const MSG_HW_MOUSE           = 0x27;  // a USB mouse: moves the PC's pointer and presses its buttons
 const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
@@ -223,6 +224,15 @@ const GPI_INVERT             = 0x04;
 const KEYBOARD_COMBO         = 0x00;  // one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key
 const KEYBOARD_TEXT          = 0x01;  // text: bytes 3… printable ASCII, \t or \n, typed on a US layout
 const KEYBOARD_TEXT_MAX      = 64;    // characters in a text keystroke
+
+// USB mouse (MSG_HW_MOUSE) payload: MOUSE_INPUTS source references, X, Y (floating),
+// then its left, right and middle buttons (boolean); then options; then its top speed,
+// 2 bytes BE, counts a second, MOUSE_SPEED_MIN to MOUSE_SPEED_MAX.
+const MOUSE_INPUTS           = 5;
+const MOUSE_CENTRED          = 0x01;  // options bit 0: X and Y run 0 to 1, still at 0.5 (a 2D slider's);
+                                      // clear, -1 to 1, still at 0
+const MOUSE_SPEED_MIN        = 1;
+const MOUSE_SPEED_MAX        = 5000;  // counts a second
 
 // PWM output (MSG_HW_PWM) payload limits and options.
 const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz
