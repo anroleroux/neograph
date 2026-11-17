@@ -311,6 +311,9 @@ static void check_config(const uint8_t *p, size_t len) {
             if (!keyboard_payload_valid(it.pay, it.len, it.flags)) fail("keyboard payload is not one the device types; it would skip it");
             else check_source(p, len, msg_ref_at(it.pay, it.flags), BOOLEAN, "a keyboard is wired from something other than a button or a GPIO input");
             break;
+        case MSG_HW_MOUSE:
+            if (!mouse_payload_valid(it.pay, it.len)) fail("mouse payload is not a pad's settings the UI writes");
+            break;
         case MSG_HW_PWM: {
             pwm_payload pwm;
             if (!pwm_payload_read(it.pay, it.len, it.flags, &pwm)) fail("PWM message is not a PWM's length; the device would skip it");
@@ -396,6 +399,11 @@ static void check_command(const uint8_t *p, size_t len) {
             if (it.len != CLOCK_SET_LEN) fail("clock command is not an hour, a minute and a second");
             else if (it.pay[0] >= CLOCK_HOURS || it.pay[1] >= CLOCK_MINUTES || it.pay[2] >= CLOCK_SECONDS)
                 fail("clock command is not a time of day; the device would ignore it");
+            continue;
+        }
+        /* The mouse's pad's: what it holds, and its moves. */
+        if (it.type == MSG_HW_MOUSE) {
+            if (!mouse_report_valid(it.pay, it.len)) fail("mouse command is not one the device acts on");
             continue;
         }
         if ((it.type & (MSG_HW_BIT | MSG_INPUT_BIT)) != MSG_INPUT_BIT) fail("command from an element that is not a UI input");

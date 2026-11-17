@@ -17,6 +17,7 @@
 #include "timesync.h"
 #include "hwman.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "protocol.h"
 #include "hardware/adc.h"
 #include "hardware/pwm.h"
@@ -74,6 +75,7 @@ static void report_signals(tcpserver *state) {
 }
 
 int main() {
+    mouse_init();
     stdio_init_all();
     
     // Allow time for serial connection to establish
@@ -138,10 +140,12 @@ int main() {
         cyw43_arch_poll();
         // Not longer than 10 ms: core 1 waits while its FIFO to core 0 is full,
         // and signals are reported several times a second. While a keystroke is
-        // being typed, 1 ms: the PC takes a key down or up each millisecond.
+        // being typed, or the mouse moves, 1 ms: the PC takes a key down or up, or
+        // a move, each millisecond.
         bool typing = keyboard_task();
+        bool moving = mouse_task();
         timesync_task();
-        cyw43_arch_wait_for_work_until(make_timeout_time_ms(typing ? 1 : 10));
+        cyw43_arch_wait_for_work_until(make_timeout_time_ms(typing || moving ? 1 : 10));
 
         // Each message from core 1 is a tag and a value (PROTOCOL.md, "Core 1 →
         // core 0"). Take all that are waiting.

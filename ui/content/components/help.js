@@ -93,6 +93,11 @@ const NODE_HELP = {
         "Plugged into a PC, the device is also a USB keyboard. This node types its key combination, or its line of text, each time its input goes on.",
         "Wire a momentary button, a GPIO input or logic into it. Text is typed as on a US keyboard; \\n is Enter and \\t is Tab.",
     ],
+    mouse: [
+        "Plugged into a PC, the device is also a USB mouse. This node is a touch pad in the Command view: one finger moves the pointer and a tap clicks; the strips scroll; the buttons are held while touched.",
+        "Two- and three-finger drags, a pinch and two- and three-finger taps do what the preset in use says, holding keys and buttons: Blender orbits with two fingers (middle-drag) and pans with three (Shift+middle-drag).",
+        "Add, rename and delete presets below; the buttons above the pad switch between them at once. Three fingers Off ignores a third finger, where a phone tracks them poorly.",
+    ],
     compare: [
         "On while its number input is above (or below) the threshold. The threshold is in the input's unit: °C, volts, or 0 to 1 for a slider.",
         "Hysteresis stops it flickering near the threshold: above 40 with a hysteresis of 1 turns on above 40, and off only below 39.",

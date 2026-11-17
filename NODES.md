@@ -15,7 +15,7 @@ the TMP button in the HWI group.
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
 | **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC, US |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
-| **USB** | USB: the device acting as a USB device | KEY |
+| **USB** | USB: the device acting as a USB device | KEY, MSE |
 | **TM** | Time: logic that waits, or runs for a set time; the clock | DLY, PLS, BLK, CLK |
 | **ANL** | Analog: logic that works on numbers | CMP, SCL, MIN, MAX, SIN |
 | **LGC** | Logic: decisions the device makes | AND, OR, NOT, TGL, LCH, CNT |
@@ -39,7 +39,7 @@ the TMP button in the HWI group.
   Hide" setting, Hide by default. Show puts a tile with its live value in the Command
   view.
 - **Order.** Every node with a tile in the Command view (UI inputs, UI outputs,
-  hardware inputs and logic) has an Order setting: a number from 1 to 65535, or none,
+  hardware inputs, logic and the USB mouse) has an Order setting: a number from 1 to 65535, or none,
   which is the default. Tiles with a number come first, lowest first. The rest follow
   in the order their nodes were added, as do tiles with the same number. Empty the
   field to take the number away.
@@ -584,6 +584,122 @@ it. Text is typed as on a US keyboard layout.
 | Key | Letters, digits, punctuation, F1–F24, Enter, Escape, arrows and more | Enter | With Key: the key pressed. |
 | Text | Up to 64 characters; `\n` is Enter, `\t` is Tab | Hello | With Text: what it types. |
 
+### USB mouse: `USB-MSE`
+
+| | |
+|---|---|
+| Category | Hardware output (USB), with its own pad |
+| Inputs, outputs | None: it takes no wires |
+| Default label | Mouse |
+
+Plugged into a PC, the device is also a USB mouse. This node is a touch pad in the
+Command view, as wide as four controls (a phone's whole width). A new mouse shows a
+row of preset buttons, the pad, and Left, Middle and Right buttons, each held while
+you touch it. Its title and two scroll strips (one right of the pad, one below) can
+be shown with **Show**.
+
+- **One finger** moves the pointer. A quick tap clicks (with Tap to click on).
+- **The strips** turn the scroll wheels, a click for each scroll step dragged.
+- **Two and three fingers** do what the preset in use says: a drag or pinch moves the
+  pointer or scrolls, while holding keys (Ctrl, Shift, Alt, Win) and mouse buttons; a
+  tap clicks buttons, with keys held. Two fingers moving the same way are a drag,
+  moving apart or together a pinch. With **Three fingers** off, a third finger is
+  ignored.
+- **Presets** hold what the gestures do. A mouse has up to 8; the buttons above the
+  pad switch between them at once, even mid-use. A new mouse has two:
+
+  | Gesture | Standard | Blender |
+  |---|---|---|
+  | Two-finger drag | Scroll | Move, holding Middle: orbit |
+  | Three-finger drag | Move, holding Left: drag | Move, holding Shift and Middle: pan |
+  | Pinch | Scroll, holding Ctrl: zoom | Scroll: zoom |
+  | Two-finger tap | Click Right | Click Right |
+  | Three-finger tap | Click Middle | Click Middle |
+
+- **Nothing sticks.** If the browser goes quiet for a second with something held (the
+  page closed, the phone locked, the WiFi dropped), the device lets go of it.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Show | Title, Presets, Vertical scroll, Horizontal scroll, Buttons (each on or off) | Presets, Buttons | The parts of the tile shown. The pad grows into the room of those hidden. The preset buttons show only with two presets or more. |
+| Tap to click | On, Off | On | Whether a quick one-finger tap clicks the left button. |
+| Scrolling | Traditional, Natural | Traditional | **Traditional:** a finger up scrolls up, as a wheel. **Natural:** the page follows the finger, as on a phone. |
+| Three fingers | On, Off | On | **Off:** a third finger on the pad is ignored, and the three-finger gestures leave these settings. |
+| Pointer speed | 0.1 to 10 | 2.0 | Mouse counts per pixel dragged. The PC's own pointer speed also applies. |
+| Scroll step (px) | 4 to 255 | 24 | Pixels dragged for each click of the wheel. |
+| Preset | The mouse's presets | Standard | The preset in use, and the one the gesture settings below change. |
+| Preset name | Up to 12 characters | | Renames the preset in use. Each name is its own. |
+| Presets | Copy, + Standard, + Blender, Delete | | **Copy** adds a copy of the preset in use; **+ Standard** and **+ Blender** add those afresh; **Delete** deletes the preset in use (not the last one). A new preset is put in use. |
+| Two-finger drag, Three-finger drag, Pinch | Nothing, Move pointer, Scroll | as the preset | What the gesture does. A pinch apart moves up, or scrolls up. |
+| Two-finger tap, Three-finger tap | Nothing, Click | as the preset | What the tap does. |
+| Keys | Ctrl, Shift, Alt, Win (each on or off) | as the preset | Held on the keyboard while the gesture lasts: pressed before its buttons, let go after them. |
+| Buttons | Left, Middle, Right (each on or off) | as the preset | With Move pointer: held while the gesture lasts. With Click: clicked. |
+
+---|---|
+| Category | Hardware output (USB), with its own pad |
+| Inputs, outputs | None: it takes no wires |
+| Default label | Mouse |
+
+Plugged into a PC, the device is also a USB mouse. This node is a touch pad in the
+Command view: as wide as four controls (a phone's whole width), with a vertical scroll
+strip right of it, a horizontal one below, and Left, Middle and Right buttons, each
+held while you touch it.
+
+- **One finger** moves the pointer. A quick tap clicks (with Tap to click on).
+- **The strips** turn the scroll wheels, a click for each scroll step dragged.
+- **Two and three fingers** do what the gesture settings say: a drag or pinch moves the
+  pointer or scrolls, while holding keys (Ctrl, Shift, Alt, Win) and mouse buttons; a
+  tap clicks buttons, with keys held. Two fingers moving the same way are a drag,
+  moving apart or together a pinch.
+- **Nothing sticks.** If the browser goes quiet for a second with something held (the
+  page closed, the phone locked, the WiFi dropped), the device lets go of it.
+
+Two presets set the five gestures at once:
+
+| Gesture | Standard | Blender |
+|---|---|---|
+| Two-finger drag | Scroll | Move, holding Middle: orbit |
+| Three-finger drag | Move, holding Left: drag | Move, holding Shift and Middle: pan |
+| Pinch | Scroll, holding Ctrl: zoom | Scroll: zoom |
+| Two-finger tap | Click Right | Click Right |
+| Three-finger tap | Click Middle | Click Middle |
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Preset | Standard, Blender | Standard | Sets every gesture below. Changing a gesture leaves no preset marked. |
+| Tap to click | On, Off | On | Whether a quick one-finger tap clicks the left button. |
+| Scrolling | Traditional, Natural | Traditional | **Traditional:** a finger up scrolls up, as a wheel. **Natural:** the page follows the finger, as on a phone. |
+| Show | Title, Vertical scroll, Horizontal scroll, Buttons (each on or off) | All on | The parts of the tile shown. The pad grows into the room of those hidden. |
+| Pointer speed | 0.1 to 10 | 2.0 | Mouse counts per pixel dragged. The PC's own pointer speed also applies. |
+| Scroll step (px) | 4 to 255 | 24 | Pixels dragged for each click of the wheel. |
+| Two-finger drag, Three-finger drag, Pinch | Nothing, Move pointer, Scroll | as the preset | What the gesture does. A pinch apart moves up, or scrolls up. |
+| Two-finger tap, Three-finger tap | Nothing, Click | as the preset | What the tap does. |
+| Keys | Ctrl, Shift, Alt, Win (each on or off) | as the preset | Held on the keyboard while the gesture lasts: pressed before its buttons, let go after them. |
+| Buttons | Left, Middle, Right (each on or off) | as the preset | With Move pointer: held while the gesture lasts. With Click: clicked. |
+
+---|---|
+| Category | Hardware output (USB) |
+| Inputs | **X** and **Y**: numbers; **Left**, **Right** and **Middle**: on/off |
+| Default label | Mouse |
+
+Plugged into a PC, the device is also a USB mouse. X and Y set how fast the pointer
+moves, right and up, up to the top speed; each button is pressed while its input is
+on. For a joystick, wire a 2D slider's X and Y into it and set the slider to Return
+home; for clicks, momentary buttons or GPIO inputs. A toggle button holds a button
+down, for a drag.
+
+A wire drawn in takes the first input of its kind with nothing wired yet: X, then Y
+for numbers; Left, Right, then Middle for on/off. Pick another source for any input
+in its settings; one source may drive several. An input with nothing wired is still,
+or not pressed. Near still (within 2 % of the way to an end) the pointer doesn't
+move, so a 2D slider back home doesn't creep. Several mouse nodes move one pointer.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| X, Y, Left, Right, Middle | None, or any source of its kind | None | The source of each input. |
+| X and Y | 0 to 1, −1 to 1 | 0 to 1 | **0 to 1:** still at 0.5, as a 2D slider. **−1 to 1:** still at 0, as from a scale or a sine. |
+| Top speed (counts/s) | 1 to 5000 | 800 | How fast the pointer moves with X or Y at an end, in mouse counts a second. The PC's own pointer speed turns counts into pixels. |
+
 ---
 
 ## LGC: Logic
@@ -1011,7 +1127,7 @@ Pressing the button sets the latch, which runs the blink. The counter counts the
 blinks; at the third, Done resets the latch, which stops the blink and resets the
 counter, ready for the next press.
 
-The demo graph, which a new device starts from, has this loop inside a block,
+The offline demo's graph has this loop inside a block,
 "Blink 3": a momentary button **Blink 3 times** → the block → a light in the Command
 view. The block's input, Start, sets the latch; its output, Blink, is the blink.
 Double-click the block to see the loop. Below it, a slider **Level** drives a

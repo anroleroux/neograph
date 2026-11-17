@@ -100,8 +100,8 @@ async function open(browser) {
 }
 
 // Connect from the Network view and play the device's greeting, and show the Graph
-// view. A first-boot device gets the demo graph: with `demo` false, TEST_GRAPH
-// replaces it.
+// view. A first-boot device has an empty graph: TEST_GRAPH is put in it, or with
+// `demo`, the browser-only build's demo graph.
 async function connect(page, config, demo = false) {
     await page.locator('.device-connect').first().dispatchEvent('click');
     await page.waitForFunction(() => window.__ws && window.__ws.readyState === 1);
@@ -110,8 +110,10 @@ async function connect(page, config, demo = false) {
         window.__ws.receive(cfg);
         window.__ws.receive('uptime 5');     // telemetry text frame
     }, [DEVICE_ID, config]);
-    if (config === FIRST_BOOT_CONFIG && !demo) {
-        await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
+    if (config === FIRST_BOOT_CONFIG) {
+        expect(await page.evaluate(() => Object.keys(elements).length) === 0, 'a first-boot device does not show an empty graph');
+        if (demo) await page.evaluate(() => demoGraph());
+        else await page.evaluate((g) => restoreGraph(configMessages(Uint8Array.from(g))), TEST_GRAPH);
     }
     await page.evaluate(() => toGraph());
 }
@@ -350,7 +352,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US, PLT LGT, KEY, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US, PLT LGT, KEY MSE, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -1126,7 +1128,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     // ── Logic: the core temperature above 40 °C, and a switch, run a fan on the
     // GPO through a compare, an AND and a delay; a NOT lights the LED while it is off ──
     ({ page, errors } = await open(browser));
-    await connect(page, FIRST_BOOT_CONFIG);          // the demo graph: button n1, LED n2 ← n1, GPO n3
+    await connect(page, FIRST_BOOT_CONFIG);          // the test graph: button n1, LED n2 ← n1, GPO n3
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="anl"]').dispatchEvent('click');
     await page.locator('#add [title="Add a compare"]').dispatchEvent('click');       // n4
@@ -2213,6 +2215,227 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(clock.wired, 'a clock\'s outputs did not wire as numbers');
     expect(clock.shown === '12:34:56|12:34:56|34|12:34:56', 'a clock showed ' + clock.shown);
     expect(clock.pay === `35 02 00 ${clock.id.toString(16).padStart(2, '0')} 03 01 00 78`, 'a clock marshals as ' + clock.pay);
+
+    // ── A USB mouse: a touch pad in the Command view. Its settings, then fingers on
+    // its pad, strips and buttons, and the commands they send. ──
+    await page.locator('#add .group[data-group="usb"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a USB mouse"]').dispatchEvent('click');
+    const shared = 'Label:|Show:|Tap to click:|Scrolling:|Three fingers:|Pointer speed:|Scroll step (px):|Preset:|Preset name:|Presets:';
+    expect(await keyRows() === shared + '|Two-finger drag:|Keys:|Three-finger drag:|Keys:|Buttons:|Pinch:|Keys:|Two-finger tap:|Keys:|Buttons:'
+        + '|Three-finger tap:|Keys:|Buttons:|Order:',
+        'a new mouse does not show its settings: ' + await keyRows());
+    await choice('Three fingers', 'Off');
+    expect(await keyRows() === shared + '|Two-finger drag:|Keys:|Pinch:|Keys:|Two-finger tap:|Keys:|Buttons:|Order:',
+        'without three fingers a mouse shows ' + await keyRows());
+    await choice('Three fingers', 'On');
+    await select('Preset').selectOption('1');
+    expect(await keyRows() === shared + '|Two-finger drag:|Keys:|Buttons:|Three-finger drag:|Keys:|Buttons:|Pinch:|Keys:|Two-finger tap:|Keys:|Buttons:'
+        + '|Three-finger tap:|Keys:|Buttons:|Order:',
+        'the Blender preset shows ' + await keyRows());
+    const mouse = await page.evaluate(async () => {
+        const m = selected, btn = addNode(MSG_UI_BUTTON), led = addNode(MSG_HW_LED);
+        const names = () => m.presets.map(p => p.name).join('/') + '@' + m.active;
+        const settings = [names(), m.gestures[MOUSE_GESTURE_DRAG3].mods, m.gestures[MOUSE_GESTURE_DRAG3].buttons,
+            m.setSpeed('0') === false && m.setSpeed('10.1') === false && m.setStep('3') === false
+                && m.setAct(MOUSE_GESTURE_TAP2, MOUSE_ACT_MOVE) === false && m.setAct(MOUSE_GESTURE_PINCH, MOUSE_ACT_CLICK) === false
+                && m.setMods(0, 0x10) === false && m.setButtons(0, 0x08) === false && m.setActive(5) === false,
+            !!createEdge(btn.name, m.name), !!createEdge(m.name, led.name)].join();
+
+        // Presets: a copy of the one in use, renamed; one from a template; deleting; at most MOUSE_PRESETS_MAX.
+        const crud = [];
+        m.addPreset();
+        crud.push(names(), m.gestures[MOUSE_GESTURE_DRAG3].mods);
+        crud.push([m.renamePreset('standard'), m.renamePreset('x'.repeat(MOUSE_NAME_MAX + 1)), m.renamePreset(' ')].every(r => r === false));
+        m.renamePreset('Sculpt');
+        m.addPreset('Standard');
+        crud.push(names(), m.gestures[MOUSE_GESTURE_DRAG2].act);
+        m.deletePreset();
+        crud.push(names());
+        while (m.presets.length < MOUSE_PRESETS_MAX) m.addPreset();
+        crud.push(m.addPreset() === false, m.presets.at(-1).name);
+        while (m.presets.length > 3) { m.setActive(m.presets.length - 1); m.deletePreset(); }
+        m.setActive(1);
+        crud.push(names());
+
+        // A new mouse shows its presets' buttons, its pad and its buttons; with one preset, no presets' buttons.
+        const solo = addNode(MSG_HW_MOUSE);
+        const tileOf = (n) => [...document.querySelectorAll('#command .control-mouse')].find(t => t.title === n.label);
+        const partsOf = (n) => [...tileOf(n).querySelectorAll('.name, .mouse-presets, .mouse-pad, .mouse-strip, .mouse-buttons')]
+            .map(e => e.className.replace('mouse-strip ', '')).join(' ');
+        solo.setLabel('Solo');
+        buildCommandInterface();
+        crud.push(partsOf(solo));
+        solo.deletePreset();
+        crud.push(solo.deletePreset() === false, partsOf(solo));
+        solo.remove();
+
+        selectById(m.id);
+        m.setLabel('Blender');
+        m.setShown(MOUSE_HIDE_ALL);         // every part, for the fingers below
+        const pay = m.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ');
+        saveGraph();
+
+        // Synthetic pointers can't be captured: stand in for capture.
+        Element.prototype.setPointerCapture = function () {};
+        Element.prototype.hasPointerCapture = function () { return true; };
+        toCommand();
+        const tile = [...document.querySelectorAll('#command .control-mouse')].find(t => t.title === 'Blender');
+        const pad = tile.querySelector('.mouse-pad'), box = pad.getBoundingClientRect();
+        const at = [box.left + 50, box.top + 50];
+        const frames = (n = 3) => new Promise(r => { const f = () => (n-- ? requestAnimationFrame(f) : r()); f(); });
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const fire = (elm, type, id, x, y) => elm.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, bubbles: true }));
+        const commands = async () => { await frames(); return window.__sent.splice(0).map(p => [...p.slice(8)].map(b => b.toString(16).padStart(2, '0')).join('')); };
+        window.__sent.splice(0);
+        const log = {};
+
+        // One finger: 10 px right and 5 down, at 2 counts a pixel.
+        fire(pad, 'pointerdown', 1, ...at);
+        await wait(MOUSE_TAP_MS);
+        fire(pad, 'pointermove', 1, at[0] + 10, at[1] + 5);
+        fire(pad, 'pointerup', 1, at[0] + 10, at[1] + 5);
+        log.one = await commands();
+
+        // A quick tap: a left click, pressed then let go.
+        fire(pad, 'pointerdown', 1, ...at);
+        fire(pad, 'pointerup', 1, ...at);
+        await frames(); await wait(MOUSE_CLICK_MS + 50);
+        log.tap = await commands();
+
+        // Three fingers: Shift, then the middle button, then 30 px right (10 for the
+        // fingers' middle); let go: the button, then Shift.
+        [1, 2, 3].forEach(id => fire(pad, 'pointerdown', id, at[0] + 20 * id, at[1]));
+        await frames();
+        fire(pad, 'pointermove', 1, at[0] + 20 + 30, at[1]);
+        await frames();
+        [1, 2, 3].forEach(id => fire(pad, 'pointerup', id, at[0], at[1]));
+        await wait(MOUSE_TAP_MS);
+        log.pan = await commands();
+
+        // Two fingers dragged together, each finger's moves reported on its own, as a
+        // phone does: a drag (orbit: the middle button held), not a pinch, though each
+        // move on its own changes the gap between them. 36 px, 72 counts, all of it sent.
+        fire(pad, 'pointerdown', 1, at[0], at[1]);
+        fire(pad, 'pointerdown', 2, at[0] + 40, at[1]);
+        for (let k = 1; k <= 3; k++) {
+            fire(pad, 'pointermove', 1, at[0] + 12 * k, at[1]);
+            await frames(1);
+            fire(pad, 'pointermove', 2, at[0] + 40 + 12 * k, at[1]);
+            await frames(1);
+        }
+        fire(pad, 'pointerup', 1, ...at);
+        fire(pad, 'pointerup', 2, ...at);
+        await wait(MOUSE_TAP_MS);
+        log.orbit = await commands();
+
+        // Two fingers spreading 48 px apart: a pinch, the wheel up two clicks.
+        fire(pad, 'pointerdown', 1, at[0], at[1]);
+        fire(pad, 'pointerdown', 2, at[0] + 40, at[1]);
+        fire(pad, 'pointermove', 2, at[0] + 40 + 48, at[1]);
+        fire(pad, 'pointerup', 1, ...at);
+        fire(pad, 'pointerup', 2, ...at);
+        log.pinch = await commands();
+
+        // The vertical strip: 24 px up is a click of the wheel up; natural scrolling the other way.
+        const strip = tile.querySelector('.mouse-strip.vertical');
+        fire(strip, 'pointerdown', 4, 10, 200);
+        fire(strip, 'pointermove', 4, 10, 176);
+        fire(strip, 'pointerup', 4, 10, 176);
+        log.strip = await commands();
+        m.reverse = true;
+        fire(strip, 'pointerdown', 4, 10, 200);
+        fire(strip, 'pointermove', 4, 10, 176);
+        fire(strip, 'pointerup', 4, 10, 176);
+        m.reverse = false;
+        log.natural = await commands();
+
+        // Holding Right: the command again every MOUSE_KEEPALIVE_MS, until let go.
+        const right = [...tile.querySelectorAll('.mouse-buttons button')].find(b => b.textContent === 'Right');
+        fire(right, 'pointerdown', 5, 0, 0);
+        await frames();
+        const pressed = right.getAttribute('aria-pressed');
+        await wait(MOUSE_KEEPALIVE_MS + 100);
+        fire(right, 'pointerup', 5, 0, 0);
+        log.hold = await commands();
+        log.held = pressed;
+
+        // The presets' buttons on the tile use a preset at once: Standard, then Blender.
+        const bar = () => [...tile.querySelectorAll('.mouse-presets button')];
+        bar()[0].click();
+        log.live = [m.active, bar().map(b => b.getAttribute('aria-checked')).join('')];
+        bar()[1].click();
+        log.live.push(m.active, m.gestures[MOUSE_GESTURE_DRAG2].buttons);
+        log.live = log.live.join();
+
+        // Without three fingers, a third is ignored: three fingers dragged are a
+        // two-finger drag (orbit: the middle button), not Blender's pan (Shift).
+        m.setThree(false);
+        [1, 2, 3].forEach(id => fire(pad, 'pointerdown', id, at[0] + 20 * id, at[1]));
+        for (let k = 1; k <= 2; k++) {
+            [1, 2, 3].forEach(id => fire(pad, 'pointermove', id, at[0] + 20 * id + 12 * k, at[1]));
+            await frames(1);
+        }
+        [1, 2, 3].forEach(id => fire(pad, 'pointerup', id, ...at));
+        await wait(MOUSE_TAP_MS);
+        log.three = await commands();
+        m.setThree(true);
+
+        // Its tile shows what is ticked under Show: here the pad alone.
+        selectById(m.id);
+        const parts = () => [...document.querySelectorAll('#command .control-mouse')].find(t => t.title === 'Blender')
+            .querySelectorAll('.name, .mouse-presets, .mouse-strip, .mouse-buttons').length;
+        const shownAll = parts();
+        [...[...document.querySelectorAll('#settings .choice')].find(r => r.querySelector('.label').textContent === 'Show:')
+            .querySelectorAll('button')].forEach(b => b.click());
+        log.parts = [shownAll, parts(), m.hidden === MOUSE_HIDE_ALL, m.setShown(0x80) === false].join();
+
+        // Its settings restore as they were.
+        const saved = m.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ');
+        restoreGraph(configMessages(Uint8Array.from(m.marshal())));
+        const back = elements[m.name];
+        log.restored = [back instanceof uiMouse, back.presets.map(p => p.name).join('/') + '@' + back.active, back.hidden === MOUSE_HIDE_ALL,
+            back.marshal().map(b => b.toString(16).padStart(2, '0')).join(' ') === saved].join();
+        // One saved before presets: its gestures, as the template they match, else Custom.
+        const blender = [0x00, 0x04, 0x01, 0x02, 0x04, 0x01, 0x00, 0x00, 0x02, 0x00, 0x02, 0x03, 0x00, 0x04, 0x03];
+        const legacy = (gestures) => {
+            restoreGraph(configMessages(Uint8Array.from([MSG_HW_MOUSE, 0, 0, 9, MOUSE_LEGACY_LEN, MOUSE_TAP_CLICK, 20, 24, ...gestures])));
+            return elements.n9.presets.map(p => p.name).join('/') + '@' + elements.n9.active + ':' + elements.n9.hidden;
+        };
+        log.legacy = [legacy(blender), legacy([0x08, ...blender.slice(1)])].join();
+        toGraph();
+        return { settings, crud: crud.join('|'), pay, log, id: m.id };
+    });
+    packets.push(...await sent(page));
+    const id = mouse.id.toString(16).padStart(2, '0');
+    expect(mouse.settings === 'Standard/Blender@1,2,4,true,false,false', 'the mouse\'s settings are ' + mouse.settings);
+    expect(mouse.crud === ['Standard/Blender/Blender 2@2', 2, true, 'Standard/Blender/Sculpt/Standard 2@3', 2,
+        'Standard/Blender/Sculpt@2', true, 'Sculpt 6', 'Standard/Blender/Sculpt@1',
+        'mouse-presets mouse-pad mouse-buttons', true, 'mouse-pad mouse-buttons'].join('|'),
+        'adding, renaming and deleting presets gave ' + mouse.crud);
+    // Options (tap clicks, everything shown), speed, step, the preset in use (1), 3 presets: each a name and its gestures.
+    const named = (t) => [t.length, ...[...t].map(c => c.charCodeAt(0))].map(b => b.toString(16).padStart(2, '0')).join(' ');
+    const blenderBytes = '00 04 01 02 04 01 00 00 02 00 02 03 00 04 03';
+    expect(mouse.pay === [`27 00 00 ${id} 4a 01 14 18 01 03`, named('Standard'), '00 00 02 00 01 01 01 00 02 00 02 03 00 04 03',
+        named('Blender'), blenderBytes, named('Sculpt'), blenderBytes].join(' '), 'a mouse marshals as ' + mouse.pay);
+    const l = mouse.log;
+    const log = JSON.stringify(l);
+    // Each command: buttons, modifiers, X (2 bytes), Y (2 bytes), wheel, horizontal wheel.
+    expect(l.one.join() === '00000014000a0000', 'one finger 10 px right and 5 down sent ' + log);
+    expect(l.tap.join() === '0100000000000000,0000000000000000', 'a tap did not click the left button: ' + log);
+    expect(l.pan.join() === ['0002000000000000', '0402000000000000', '0402001400000000', '0002000000000000', '0000000000000000'].join(),
+        'three fingers did not hold Shift, then the middle button, move, then let go in turn: ' + log);
+    expect(l.orbit.join() === ['0400001800000000', '0400000c00000000', '0400000c00000000', '0400000c00000000', '0400000c00000000', '0000000000000000'].join(),
+        'two fingers dragged together did not hold the middle button and move: ' + log);
+    expect(l.parts === '5,0,true,true', 'the Show toggles left ' + l.parts + ' parts');
+    expect(l.pinch.join() === '0000000000000200', 'a pinch apart did not turn the wheel up: ' + log);
+    expect(l.strip.join() === '0000000000000100' && l.natural.join() === '000000000000ff00', 'the strip scrolled as ' + log);
+    expect(l.held === 'true' && l.hold.join() === '0200000000000000,0200000000000000,0000000000000000',
+        'holding Right did not keep its command coming, then let go: ' + log);
+    expect(l.live === '0,truefalsefalse,1,4', 'the presets\' buttons did not switch presets: ' + l.live);
+    expect(l.three.join() === ['0400001800000000', '0400001800000000', '0000000000000000'].join(),
+        'without three fingers, three dragged were not taken as two: ' + log);
+    expect(l.restored === 'true,Standard/Blender/Sculpt@1,true,true', 'a mouse restored as ' + l.restored);
+    expect(l.legacy === `Blender@0:0,Custom@0:0`, 'a mouse saved before presets restored as ' + l.legacy);
     const clockBack = await page.evaluate(() => {
         // Clock n1 at UTC-3:30 without internet time; clock n3 differs, and takes n1's.
         restoreGraph(configMessages(Uint8Array.from([0x35, MSG_FLAG_SHOWN, 0, 1, 3, 0, 0xFF, 0x2E, 0x40, 1, 0, 2, 12, 0, 1, 1, 0,

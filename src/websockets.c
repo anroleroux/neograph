@@ -17,6 +17,7 @@
 #include "hwman.h"
 #include "config.h"
 #include "config/config_iterator.h"
+#include "mouse.h"
 #include "networking/ws_frame.h"
 
 void compute_websocket_accept(const char *client_key, char *accept_key) {
@@ -225,8 +226,13 @@ static void handle_packet(tcpclient *clientstate, uint8_t *payload, size_t lengt
         config_element_iterator_init(&itr, payload+3, data_length);
 
         // One action word per payload byte: byte i is the new value of the element's output i.
-        // A clock's sets the device's clock instead: its hour, minute and second.
+        // A clock's sets the device's clock instead: its hour, minute and second. The
+        // mouse's pad's goes to the USB mouse, on this core: what it holds, and its moves.
         while (itr.next(&itr)) {
+            if (itr.type == MSG_HW_MOUSE) {
+                if (mouse_report_valid(itr.pay, itr.len)) mouse_command(itr.pay);
+                continue;
+            }
             if (itr.type == MSG_HW_CLOCK) {
                 if (itr.len == CLOCK_SET_LEN && clock_set(itr.pay[0], itr.pay[1], itr.pay[2]))
                     printf("clock set to %02u:%02u:%02u\n", itr.pay[0], itr.pay[1], itr.pay[2]);

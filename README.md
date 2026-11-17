@@ -17,6 +17,8 @@ It allows you to interact with the controller through a browser — defining con
   Configure the controller to continue running independently after setup.  
 - **USB Keyboard:**  
   Plugged into a PC, the controller is also a USB keyboard: a keyboard node types a key combo or a line of text each time the button wired to it is pressed.  
+- **USB Mouse:**  
+  It is also a USB mouse: a mouse node is a touch pad in the browser, with buttons, scroll strips and multi-finger gestures you can set up for programs like Blender (Shift+middle-drag to pan).  
 - **Built-in WiFi Access Point:**  
   Connect directly to the controller’s WiFi network — no external router required.
 

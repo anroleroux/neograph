@@ -58,6 +58,7 @@ const MSG_HW_KEYBOARD        = 0x23;  // a keystroke typed to the PC over USB
 const MSG_HW_STEPPER         = 0x24;  // a stepper motor on four pins, through a ULN2003
 const MSG_HW_SERVO           = 0x25;  // a hobby servo, such as an SG90, on a PWM pin
 const MSG_HW_NEOPIXEL        = 0x26;  // NeoPixels (WS2812): an array, circle or doughnut, showing a graphic
+const MSG_HW_MOUSE           = 0x27;  // the USB mouse, driven by its pad in the Command view
 const MSG_HW_CORE            = 0x30;  // the chip's temperature
 const MSG_HW_GPI             = 0x31;  // a GPIO input pin
 const MSG_HW_ADC             = 0x32;  // an analog input pin
@@ -223,6 +224,51 @@ const GPI_INVERT             = 0x04;
 const KEYBOARD_COMBO         = 0x00;  // one key with modifiers: byte 3 the HID modifier bits, byte 4 the HID key
 const KEYBOARD_TEXT          = 0x01;  // text: bytes 3… printable ASCII, \t or \n, typed on a US layout
 const KEYBOARD_TEXT_MAX      = 64;    // characters in a text keystroke
+
+// USB mouse (MSG_HW_MOUSE). Its config payload is its pad's settings, for the UI (the
+// device ignores it): options (MOUSE_ bits below); pointer speed, MOUSE_SPEED_MIN to
+// MOUSE_SPEED_MAX tenths of a count per pixel dragged; scroll step, MOUSE_STEP_MIN to
+// 255 pixels a wheel click; the preset in use, from 0; its presets, 1 to
+// MOUSE_PRESETS_MAX; then each preset: its name's length, 1 to MOUSE_NAME_MAX, its
+// name (UTF-8), and MOUSE_GESTURES gestures, in MOUSE_GESTURE_ order, each 3 bytes:
+// the keyboard modifiers it holds (HID bits, MOUSE_MODIFIERS), the mouse buttons it
+// holds (MOUSE_BUTTONS) and what it does (MOUSE_ACT_). One of MOUSE_LEGACY_LEN bytes,
+// saved before presets, is options, speed and step, then one preset's gestures, unnamed.
+const MOUSE_TAP_CLICK        = 0x01;  // options bit 0: a one-finger tap on the pad clicks
+const MOUSE_SCROLL_REVERSE   = 0x02;  // options bit 1: scrolling follows the finger, as on a phone
+const MOUSE_HIDE_NAME        = 0x04;  // options bits 2-6: what its tile leaves out: its name,
+const MOUSE_HIDE_VSTRIP      = 0x08;  //   the vertical scroll strip,
+const MOUSE_HIDE_HSTRIP      = 0x10;  //   the horizontal one,
+const MOUSE_HIDE_BUTTONS     = 0x20;  //   the buttons,
+const MOUSE_HIDE_PRESETS     = 0x40;  //   the presets' buttons
+const MOUSE_NO_THREE         = 0x80;  // options bit 7: the pad takes no third finger
+const MOUSE_SPEED_MIN        = 1;
+const MOUSE_SPEED_MAX        = 100;
+const MOUSE_STEP_MIN         = 4;
+const MOUSE_PRESETS_MAX      = 8;
+const MOUSE_NAME_MAX         = 12;    // bytes
+const MOUSE_LEGACY_LEN       = 18;
+const MOUSE_GESTURES         = 5;
+const MOUSE_GESTURE_DRAG2    = 0;     // two fingers dragged
+const MOUSE_GESTURE_DRAG3    = 1;     // three fingers dragged
+const MOUSE_GESTURE_PINCH    = 2;     // two fingers spread or pinched
+const MOUSE_GESTURE_TAP2     = 3;     // a two-finger tap
+const MOUSE_GESTURE_TAP3     = 4;     // a three-finger tap
+const MOUSE_ACT_NONE         = 0;
+const MOUSE_ACT_MOVE         = 1;     // a drag or pinch moves the pointer, holding its modifiers and buttons
+const MOUSE_ACT_SCROLL       = 2;     // a drag or pinch turns the wheels, holding its modifiers
+const MOUSE_ACT_CLICK        = 3;     // a tap clicks its buttons, holding its modifiers
+const MOUSE_MODIFIERS        = 0x0F;  // left Ctrl, Shift, Alt and Win (GUI)
+const MOUSE_BUTTONS          = 0x07;  // left 1, right 2, middle 4, as HID numbers them
+
+// A USB mouse's command (PKT_COMMAND), MOUSE_REPORT_LEN bytes: the mouse buttons held;
+// the keyboard modifiers held; the pointer's move in counts, X (right) then Y (down),
+// each a signed 16-bit BE number; then the wheel's clicks (up) and the horizontal
+// wheel's (right), each a signed byte. Moves and clicks add up; what is held holds
+// until the next command, or MOUSE_HOLD_MS without one.
+const MOUSE_REPORT_LEN       = 8;
+const MOUSE_HOLD_MS          = 1000;
+const MOUSE_KEEPALIVE_MS     = 300;   // the UI repeats a command this often while anything is held
 
 // PWM output (MSG_HW_PWM) payload limits and options.
 const PWM_FREQ_MIN           = 10;    // Hz; the slowest the PWM counter can run at 150 MHz is ~9 Hz

@@ -6,10 +6,10 @@ and listed under [Known issues](#known-issues).
 
 ```mermaid
 flowchart LR
-    UI["Browser UI<br/>(ui/)"] -- "Part 1: packets over WebSocket" --- C0["Core 0<br/>network, flash, WiFi LED,<br/>USB keyboard"]
+    UI["Browser UI<br/>(ui/)"] -- "Part 1: packets over WebSocket" --- C0["Core 0<br/>network, flash, WiFi LED,<br/>USB keyboard and mouse"]
     C0 -- "Part 3: program in shared RAM,<br/>FIFO words" --- C1["Core 1<br/>runs the graph: GPIO, PWM,<br/>ADC, temperature"]
     C0 --- F[("Flash<br/>Part 2: config")]
-    C0 -- "USB keyboard" --- PC["PC"]
+    C0 -- "USB keyboard and mouse" --- PC["PC"]
 ```
 
 | Part | What it covers | Code |
@@ -18,6 +18,7 @@ flowchart LR
 | [2. Config model](#part-2-config-model) | Messages, element types, the graph, networking, flash storage | `src/config.c`, `ui/content/graph.js`, `ui/content/components/` |
 | [3. Core 0 ↔ core 1](#part-3-core-0--core-1) | The program core 1 runs, and the words between the two RP2350 cores | `src/program.c`, `src/hwman.c`, `src/main.c`, `src/config.c` |
 | [USB keyboards](#usb-keyboards) | Keystrokes typed to the PC the device is plugged into | `src/keyboard.c`, `src/usb_descriptors.c`, `ui/content/components/keyboard.js` |
+| [USB mice](#usb-mice) | A touch pad in the browser that moves the pointer of the PC the device is plugged into | `src/mouse.c`, `src/usb_descriptors.c`, `ui/content/components/mouse.js` |
 
 ## Conventions
 
@@ -141,7 +142,7 @@ that was operated, with the values of its outputs as the payload.
 
 | Message byte | Field | Notes |
 |---|---|---|
-| 0 | Message type | The type of the operated element: `10` button, `12` slider or `13` 2D slider; or `35` clock, which sets the device's clock (below) |
+| 0 | Message type | The type of the operated element: `10` button, `12` slider or `13` 2D slider; or `35` clock, which sets the device's clock, or `27` USB mouse (both below) |
 | 1 | Flags | `00` |
 | 2–3 | Element ID | The operated element |
 | 4 | Payload length | The element's number of outputs: `01`, or `02` for a 2D slider |
@@ -170,6 +171,18 @@ the first `FIFO_OUTPUTS_MAX` (32) are ignored.
 clock to that time at once (`clock_set`), with no action word. The device has one
 clock, so the element ID only says which clock node it was set from. A command that
 is not a time of day, or not 3 bytes, is ignored.
+
+**A USB mouse's command** (`27`) is its pad's: what it holds, and how far to move. Its
+payload is `MOUSE_REPORT_LEN` (8) bytes; core 0 hands it to the USB mouse at once, with
+no action word (see [USB mice](#usb-mice)). One of another length, or holding unknown
+buttons or modifiers, is ignored.
+
+```hex example=command-mouse
+01 00 0D                    # Command, 13 bytes
+27 00 00 01 08  04 02       # mouse n1: middle button and Shift held
+                00 0C FF FB #   move 12 right, 5 up
+                00 00       #   wheels still
+```
 
 ```hex example=command-clock
 01 00 08                    # Command, 8 bytes
@@ -383,6 +396,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `24` | `MSG_HW_STEPPER` | HW output: a stepper motor on four pins, through a ULN2003 | Implemented |
 | `25` | `MSG_HW_SERVO` | HW output: a hobby servo on a PWM pin | Implemented |
 | `26` | `MSG_HW_NEOPIXEL` | HW output: NeoPixels (WS2812), an array, circle or doughnut showing a graphic | Implemented |
+| `27` | `MSG_HW_MOUSE` | HW output: the USB mouse, driven by its pad in the Command view; no wires | Implemented |
 | `30` | `MSG_HW_CORE` | HW input: core temperature | Implemented |
 | `31` | `MSG_HW_GPI` | HW input: GPIO pin | Implemented |
 | `32` | `MSG_HW_ADC` | HW input: ADC | Implemented |
@@ -458,6 +472,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `25` Servo | 12 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin · bytes 4–5: angles at input 0 and 1 · bytes 6–9: pulses at 0° and 180° · bytes 10–11: speed limit. See [Servos](#servos). |
 | `26` NeoPixels | 20–38 | Bytes 0–2: source reference · bytes 3–5: on/off source reference (each 0 = not connected) · byte 6: GPIO pin · byte 7: layout · byte 8: options · byte 9: brightness · byte 10: the bytes of its size, *k* · then its size · then its graphic: its type, the bytes of its settings, and those · then, in a chain, its data line in's source reference. See [NeoPixels](#neopixels). |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
+| `27` USB mouse | 27–229 (or 18) | Its pad's settings; the device ignores them. Byte 0: options, bit 0 `MOUSE_TAP_CLICK`: a one-finger tap clicks (UI default on); bit 1 `MOUSE_SCROLL_REVERSE`: scrolling follows the finger (UI default off); bits 2–6, what its tile leaves out: its name (`MOUSE_HIDE_NAME`), the vertical scroll strip (`MOUSE_HIDE_VSTRIP`), the horizontal one (`MOUSE_HIDE_HSTRIP`), the buttons (`MOUSE_HIDE_BUTTONS`) and the presets' buttons (`MOUSE_HIDE_PRESETS`) (UI default: the name and both strips); bit 7 `MOUSE_NO_THREE`: the pad takes no third finger (UI default off) · byte 1: pointer speed, tenths of a count per pixel dragged, `MOUSE_SPEED_MIN` (1) to `MOUSE_SPEED_MAX` (100; UI default 20) · byte 2: scroll step, pixels dragged a wheel click, `MOUSE_STEP_MIN` (4) to 255 (UI default 24) · byte 3: the preset in use, from 0 · byte 4: its presets, 1 to `MOUSE_PRESETS_MAX` (8) · then each preset: its name's length, 1 to `MOUSE_NAME_MAX` (12), its name (UTF-8, no control characters), and `MOUSE_GESTURES` (5) gestures, 3 bytes each. One of `MOUSE_LEGACY_LEN` (18) bytes, saved before presets, has bytes 0–2, then one preset's gestures, unnamed. See [USB mice](#usb-mice). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
 shorter, and so is everything after it: an LED is 2 bytes, a GPO 3, a PWM 15, a
@@ -609,8 +624,9 @@ A1 00 00 05 04  FF 38 00 78                     #   at (-200, 120)
 
 When a config arrives, the UI rebuilds the graph from it:
 
-- **If the config has no control messages** (a first-boot config), the UI keeps the
-  graph it has, so a new device starts from the built-in demo graph: a button `n1`
+- **If the config has no control messages** (a first-boot config), the graph is
+  empty: a device just flashed starts with no nodes. The browser-only build
+  ([offline demo](README.md)) starts from the built-in demo graph instead: a button `n1`
   driving the onboard LED `n2`, and a momentary button `n3` driving a light `n5`
   through a copy `n4` of the [block](#blocks) "Blink 3" (its parts `n6` to `n9`).
   Inside the block is the [blink-three-times loop](#loops) of `logic-loop-config`:
@@ -619,7 +635,7 @@ When a config arrives, the UI rebuilds the graph from it:
   as a green bar along its top row.
 - **Otherwise the graph is replaced.** Each control message of a type the UI knows
   (`10` button, `12` slider, `13` 2D slider, `01` light, `02` plot, `20` LED, `21` GPO, `22` PWM,
-  `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `30` core temperature, `31` GPIO input,
+  `23` USB keyboard, `24` stepper, `25` servo, `26` NeoPixels, `27` USB mouse, `30` core temperature, `31` GPIO input,
   `32` ADC, `33` DS18B20, `34` rotary encoder, `35` clock, `36` ultrasonic ranger, the logic `40`–`4D`
   and a block's copy `60`) becomes a node with the message's ID. Messages marked
   `MSG_FLAG_PART` are skipped: each copy of a block builds its parts again from its
@@ -628,7 +644,7 @@ When a config arrives, the UI rebuilds the graph from it:
   appears more than once, as in configs saved by older UIs, the last message wins.
 - **Position:** from the node's `A1` message. Without one, nodes are stacked: inputs
   at x = −200, outputs at x = 150, 100 apart from y = −100.
-- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a rotary encoder its pins, steps and options (pins another node has keep its own), an ultrasonic ranger its pin and range, a GPO its pin, a USB keyboard its keystroke, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
+- **Settings and label:** a button takes its action (toggle or momentary), a slider its orientation, a 2D slider its home and whether and how it returns there, a plot its time window and unit, an ADC its channel, a GPIO input its pin, pull and when it is on, a DS18B20 its pin, resolution and pull-up, a rotary encoder its pins, steps and options (pins another node has keep its own), an ultrasonic ranger its pin and range, a GPO its pin, a USB keyboard its keystroke, a USB mouse its pad's settings and gestures, a compare its condition, threshold and hysteresis, a delay, pulse or blink its times, a scale its ranges and clamp, and a PWM its
   pin and the settings of its duty cycle and frequency, from the message (an invalid value keeps the default), and a node takes the
   label from its `A0` message.
 - **Wires:** one for each source reference of an output that names an output of a
@@ -1377,6 +1393,84 @@ A momentary button `n1` typing Ctrl+Alt+Delete, and a toggle button `n3` typing
 23 01 00 04 0A  00 03 00 01 68 65 6C 6C 6F 0A   # keyboard n4 ← n3: text "hello\n"
 ```
 
+### USB mice
+
+A USB mouse node (`27`) is a touch pad in the Command view that moves the pointer of
+the PC the device is plugged into, over the device's USB port. It has no wires: the
+browser drives it, and the graph takes no part.
+
+- **The USB port is three devices.** The PC sees a mouse beside the
+  [keyboard](#usb-keyboards) and the serial console. It comes up whatever the graph.
+- **Its tile.** A pad, a vertical scroll strip beside it, a horizontal one below, and
+  Left, Middle and Right buttons, each held while touched. The tile spans the Command
+  view's width, so a phone shows the pad large. Its name, its presets' buttons, either
+  strip and the buttons can each be hidden (`MOUSE_HIDE_` options); the pad takes their
+  room. A new mouse shows its presets' buttons, the pad and the buttons.
+- **Presets.** A mouse has 1 to 8 named presets, each with its own gestures (below),
+  and uses one at a time. A row of small buttons above the pad, one for each preset,
+  switches between them at once, while the pad is in use; it is there only with two
+  or more. A new mouse has two, **Standard** and **Blender**. The settings add one (a
+  copy of the one in use, or Standard or Blender afresh), rename and delete them; the
+  rest of the settings are the mouse's, whichever preset is in use.
+- **One finger** on the pad moves the pointer: each pixel dragged is the pointer
+  speed in tenths of a count. A quick tap (under 250 ms, moving under 10 px) clicks
+  the left button, with `MOUSE_TAP_CLICK`. **The strips** turn the wheels: each
+  scroll step dragged is one click, up and right; with `MOUSE_SCROLL_REVERSE`, the
+  other way, so the page follows the finger.
+- **Gestures with more fingers** do what the preset in use says. Each of the five
+  (`MOUSE_GESTURE_`: two-finger drag, three-finger drag, pinch, two-finger tap,
+  three-finger tap) holds keyboard modifiers (left Ctrl `01`, Shift `02`, Alt `04`, Win
+  `08`) and mouse buttons (left `01`, right `02`, middle `04`) while it does one thing
+  (`MOUSE_ACT_`):
+  - a drag or pinch **moves** the pointer (`MOUSE_ACT_MOVE`) or **scrolls**
+    (`MOUSE_ACT_SCROLL`): a drag as one finger would, a pinch up and down, spreading
+    up. Shift and the middle button held, a three-finger drag is Blender's pan. Two
+    fingers are told apart once each has moved 8 px: the same way is a drag, opposite
+    ways a pinch; one that moves 24 px while the other barely does is a pinch if the gap
+    between them changed more than their middle moved. A phone reports each finger's
+    moves on their own, so the gap alone would make every quick drag look like a pinch.
+    The moves that told them apart count;
+  - a tap **clicks** its buttons (`MOUSE_ACT_CLICK`): pressed, then let go;
+  - or nothing (`MOUSE_ACT_NONE`).
+
+  The modifiers are held on the keyboard before the buttons are pressed, a command
+  earlier, and let go after them, so a program sees Shift+middle-drag, not a middle
+  drag that Shift joins. **Standard:** two fingers scroll, three drag with the left
+  button, a pinch is Ctrl+wheel, a two-finger tap a right click, a three-finger tap a
+  middle click. **Blender:** two fingers orbit (middle-drag), three pan
+  (Shift+middle-drag), a pinch zooms (the wheel), the taps as Standard.
+- **Three fingers off** (`MOUSE_NO_THREE`): a third finger on the pad is ignored, so
+  three are two, and the three-finger gestures leave the settings.
+- **Commands.** At most once an animation frame while the pad is used, the UI sends
+  a [command](#01-command): the buttons and modifiers held, and the pointer's move
+  and wheel clicks since the last, in whole counts (the rest is kept for the next).
+  While anything is held and nothing moves, it repeats the command every
+  `MOUSE_KEEPALIVE_MS` (300 ms).
+- **Nothing sticks.** If no command comes for `MOUSE_HOLD_MS` (1 s) while buttons or
+  modifiers are held (the browser closed, the WiFi dropped), core 0 lets them all go.
+  Unplugging drops moves waiting, so the pointer doesn't jump when it is plugged in,
+  and a command while nothing listens on USB is dropped.
+- **Counts are the PC's.** A count is the smallest step a mouse reports; the PC turns
+  counts into pixels with its own pointer speed and acceleration.
+- **On the device.** Core 0 adds each command's moves to what is waiting, holds its
+  modifiers on the keyboard (they are held in anything typed meanwhile too), and sends
+  the PC reports of up to 127 counts or clicks each way, one each millisecond until
+  nothing waits. Several mouse nodes share the one USB mouse.
+
+A mouse `n1` as it starts, using its Blender preset:
+
+```hex example=mouse-config
+0A 00 39                                        # Config, 57 bytes
+27 00 00 01 34  1D 14 18 01 02                  # mouse n1: tap clicks, name and strips hidden; speed 2.0,
+                                                #   24 px a click; preset 1 in use, of 2
+                08 53 74 61 6E 64 61 72 64      #   preset 0, "Standard":
+                00 00 02  00 01 01  01 00 02    #     two fingers scroll, three drag (left), pinch Ctrl+wheel
+                00 02 03  00 04 03              #     two-finger tap right click, three-finger middle
+                07 42 6C 65 6E 64 65 72         #   preset 1, "Blender":
+                00 04 01  02 04 01  00 00 02    #     orbit (middle), pan (Shift+middle), zoom (wheel)
+                00 02 03  00 04 03              #     the taps as Standard
+```
+
 ### Stepper motors
 
 A stepper node (`24`) turns a unipolar stepper motor, such as a 28BYJ-48, through a
@@ -1834,7 +1928,7 @@ The RP2350 has two cores:
 
 - **Core 0** runs networking and flash, and drives the onboard LED. The LED is
   attached to the WiFi chip, which only core 0 talks to. It also runs USB: the
-  serial console and the [USB keyboards](#usb-keyboards).
+  serial console, the [USB keyboards](#usb-keyboards) and the [USB mice](#usb-mice).
 - **Core 1** runs the graph: it owns the GPIO pins, the PWM slices and the ADC, and
   drives the outputs from the inputs every 10 ms, without the browser.
 
@@ -2236,6 +2330,8 @@ sequenceDiagram
 - **Core 0 logs each program** it compiles, as text, on the serial console.
 - **USB keyboards:** core 0 keeps each keyboard node's keystroke as it compiles; core 1
   says when to type it.
+- **USB mice:** neither core runs anything for them: core 0 takes the commands of
+  their pads.
 
 ### Core 1: the scan
 
@@ -2523,10 +2619,18 @@ Current behaviour that is probably not intended. Each one is a candidate for its
 17. **The USB IDs are TinyUSB's test IDs** (vendor `CAFE`, product `4005`). They are
     fine on your own PC; a board for others needs IDs of its own.
 
+**USB mouse**
+
+18. **The pointer's speed depends on the PC.** A mouse reports counts, and the PC's
+    pointer speed and acceleration turn them into pixels, so a pointer speed that suits
+    one PC is slow or fast on another.
+19. **Two pads used at once fight.** Each command says all that is held, so a command
+    from one browser's pad (or another mouse node's) lets go of what the other holds.
+
 
 **Control**
 
-18. **A browser that connects doesn't see the device's control state.** The device
+20. **A browser that connects doesn't see the device's control state.** The device
     keeps its outputs as they are when a browser connects, but the UI starts its
     controls from the config: a toggle button off, a slider at 0, a 2D slider at its
     home. An output driven by a control shows the control's state again once the
