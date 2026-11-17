@@ -253,11 +253,14 @@
 #command > .control-mouse > .mouse {
     flex: 1;
     min-height: 0;
-    display: grid;
-    grid-template-columns: 1fr 2.4em;
-    grid-template-rows: 1fr 2.4em 3em;
+    display: grid;          /* its columns, rows and areas: from the parts shown (uiMouse.buildUI) */
     gap: 0.4em;
     margin-top: 0.35em;
+}
+
+/* Without its name the pad starts at the top. */
+#command > .control-mouse > .mouse:first-child {
+    margin-top: 0;
 }
 
 #command > .control-mouse .mouse-pad,
@@ -272,29 +275,25 @@
 }
 
 #command > .control-mouse .mouse-pad {
-    grid-column: 1;
-    grid-row: 1;
+    grid-area: pad;
     cursor: crosshair;
 }
 
 /* The strips are ribbed across, as a wheel is. */
 #command > .control-mouse .mouse-strip.vertical {
-    grid-column: 2;
-    grid-row: 1;
+    grid-area: v;
     cursor: ns-resize;
     background-image: repeating-linear-gradient(rgba(32, 32, 43, 0.15) 0 1px, transparent 1px 0.6em);
 }
 
 #command > .control-mouse .mouse-strip.horizontal {
-    grid-column: 1;
-    grid-row: 2;
+    grid-area: h;
     cursor: ew-resize;
     background-image: repeating-linear-gradient(90deg, rgba(32, 32, 43, 0.15) 0 1px, transparent 1px 0.6em);
 }
 
 #command > .control-mouse .mouse-buttons {
-    grid-column: 1 / -1;
-    grid-row: 3;
+    grid-area: b;
     display: grid;
     grid-template-columns: 2fr 1fr 2fr;
     gap: 0.4em;

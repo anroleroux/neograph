@@ -604,7 +604,9 @@ void test_mouse_payload_valid(void)
     TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN - 1));
     TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN + 1));
 
-    p[0] = 0x04;                                                                /* no such option */
+    p[0] = MOUSE_OPTIONS;                                                       /* every part hidden */
+    TEST_ASSERT_TRUE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    p[0] = 0x40;                                                                /* no such option */
     TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
     p[0] = 0;
     p[1] = MOUSE_SPEED_MIN - 1;

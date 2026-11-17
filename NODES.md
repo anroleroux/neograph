@@ -601,8 +601,8 @@ held while you touch it.
 - **The strips** turn the scroll wheels, a click for each scroll step dragged.
 - **Two and three fingers** do what the gesture settings say: a drag or pinch moves the
   pointer or scrolls, while holding keys (Ctrl, Shift, Alt, Win) and mouse buttons; a
-  tap clicks buttons, with keys held. Two fingers are a pinch if the gap between them
-  changes first, a drag if they move together first.
+  tap clicks buttons, with keys held. Two fingers moving the same way are a drag,
+  moving apart or together a pinch.
 - **Nothing sticks.** If the browser goes quiet for a second with something held (the
   page closed, the phone locked, the WiFi dropped), the device lets go of it.
 
@@ -621,6 +621,7 @@ Two presets set the five gestures at once:
 | Preset | Standard, Blender | Standard | Sets every gesture below. Changing a gesture leaves no preset marked. |
 | Tap to click | On, Off | On | Whether a quick one-finger tap clicks the left button. |
 | Scrolling | Traditional, Natural | Traditional | **Traditional:** a finger up scrolls up, as a wheel. **Natural:** the page follows the finger, as on a phone. |
+| Show | Title, Vertical scroll, Horizontal scroll, Buttons (each on or off) | All on | The parts of the tile shown. The pad grows into the room of those hidden. |
 | Pointer speed | 0.1 to 10 | 2.0 | Mouse counts per pixel dragged. The PC's own pointer speed also applies. |
 | Scroll step (px) | 4 to 255 | 24 | Pixels dragged for each click of the wheel. |
 | Two-finger drag, Three-finger drag, Pinch | Nothing, Move pointer, Scroll | as the preset | What the gesture does. A pinch apart moves up, or scrolls up. |

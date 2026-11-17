@@ -472,7 +472,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `25` Servo | 12 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin · bytes 4–5: angles at input 0 and 1 · bytes 6–9: pulses at 0° and 180° · bytes 10–11: speed limit. See [Servos](#servos). |
 | `26` NeoPixels | 20–38 | Bytes 0–2: source reference · bytes 3–5: on/off source reference (each 0 = not connected) · byte 6: GPIO pin · byte 7: layout · byte 8: options · byte 9: brightness · byte 10: the bytes of its size, *k* · then its size · then its graphic: its type, the bytes of its settings, and those · then, in a chain, its data line in's source reference. See [NeoPixels](#neopixels). |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
-| `27` USB mouse | 18 (`MOUSE_PAYLOAD_LEN`) | Its pad's settings; the device ignores them. Byte 0: options, bit 0 `MOUSE_TAP_CLICK`: a one-finger tap clicks (UI default on); bit 1 `MOUSE_SCROLL_REVERSE`: scrolling follows the finger (UI default off). Other bits are 0 · byte 1: pointer speed, tenths of a count per pixel dragged, `MOUSE_SPEED_MIN` (1) to `MOUSE_SPEED_MAX` (100; UI default 20) · byte 2: scroll step, pixels dragged a wheel click, `MOUSE_STEP_MIN` (4) to 255 (UI default 24) · bytes 3–17: `MOUSE_GESTURES` (5) gestures, 3 bytes each. See [USB mice](#usb-mice). |
+| `27` USB mouse | 18 (`MOUSE_PAYLOAD_LEN`) | Its pad's settings; the device ignores them. Byte 0: options, bit 0 `MOUSE_TAP_CLICK`: a one-finger tap clicks (UI default on); bit 1 `MOUSE_SCROLL_REVERSE`: scrolling follows the finger (UI default off); bits 2–5, what its tile leaves out: its name (`MOUSE_HIDE_NAME`), the vertical scroll strip (`MOUSE_HIDE_VSTRIP`), the horizontal one (`MOUSE_HIDE_HSTRIP`) and the buttons (`MOUSE_HIDE_BUTTONS`) (UI default none). Other bits are 0 · byte 1: pointer speed, tenths of a count per pixel dragged, `MOUSE_SPEED_MIN` (1) to `MOUSE_SPEED_MAX` (100; UI default 20) · byte 2: scroll step, pixels dragged a wheel click, `MOUSE_STEP_MIN` (4) to 255 (UI default 24) · bytes 3–17: `MOUSE_GESTURES` (5) gestures, 3 bytes each. See [USB mice](#usb-mice). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
 shorter, and so is everything after it: an LED is 2 bytes, a GPO 3, a PWM 15, a
@@ -1402,7 +1402,8 @@ browser drives it, and the graph takes no part.
   [keyboard](#usb-keyboards) and the serial console. It comes up whatever the graph.
 - **Its tile.** A pad, a vertical scroll strip beside it, a horizontal one below, and
   Left, Middle and Right buttons, each held while touched. The tile spans the Command
-  view's width, so a phone shows the pad large.
+  view's width, so a phone shows the pad large. Its name, either strip and the buttons
+  can each be hidden (`MOUSE_HIDE_` options); the pad takes their room.
 - **One finger** on the pad moves the pointer: each pixel dragged is the pointer
   speed in tenths of a count. A quick tap (under 250 ms, moving under 10 px) clicks
   the left button, with `MOUSE_TAP_CLICK`. **The strips** turn the wheels: each
@@ -1415,7 +1416,12 @@ browser drives it, and the graph takes no part.
   (`MOUSE_ACT_`):
   - a drag or pinch **moves** the pointer (`MOUSE_ACT_MOVE`) or **scrolls**
     (`MOUSE_ACT_SCROLL`): a drag as one finger would, a pinch up and down, spreading
-    up. Shift and the middle button held, a three-finger drag is Blender's pan;
+    up. Shift and the middle button held, a three-finger drag is Blender's pan. Two
+    fingers are told apart once each has moved 8 px: the same way is a drag, opposite
+    ways a pinch; one that moves 24 px while the other barely does is a pinch if the gap
+    between them changed more than their middle moved. A phone reports each finger's
+    moves on their own, so the gap alone would make every quick drag look like a pinch.
+    The moves that told them apart count;
   - a tap **clicks** its buttons (`MOUSE_ACT_CLICK`): pressed, then let go;
   - or nothing (`MOUSE_ACT_NONE`).
 

@@ -13,6 +13,11 @@ const MOUSE_GESTURE_NAMES = [
 const MOUSE_MODIFIER_NAMES = [[0x01, 'Ctrl'], [0x02, 'Shift'], [0x04, 'Alt'], [0x08, 'Win']];
 const MOUSE_BUTTON_NAMES = [[0x01, 'Left'], [0x04, 'Middle'], [0x02, 'Right']];
 
+// The parts of its tile that can be hidden, as [MOUSE_HIDE_ bit, name]. The pad stays.
+const MOUSE_PARTS = [[MOUSE_HIDE_NAME, 'Title'], [MOUSE_HIDE_VSTRIP, 'Vertical scroll'],
+    [MOUSE_HIDE_HSTRIP, 'Horizontal scroll'], [MOUSE_HIDE_BUTTONS, 'Buttons']];
+const MOUSE_HIDE_ALL = MOUSE_PARTS.reduce((all, [bit]) => all | bit, 0);
+
 // What each gesture does in a preset: [modifiers, buttons, MOUSE_ACT_].
 const MOUSE_PRESETS = {
     standard: [
@@ -33,8 +38,7 @@ const MOUSE_PRESETS = {
 
 const MOUSE_TAP_MS = 250;       // a touch shorter than this, that moved less than MOUSE_TAP_PX, is a tap
 const MOUSE_TAP_PX = 10;
-const MOUSE_PINCH_PX = 8;       // two fingers: a pinch once the gap between them changes this much
-                                // more than they move together; a drag the other way round
+const MOUSE_PINCH_PX = 8;       // two fingers: told apart once each has moved this far (see twoFingers)
 const MOUSE_CLICK_MS = 80;      // how long a tap's click holds its buttons
 
 // A settings row of on/off buttons, one for each [bit, name]: as a keyboard's Hold.
@@ -75,6 +79,7 @@ class uiMouse extends uiComponents {
 
         this.tapClick = true;       // a one-finger tap clicks the left button
         this.reverse = false;       // scrolling follows the finger, as on a phone
+        this.hidden = 0;            // the parts its tile leaves out: MOUSE_HIDE_ bits
         this.speed = 20;            // tenths of a count per pixel dragged
         this.step = 24;             // pixels dragged a wheel click
         this.applyPreset('standard');
@@ -159,13 +164,14 @@ class uiMouse extends uiComponents {
 
     // Its settings from a payload; an invalid one keeps them as they are.
     restore(pay, r, len) {
-        if (len !== MOUSE_PAYLOAD_LEN || pay[0] & ~(MOUSE_TAP_CLICK | MOUSE_SCROLL_REVERSE)) return;
+        if (len !== MOUSE_PAYLOAD_LEN || pay[0] & ~MOUSE_OPTIONS) return;
         if (pay[1] < MOUSE_SPEED_MIN || pay[1] > MOUSE_SPEED_MAX || pay[2] < MOUSE_STEP_MIN) return;
         const gestures = MOUSE_GESTURE_NAMES.map((_, g) => ({ mods: pay[3 + 3 * g], buttons: pay[4 + 3 * g], act: pay[5 + 3 * g] }));
         if (gestures.some(({ mods, buttons, act }, g) => mods & ~MOUSE_MODIFIERS || buttons & ~MOUSE_BUTTONS
             || !uiMouse.acts(g).some(([a]) => a === act))) return;
         this.tapClick = !!(pay[0] & MOUSE_TAP_CLICK);
         this.reverse = !!(pay[0] & MOUSE_SCROLL_REVERSE);
+        this.hidden = pay[0] & MOUSE_HIDE_ALL;
         this.speed = pay[1];
         this.step = pay[2];
         this.gestures = gestures;
@@ -180,6 +186,8 @@ class uiMouse extends uiComponents {
             () => this.tapClick ? 'on' : 'off', (v) => { this.tapClick = v === 'on'; }));
         settings.appendChild(choiceSetting('Scrolling', { traditional: 'Traditional', natural: 'Natural' },
             () => this.reverse ? 'natural' : 'traditional', (v) => { this.reverse = v === 'natural'; }));
+        settings.appendChild(bitsSetting('Show', MOUSE_PARTS, () => ~this.hidden & MOUSE_HIDE_ALL,
+            (shown) => this.setShown(shown)));
         settings.appendChild(editableSetting('Pointer speed', () => (this.speed / 10).toFixed(1),
             (v) => this.setSpeed(v), {type: 'number', min: MOUSE_SPEED_MIN / 10, max: MOUSE_SPEED_MAX / 10, step: 0.1}));
         settings.appendChild(editableSetting('Scroll step (px)', () => String(this.step),
@@ -202,6 +210,14 @@ class uiMouse extends uiComponents {
         settings.appendChild(orderSetting(this));
     }
 
+    // The parts of its tile shown (MOUSE_HIDE_ bits set for each shown), and the tile
+    // built again with them.
+    setShown(shown) {
+        if (shown & ~MOUSE_HIDE_ALL) return false;
+        this.hidden = ~shown & MOUSE_HIDE_ALL;
+        buildCommandInterface();
+    }
+
     // The Preset row marks the preset the gestures match, if any, after a change.
     refreshPreset() {
         const row = [...document.querySelectorAll('#settings .choice')]
@@ -210,7 +226,7 @@ class uiMouse extends uiComponents {
     }
 
     marshal() {
-        const options = (this.tapClick ? MOUSE_TAP_CLICK : 0) | (this.reverse ? MOUSE_SCROLL_REVERSE : 0);
+        const options = (this.tapClick ? MOUSE_TAP_CLICK : 0) | (this.reverse ? MOUSE_SCROLL_REVERSE : 0) | this.hidden;
         const pay = [options, this.speed, this.step, ...this.gestures.flatMap(({ mods, buttons, act }) =>
             [mods, act === MOUSE_ACT_SCROLL || act === MOUSE_ACT_NONE ? 0 : buttons, act])];
         return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, pay.length, ...pay];
@@ -290,6 +306,7 @@ class uiMouse extends uiComponents {
 
     // In the Command view: a tile as wide as four controls (all of a phone's), with the
     // label, the pad, a scroll strip right of it and one below, and the three buttons.
+    // Each but the pad may be hidden (MOUSE_HIDE_), and the pad takes its room.
     buildUI(commandInterface) {
         this.letGo();
         const control = document.createElement('div');
@@ -343,6 +360,20 @@ class uiMouse extends uiComponents {
         strip(control.querySelector('.vertical'), true);
         strip(control.querySelector('.horizontal'), false);
 
+        // Leave out the hidden parts, and lay out the rest.
+        const shows = (bit) => !(this.hidden & bit);
+        const parts = { [MOUSE_HIDE_NAME]: '.name', [MOUSE_HIDE_VSTRIP]: '.vertical',
+            [MOUSE_HIDE_HSTRIP]: '.horizontal', [MOUSE_HIDE_BUTTONS]: '.mouse-buttons' };
+        Object.entries(parts).forEach(([bit, sel]) => { if (!shows(Number(bit))) control.querySelector(sel).remove(); });
+        const v = shows(MOUSE_HIDE_VSTRIP);
+        const rows = [[v ? '"pad v"' : '"pad"', '1fr']];
+        if (shows(MOUSE_HIDE_HSTRIP)) rows.push([v ? '"h ."' : '"h"', '2.4em']);
+        if (shows(MOUSE_HIDE_BUTTONS)) rows.push([v ? '"b b"' : '"b"', '3em']);
+        const grid = control.querySelector('.mouse');
+        grid.style.gridTemplateColumns = v ? '1fr 2.4em' : '1fr';
+        grid.style.gridTemplateAreas = rows.map(([areas]) => areas).join(' ');
+        grid.style.gridTemplateRows = rows.map(([, size]) => size).join(' ');
+
         this.padEvents(pad);
         commandInterface.appendChild(control);
     }
@@ -365,6 +396,24 @@ class uiMouse extends uiComponents {
             const [a, b] = [...fingers.values()];
             return Math.hypot(a[0] - b[0], a[1] - b[1]);
         };
+        // Whether two fingers drag or pinch; null until it is clear. A phone reports
+        // each finger's moves on its own, so while two fingers drag together, the one
+        // that has just moved seems for a moment to have changed the gap between them.
+        // So wait until both have moved MOUSE_PINCH_PX: the same way is a drag, opposite
+        // ways a pinch. If one has moved three times that and the other hardly at all (a
+        // pinch with one finger still, or a drag with one lagging), whichever the gap
+        // changed more by: a pinch; else a drag.
+        const twoFingers = () => {
+            if (!touch.from || ![...fingers.keys()].every(id => touch.from.has(id))) return null;
+            const [a, b] = [...fingers].map(([id, [x, y]]) => [x - touch.from.get(id)[0], y - touch.from.get(id)[1]]);
+            const la = Math.hypot(...a), lb = Math.hypot(...b);
+            if (Math.min(la, lb) >= MOUSE_PINCH_PX)
+                return a[0] * b[0] + a[1] * b[1] > 0 ? MOUSE_GESTURE_DRAG2 : MOUSE_GESTURE_PINCH;
+            if (Math.max(la, lb) < 3 * MOUSE_PINCH_PX) return null;
+            const change = Math.abs(gap() - touch.gap);
+            const together = Math.hypot((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+            return change > together ? MOUSE_GESTURE_PINCH : MOUSE_GESTURE_DRAG2;
+        };
         // What gesture g does now: hold its keys, and its buttons for a move.
         const begin = (g) => {
             const { mods, buttons, act } = this.gestures[g];
@@ -380,9 +429,10 @@ class uiMouse extends uiComponents {
         pad.addEventListener('pointerdown', (e) => {
             pad.setPointerCapture(e.pointerId);
             fingers.set(e.pointerId, [e.clientX, e.clientY]);
-            if (!touch) touch = { most: 0, start: performance.now(), moved: 0, kind: null, gap: 0, drift: 0 };
+            if (!touch) touch = { most: 0, start: performance.now(), moved: 0, kind: null, gap: 0, from: null };
             touch.most = Math.max(touch.most, fingers.size);
-            if (fingers.size === 2 && touch.kind === null) { touch.gap = gap(); touch.drift = 0; }
+            // Two fingers: where each starts from, to tell a drag from a pinch.
+            if (fingers.size === 2 && touch.kind === null) { touch.gap = gap(); touch.from = new Map(fingers); }
             if (fingers.size === 3 && touch.kind !== MOUSE_GESTURE_DRAG3) { end(); begin(MOUSE_GESTURE_DRAG3); }
         });
 
@@ -394,14 +444,21 @@ class uiMouse extends uiComponents {
             touch.moved += Math.hypot(dx, dy);
             const n = fingers.size;
 
-            // Two fingers: a pinch if the gap between them changes first, else a drag.
-            // The move that tells them apart counts: a pinch from the gap they started at.
+            // Two fingers: a drag or a pinch, once it is clear which (see twoFingers). The
+            // moves that told them apart count: a pinch from the gap the fingers started
+            // at, a drag by how far their middle has gone.
             if (n === 2 && touch.kind === null) {
-                touch.drift += Math.hypot(dx, dy) / 2;
-                const change = Math.abs(gap() - touch.gap);
-                if (change > MOUSE_PINCH_PX && change > touch.drift) begin(MOUSE_GESTURE_PINCH);
-                else if (touch.drift > MOUSE_PINCH_PX) begin(MOUSE_GESTURE_DRAG2);
-                else return;
+                const kind = twoFingers();
+                if (kind === null) return;
+                begin(kind);
+                if (kind === MOUSE_GESTURE_DRAG2) {
+                    const [a, b] = [...fingers].map(([id, [x, y]]) => [x - touch.from.get(id)[0], y - touch.from.get(id)[1]]);
+                    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+                    const { act } = this.gestures[kind];
+                    if (act === MOUSE_ACT_MOVE) this.add(mx * this.speed / 10, my * this.speed / 10);
+                    if (act === MOUSE_ACT_SCROLL) this.scroll(mx, my);
+                    return;
+                }
             }
             if (touch.most === 1) {
                 this.add(dx * this.speed / 10, dy * this.speed / 10);

@@ -306,6 +306,11 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define MOUSE_PAYLOAD_LEN       18
 #define MOUSE_TAP_CLICK         0x01    /* options bit 0: a one-finger tap on the pad clicks */
 #define MOUSE_SCROLL_REVERSE    0x02    /* options bit 1: scrolling follows the finger, as on a phone */
+#define MOUSE_HIDE_NAME         0x04    /* options bits 2-5: what its tile leaves out: its name, */
+#define MOUSE_HIDE_VSTRIP       0x08    /*   the vertical scroll strip, */
+#define MOUSE_HIDE_HSTRIP       0x10    /*   the horizontal one, */
+#define MOUSE_HIDE_BUTTONS      0x20    /*   the buttons */
+#define MOUSE_OPTIONS           0x3F    /* every option bit */
 #define MOUSE_SPEED_MIN         1
 #define MOUSE_SPEED_MAX         100
 #define MOUSE_STEP_MIN          4
@@ -467,7 +472,7 @@ static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len, uint8_
    knows, speeds in range, and each gesture holding known modifiers and buttons and
    doing what its kind can: a drag or pinch moves or scrolls, a tap clicks. */
 static inline int mouse_payload_valid(const uint8_t *pay, uint8_t len) {
-    if (len != MOUSE_PAYLOAD_LEN || (pay[0] & ~(MOUSE_TAP_CLICK | MOUSE_SCROLL_REVERSE))) return 0;
+    if (len != MOUSE_PAYLOAD_LEN || (pay[0] & ~MOUSE_OPTIONS)) return 0;
     if (pay[1] < MOUSE_SPEED_MIN || pay[1] > MOUSE_SPEED_MAX || pay[2] < MOUSE_STEP_MIN) return 0;
     for (int g = 0; g < MOUSE_GESTURES; g++) {
         const uint8_t *q = pay + 3 + 3 * g;
