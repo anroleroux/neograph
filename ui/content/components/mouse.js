@@ -14,20 +14,23 @@ const MOUSE_MODIFIER_NAMES = [[0x01, 'Ctrl'], [0x02, 'Shift'], [0x04, 'Alt'], [0
 const MOUSE_BUTTON_NAMES = [[0x01, 'Left'], [0x04, 'Middle'], [0x02, 'Right']];
 
 // The parts of its tile that can be hidden, as [MOUSE_HIDE_ bit, name]. The pad stays.
-const MOUSE_PARTS = [[MOUSE_HIDE_NAME, 'Title'], [MOUSE_HIDE_VSTRIP, 'Vertical scroll'],
+const MOUSE_PARTS = [[MOUSE_HIDE_NAME, 'Title'], [MOUSE_HIDE_PRESETS, 'Presets'], [MOUSE_HIDE_VSTRIP, 'Vertical scroll'],
     [MOUSE_HIDE_HSTRIP, 'Horizontal scroll'], [MOUSE_HIDE_BUTTONS, 'Buttons']];
 const MOUSE_HIDE_ALL = MOUSE_PARTS.reduce((all, [bit]) => all | bit, 0);
+// A new mouse shows its pad, its presets' buttons and its mouse buttons.
+const MOUSE_HIDE_DEFAULT = MOUSE_HIDE_NAME | MOUSE_HIDE_VSTRIP | MOUSE_HIDE_HSTRIP;
 
-// What each gesture does in a preset: [modifiers, buttons, MOUSE_ACT_].
-const MOUSE_PRESETS = {
-    standard: [
+// The presets a mouse starts with, and may add again: what each gesture does,
+// [modifiers, buttons, MOUSE_ACT_].
+const MOUSE_TEMPLATES = {
+    Standard: [
         [0x00, 0x00, MOUSE_ACT_SCROLL],     // two fingers scroll
         [0x00, 0x01, MOUSE_ACT_MOVE],       // three fingers drag with the left button
         [0x01, 0x00, MOUSE_ACT_SCROLL],     // a pinch is Ctrl+wheel: zoom
         [0x00, 0x02, MOUSE_ACT_CLICK],      // a two-finger tap right-clicks
         [0x00, 0x04, MOUSE_ACT_CLICK],      // a three-finger tap middle-clicks
     ],
-    blender: [
+    Blender: [
         [0x00, 0x04, MOUSE_ACT_MOVE],       // orbit: middle-drag
         [0x02, 0x04, MOUSE_ACT_MOVE],       // pan: Shift+middle-drag
         [0x00, 0x00, MOUSE_ACT_SCROLL],     // zoom: the wheel
@@ -36,10 +39,32 @@ const MOUSE_PRESETS = {
     ],
 };
 
+const mouseGestures = (rows) => rows.map(([mods, buttons, act]) => ({ mods, buttons, act }));
+const utf8Length = (text) => new TextEncoder().encode(text).length;
+
 const MOUSE_TAP_MS = 250;       // a touch shorter than this, that moved less than MOUSE_TAP_PX, is a tap
 const MOUSE_TAP_PX = 10;
 const MOUSE_PINCH_PX = 8;       // two fingers: told apart once each has moved this far (see twoFingers)
 const MOUSE_CLICK_MS = 80;      // how long a tap's click holds its buttons
+
+// A settings row of buttons that each do something: [text, what it does, whether it can].
+function actionsSetting(label, actions) {
+    const row = document.createElement('div');
+    row.className = 'editable choice';
+    const span = document.createElement('span');
+    span.className = 'label';
+    span.textContent = label + ':';
+    row.appendChild(span);
+    actions.forEach(([text, act, can]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = text;
+        button.disabled = !can;
+        button.addEventListener('click', act);
+        row.appendChild(button);
+    });
+    return row;
+}
 
 // A settings row of on/off buttons, one for each [bit, name]: as a keyboard's Hold.
 function bitsSetting(label, names, get, set) {
@@ -79,10 +104,13 @@ class uiMouse extends uiComponents {
 
         this.tapClick = true;       // a one-finger tap clicks the left button
         this.reverse = false;       // scrolling follows the finger, as on a phone
-        this.hidden = 0;            // the parts its tile leaves out: MOUSE_HIDE_ bits
+        this.hidden = MOUSE_HIDE_DEFAULT;   // the parts its tile leaves out: MOUSE_HIDE_ bits
+        this.noThree = false;       // the pad takes no third finger
         this.speed = 20;            // tenths of a count per pixel dragged
         this.step = 24;             // pixels dragged a wheel click
-        this.applyPreset('standard');
+        // Its presets, each a name and what its gestures do; and the one in use.
+        this.presets = Object.entries(MOUSE_TEMPLATES).map(([name, rows]) => ({ name, gestures: mouseGestures(rows) }));
+        this.active = 0;
 
         this.held = { pad: 0, gesture: 0, mods: 0 };    // buttons held by the pad's buttons, and by a gesture; modifiers
         this.sent = { buttons: 0, mods: 0 };            // as last sent
@@ -110,21 +138,76 @@ class uiMouse extends uiComponents {
         this.gElmHighlight = g.children[3];
     }
 
+    // ── Its presets ──
+
+    // What the gestures of the preset in use do.
+    get gestures() { return this.presets[this.active].gestures; }
+
+    // Use preset k, on the pad and in the settings. A gesture's hold lets go: the
+    // gesture may do something else in it.
+    setActive(k) {
+        k = Number(k);
+        if (!Number.isInteger(k) || k < 0 || k >= this.presets.length) return false;
+        this.active = k;
+        if (this.held.gesture || this.held.mods) { this.held.gesture = 0; this.held.mods = 0; this.schedule(); }
+        this.showActive?.();
+        if (selected === this) this.createSettings();
+    }
+
+    // A preset's name: 1 to MOUSE_NAME_MAX bytes, no control characters, and not
+    // another preset's (whatever the case); null if it can't be one.
+    nameValid(name, except = -1) {
+        name = String(name).trim();
+        if (!name || utf8Length(name) > MOUSE_NAME_MAX || /[\x00-\x1F\x7F]/.test(name)) return null;
+        return this.presets.some((p, k) => k !== except && p.name.toLowerCase() === name.toLowerCase()) ? null : name;
+    }
+
+    // A name for a new preset from `base`: shortened to fit, and numbered if taken. A
+    // copy of "Sculpt 2" is "Sculpt 3", not "Sculpt 2 2".
+    newName(base) {
+        base = base.replace(/ \d+$/, '') || base;
+        for (let n = 1; ; n++) {
+            const tail = n === 1 ? '' : ' ' + n;
+            let head = base;
+            while (utf8Length(head + tail) > MOUSE_NAME_MAX) head = head.slice(0, -1);
+            const name = this.nameValid(head.trim() + tail);
+            if (name) return name;
+        }
+    }
+
+    renamePreset(name) {
+        name = this.nameValid(name, this.active);
+        if (!name) return false;
+        this.presets[this.active].name = name;
+        buildCommandInterface();
+    }
+
+    // Add a preset, and use it: a copy of the one in use, or one of MOUSE_TEMPLATES.
+    // False if it has MOUSE_PRESETS_MAX.
+    addPreset(template = null) {
+        if (this.presets.length >= MOUSE_PRESETS_MAX) return false;
+        if (template && !MOUSE_TEMPLATES[template]) return false;
+        const gestures = template ? mouseGestures(MOUSE_TEMPLATES[template])
+            : this.gestures.map(g => ({ ...g }));
+        this.presets.push({ name: this.newName(template ?? this.presets[this.active].name), gestures });
+        this.active = this.presets.length - 1;
+        buildCommandInterface();
+        if (selected === this) this.createSettings();
+    }
+
+    // Delete the preset in use, and use the one before it. False if it is the last.
+    deletePreset() {
+        if (this.presets.length <= 1) return false;
+        this.presets.splice(this.active, 1);
+        this.active = Math.max(0, this.active - 1);
+        buildCommandInterface();
+        if (selected === this) this.createSettings();
+    }
+
     // ── Its settings ──
 
-    applyPreset(name) {
-        const preset = MOUSE_PRESETS[name];
-        if (!preset) return false;
-        this.gestures = preset.map(([mods, buttons, act]) => ({ mods, buttons, act }));
-    }
-
-    // The preset its gestures match; null if none.
-    preset() {
-        return Object.keys(MOUSE_PRESETS).find(name => MOUSE_PRESETS[name].every(([mods, buttons, act], g) =>
-            this.gestures[g].mods === mods && this.gestures[g].buttons === buttons && this.gestures[g].act === act)) ?? null;
-    }
-
     static isTap(g) { return MOUSE_GESTURE_NAMES[g][1]; }
+    static threeFinger(g) { return g === MOUSE_GESTURE_DRAG3 || g === MOUSE_GESTURE_TAP3; }
 
     // What gesture g may do: a drag or pinch moves or scrolls; a tap clicks.
     static acts(g) {
@@ -162,52 +245,10 @@ class uiMouse extends uiComponents {
         this.step = Number(v);
     }
 
-    // Its settings from a payload; an invalid one keeps them as they are.
-    restore(pay, r, len) {
-        if (len !== MOUSE_PAYLOAD_LEN || pay[0] & ~MOUSE_OPTIONS) return;
-        if (pay[1] < MOUSE_SPEED_MIN || pay[1] > MOUSE_SPEED_MAX || pay[2] < MOUSE_STEP_MIN) return;
-        const gestures = MOUSE_GESTURE_NAMES.map((_, g) => ({ mods: pay[3 + 3 * g], buttons: pay[4 + 3 * g], act: pay[5 + 3 * g] }));
-        if (gestures.some(({ mods, buttons, act }, g) => mods & ~MOUSE_MODIFIERS || buttons & ~MOUSE_BUTTONS
-            || !uiMouse.acts(g).some(([a]) => a === act))) return;
-        this.tapClick = !!(pay[0] & MOUSE_TAP_CLICK);
-        this.reverse = !!(pay[0] & MOUSE_SCROLL_REVERSE);
-        this.hidden = pay[0] & MOUSE_HIDE_ALL;
-        this.speed = pay[1];
-        this.step = pay[2];
-        this.gestures = gestures;
-    }
-
-    createSettings() {
-        super.createSettings();
-        const settings = document.getElementById('settings');
-        settings.appendChild(choiceSetting('Preset', { standard: 'Standard', blender: 'Blender' },
-            () => this.preset() ?? '', (name) => { this.applyPreset(name); this.createSettings(); }));
-        settings.appendChild(choiceSetting('Tap to click', { on: 'On', off: 'Off' },
-            () => this.tapClick ? 'on' : 'off', (v) => { this.tapClick = v === 'on'; }));
-        settings.appendChild(choiceSetting('Scrolling', { traditional: 'Traditional', natural: 'Natural' },
-            () => this.reverse ? 'natural' : 'traditional', (v) => { this.reverse = v === 'natural'; }));
-        settings.appendChild(bitsSetting('Show', MOUSE_PARTS, () => ~this.hidden & MOUSE_HIDE_ALL,
-            (shown) => this.setShown(shown)));
-        settings.appendChild(editableSetting('Pointer speed', () => (this.speed / 10).toFixed(1),
-            (v) => this.setSpeed(v), {type: 'number', min: MOUSE_SPEED_MIN / 10, max: MOUSE_SPEED_MAX / 10, step: 0.1}));
-        settings.appendChild(editableSetting('Scroll step (px)', () => String(this.step),
-            (v) => this.setStep(v), {type: 'number', min: MOUSE_STEP_MIN, max: 255, step: 1}));
-
-        // Each gesture: what it does, then the keys it holds, and the buttons it holds
-        // (a move) or clicks (a tap). A scroll holds keys only.
-        MOUSE_GESTURE_NAMES.forEach(([name], g) => {
-            const gesture = this.gestures[g];
-            settings.appendChild(selectSetting(name, uiMouse.acts(g), () => gesture.act,
-                (act) => { this.setAct(g, act); this.createSettings(); }));
-            if (gesture.act === MOUSE_ACT_NONE) return;
-            settings.appendChild(bitsSetting('Keys', MOUSE_MODIFIER_NAMES, () => gesture.mods,
-                (mods) => { this.setMods(g, mods); this.refreshPreset(); }));
-            if (gesture.act !== MOUSE_ACT_SCROLL) {
-                settings.appendChild(bitsSetting('Buttons', MOUSE_BUTTON_NAMES, () => gesture.buttons,
-                    (buttons) => { this.setButtons(g, buttons); this.refreshPreset(); }));
-            }
-        });
-        settings.appendChild(orderSetting(this));
+    // Whether the pad takes a third finger: without, the three-finger gestures are off.
+    setThree(on) {
+        this.noThree = !on;
+        if (selected === this) this.createSettings();
     }
 
     // The parts of its tile shown (MOUSE_HIDE_ bits set for each shown), and the tile
@@ -218,17 +259,107 @@ class uiMouse extends uiComponents {
         buildCommandInterface();
     }
 
-    // The Preset row marks the preset the gestures match, if any, after a change.
-    refreshPreset() {
-        const row = [...document.querySelectorAll('#settings .choice')]
-            .find(r => r.querySelector('.label').textContent === 'Preset:');
-        row?.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.value === this.preset()));
+    // A preset's gestures from 15 bytes; null if they aren't ones it can have.
+    static readGestures(bytes) {
+        const gestures = MOUSE_GESTURE_NAMES.map((_, g) => ({ mods: bytes[3 * g], buttons: bytes[3 * g + 1], act: bytes[3 * g + 2] }));
+        return gestures.some(({ mods, buttons, act }, g) => mods & ~MOUSE_MODIFIERS || buttons & ~MOUSE_BUTTONS
+            || !uiMouse.acts(g).some(([a]) => a === act)) ? null : gestures;
+    }
+
+    // Its settings from a payload; an invalid one keeps them as they are. One saved
+    // before presets (MOUSE_LEGACY_LEN) has one preset's gestures: named after the
+    // template they match, or "Custom".
+    restore(pay, r, len) {
+        if (len < 3 || pay[1] < MOUSE_SPEED_MIN || pay[1] > MOUSE_SPEED_MAX || pay[2] < MOUSE_STEP_MIN) return;
+        const presets = [];
+        let active = 0;
+        if (len === MOUSE_LEGACY_LEN) {
+            const gestures = uiMouse.readGestures(pay.slice(3, len));
+            if (!gestures) return;
+            const same = (rows) => rows.every(([m, b, a], g) => gestures[g].mods === m && gestures[g].buttons === b && gestures[g].act === a);
+            presets.push({ name: Object.keys(MOUSE_TEMPLATES).find(n => same(MOUSE_TEMPLATES[n])) ?? 'Custom', gestures });
+        } else {
+            if (len < 5 || pay[4] < 1 || pay[4] > MOUSE_PRESETS_MAX || pay[3] >= pay[4]) return;
+            active = pay[3];
+            const decoder = new TextDecoder('utf-8', { fatal: true });
+            let at = 5;
+            for (let k = 0; k < pay[4]; k++) {
+                const n = pay[at];
+                if (!(n >= 1 && n <= MOUSE_NAME_MAX) || at + 1 + n + 3 * MOUSE_GESTURES > len) return;
+                let name;
+                try { name = decoder.decode(pay.slice(at + 1, at + 1 + n)); } catch { return; }
+                const gestures = uiMouse.readGestures(pay.slice(at + 1 + n, at + 1 + n + 3 * MOUSE_GESTURES));
+                if (!gestures) return;
+                presets.push({ name, gestures });
+                at += 1 + n + 3 * MOUSE_GESTURES;
+            }
+            if (at !== len) return;
+        }
+        this.tapClick = !!(pay[0] & MOUSE_TAP_CLICK);
+        this.reverse = !!(pay[0] & MOUSE_SCROLL_REVERSE);
+        this.hidden = pay[0] & MOUSE_HIDE_ALL;
+        this.noThree = !!(pay[0] & MOUSE_NO_THREE);
+        this.speed = pay[1];
+        this.step = pay[2];
+        this.presets = presets;
+        this.active = active;
+    }
+
+    createSettings() {
+        super.createSettings();
+        const settings = document.getElementById('settings');
+        settings.appendChild(bitsSetting('Show', MOUSE_PARTS, () => ~this.hidden & MOUSE_HIDE_ALL,
+            (shown) => this.setShown(shown)));
+        settings.appendChild(choiceSetting('Tap to click', { on: 'On', off: 'Off' },
+            () => this.tapClick ? 'on' : 'off', (v) => { this.tapClick = v === 'on'; }));
+        settings.appendChild(choiceSetting('Scrolling', { traditional: 'Traditional', natural: 'Natural' },
+            () => this.reverse ? 'natural' : 'traditional', (v) => { this.reverse = v === 'natural'; }));
+        settings.appendChild(choiceSetting('Three fingers', { on: 'On', off: 'Off' },
+            () => this.noThree ? 'off' : 'on', (v) => this.setThree(v === 'on')));
+        settings.appendChild(editableSetting('Pointer speed', () => (this.speed / 10).toFixed(1),
+            (v) => this.setSpeed(v), {type: 'number', min: MOUSE_SPEED_MIN / 10, max: MOUSE_SPEED_MAX / 10, step: 0.1}));
+        settings.appendChild(editableSetting('Scroll step (px)', () => String(this.step),
+            (v) => this.setStep(v), {type: 'number', min: MOUSE_STEP_MIN, max: 255, step: 1}));
+
+        // The presets: the one in use, its name, and adding and deleting them.
+        settings.appendChild(selectSetting('Preset', this.presets.map((p, k) => [String(k), p.name]),
+            () => String(this.active), (k) => this.setActive(k)));
+        settings.appendChild(editableSetting('Preset name', () => this.presets[this.active].name,
+            (name) => this.renamePreset(name), {maxlength: MOUSE_NAME_MAX}));
+        settings.appendChild(actionsSetting('Presets', [
+            ['Copy', () => this.addPreset(), this.presets.length < MOUSE_PRESETS_MAX],
+            ...Object.keys(MOUSE_TEMPLATES).map(t => ['+ ' + t, () => this.addPreset(t), this.presets.length < MOUSE_PRESETS_MAX]),
+            ['Delete', () => this.deletePreset(), this.presets.length > 1],
+        ]));
+
+        // Each gesture of the preset in use: what it does, then the keys it holds, and
+        // the buttons it holds (a move) or clicks (a tap). A scroll holds keys only.
+        // Without three fingers, their gestures are left out.
+        MOUSE_GESTURE_NAMES.forEach(([name], g) => {
+            if (this.noThree && uiMouse.threeFinger(g)) return;
+            const gesture = this.gestures[g];
+            settings.appendChild(selectSetting(name, uiMouse.acts(g), () => gesture.act,
+                (act) => { this.setAct(g, act); this.createSettings(); }));
+            if (gesture.act === MOUSE_ACT_NONE) return;
+            settings.appendChild(bitsSetting('Keys', MOUSE_MODIFIER_NAMES, () => gesture.mods,
+                (mods) => this.setMods(g, mods)));
+            if (gesture.act !== MOUSE_ACT_SCROLL) {
+                settings.appendChild(bitsSetting('Buttons', MOUSE_BUTTON_NAMES, () => gesture.buttons,
+                    (buttons) => this.setButtons(g, buttons)));
+            }
+        });
+        settings.appendChild(orderSetting(this));
     }
 
     marshal() {
-        const options = (this.tapClick ? MOUSE_TAP_CLICK : 0) | (this.reverse ? MOUSE_SCROLL_REVERSE : 0) | this.hidden;
-        const pay = [options, this.speed, this.step, ...this.gestures.flatMap(({ mods, buttons, act }) =>
-            [mods, act === MOUSE_ACT_SCROLL || act === MOUSE_ACT_NONE ? 0 : buttons, act])];
+        const options = (this.tapClick ? MOUSE_TAP_CLICK : 0) | (this.reverse ? MOUSE_SCROLL_REVERSE : 0)
+            | this.hidden | (this.noThree ? MOUSE_NO_THREE : 0);
+        const pay = [options, this.speed, this.step, this.active, this.presets.length,
+            ...this.presets.flatMap(({ name, gestures }) => {
+                const text = [...new TextEncoder().encode(name)];
+                return [text.length, ...text, ...gestures.flatMap(({ mods, buttons, act }) =>
+                    [mods, act === MOUSE_ACT_SCROLL || act === MOUSE_ACT_NONE ? 0 : buttons, act])];
+            })];
         return [this.tc, 0x00, (this.id >> 8) & 0xFF, this.id & 0xFF, pay.length, ...pay];
     }
 
@@ -305,14 +436,16 @@ class uiMouse extends uiComponents {
     // ── Its tile ──
 
     // In the Command view: a tile as wide as four controls (all of a phone's), with the
-    // label, the pad, a scroll strip right of it and one below, and the three buttons.
-    // Each but the pad may be hidden (MOUSE_HIDE_), and the pad takes its room.
+    // label, a button for each preset, the pad, a scroll strip right of it and one
+    // below, and the three buttons. Each but the pad may be hidden (MOUSE_HIDE_), and
+    // the pad takes its room. A new mouse shows the pad, the presets and the buttons.
     buildUI(commandInterface) {
         this.letGo();
         const control = document.createElement('div');
         control.className = 'control-mouse';
         control.innerHTML = `<span class="name"></span>
             <div class="mouse">
+                <div class="mouse-presets" role="radiogroup" aria-label="Preset"></div>
                 <div class="mouse-pad" role="application"></div>
                 <div class="mouse-strip vertical" role="scrollbar" aria-orientation="vertical"></div>
                 <div class="mouse-strip horizontal" role="scrollbar" aria-orientation="horizontal"></div>
@@ -324,6 +457,19 @@ class uiMouse extends uiComponents {
         pad.setAttribute('aria-label', `${this.label}: drag to move the pointer, tap to click`);
         control.querySelector('.vertical').setAttribute('aria-label', 'Scroll up and down');
         control.querySelector('.horizontal').setAttribute('aria-label', 'Scroll left and right');
+
+        // The presets' buttons: a touch uses that preset, at once.
+        const bar = control.querySelector('.mouse-presets');
+        this.presets.forEach((preset, k) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.setAttribute('role', 'radio');
+            button.textContent = preset.name;
+            button.addEventListener('click', () => this.setActive(k));
+            bar.appendChild(button);
+        });
+        this.showActive = () => [...bar.children].forEach((b, k) => b.setAttribute('aria-checked', String(k === this.active)));
+        this.showActive();
 
         // The buttons: each held while touched.
         const row = control.querySelector('.mouse-buttons');
@@ -362,11 +508,17 @@ class uiMouse extends uiComponents {
 
         // Leave out the hidden parts, and lay out the rest.
         const shows = (bit) => !(this.hidden & bit);
-        const parts = { [MOUSE_HIDE_NAME]: '.name', [MOUSE_HIDE_VSTRIP]: '.vertical',
+        const parts = { [MOUSE_HIDE_NAME]: '.name', [MOUSE_HIDE_PRESETS]: '.mouse-presets', [MOUSE_HIDE_VSTRIP]: '.vertical',
             [MOUSE_HIDE_HSTRIP]: '.horizontal', [MOUSE_HIDE_BUTTONS]: '.mouse-buttons' };
-        Object.entries(parts).forEach(([bit, sel]) => { if (!shows(Number(bit))) control.querySelector(sel).remove(); });
+        // The presets' buttons only with presets to choose between.
+        const bars = shows(MOUSE_HIDE_PRESETS) && this.presets.length > 1;
+        Object.entries(parts).forEach(([bit, sel]) => {
+            if (!shows(Number(bit)) || (Number(bit) === MOUSE_HIDE_PRESETS && !bars)) control.querySelector(sel).remove();
+        });
         const v = shows(MOUSE_HIDE_VSTRIP);
-        const rows = [[v ? '"pad v"' : '"pad"', '1fr']];
+        const rows = [];
+        if (bars) rows.push([v ? '"p p"' : '"p"', 'auto']);
+        rows.push([v ? '"pad v"' : '"pad"', '1fr']);
         if (shows(MOUSE_HIDE_HSTRIP)) rows.push([v ? '"h ."' : '"h"', '2.4em']);
         if (shows(MOUSE_HIDE_BUTTONS)) rows.push([v ? '"b b"' : '"b"', '3em']);
         const grid = control.querySelector('.mouse');
@@ -427,6 +579,7 @@ class uiMouse extends uiComponents {
         };
 
         pad.addEventListener('pointerdown', (e) => {
+            if (this.noThree && fingers.size >= 2) return;      // no third finger: it is ignored
             pad.setPointerCapture(e.pointerId);
             fingers.set(e.pointerId, [e.clientX, e.clientY]);
             if (!touch) touch = { most: 0, start: performance.now(), moved: 0, kind: null, gap: 0, from: null };

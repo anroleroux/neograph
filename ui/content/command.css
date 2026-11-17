@@ -263,6 +263,34 @@
     margin-top: 0;
 }
 
+/* The presets: a row of small buttons above the pad, the one in use filled. A row
+   too long for the tile scrolls sideways. */
+#command > .control-mouse .mouse-presets {
+    grid-area: p;
+    display: flex;
+    gap: 0.3em;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+#command > .control-mouse .mouse-presets > button {
+    flex: none;
+    font: inherit;
+    font-size: 0.8em;
+    font-weight: bold;
+    padding: 0.3em 0.75em;
+    color: #20202b;
+    border: 1px solid rgba(32, 32, 43, 0.3);
+    border-radius: 1em;
+    background-color: rgba(32, 32, 43, 0.06);
+    cursor: pointer;
+}
+
+#command > .control-mouse .mouse-presets > button[aria-checked="true"] {
+    background-color: #20202b;
+    color: var(--clr-face);
+}
+
 #command > .control-mouse .mouse-pad,
 #command > .control-mouse .mouse-strip {
     border: 1px solid rgba(32, 32, 43, 0.3);

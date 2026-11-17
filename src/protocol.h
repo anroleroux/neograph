@@ -298,22 +298,28 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define KEYBOARD_TEXT_MAX       64      /* characters in a text keystroke */
 
 /* USB mouse (MSG_HW_MOUSE). Its config payload is its pad's settings, for the UI (the
-   device ignores it): options; pointer speed, MOUSE_SPEED_MIN to MOUSE_SPEED_MAX tenths
-   of a count per pixel dragged; scroll step, MOUSE_STEP_MIN to 255 pixels a wheel click;
-   then MOUSE_GESTURES gestures, in MOUSE_GESTURE_ order, each 3 bytes: the keyboard
-   modifiers it holds (HID bits, MOUSE_MODIFIERS), the mouse buttons it holds
-   (MOUSE_BUTTONS) and what it does (MOUSE_ACT_). */
-#define MOUSE_PAYLOAD_LEN       18
+   device ignores it): options (MOUSE_ bits below); pointer speed, MOUSE_SPEED_MIN to
+   MOUSE_SPEED_MAX tenths of a count per pixel dragged; scroll step, MOUSE_STEP_MIN to
+   255 pixels a wheel click; the preset in use, from 0; its presets, 1 to
+   MOUSE_PRESETS_MAX; then each preset: its name's length, 1 to MOUSE_NAME_MAX, its
+   name (UTF-8), and MOUSE_GESTURES gestures, in MOUSE_GESTURE_ order, each 3 bytes:
+   the keyboard modifiers it holds (HID bits, MOUSE_MODIFIERS), the mouse buttons it
+   holds (MOUSE_BUTTONS) and what it does (MOUSE_ACT_). One of MOUSE_LEGACY_LEN bytes,
+   saved before presets, is options, speed and step, then one preset's gestures, unnamed. */
 #define MOUSE_TAP_CLICK         0x01    /* options bit 0: a one-finger tap on the pad clicks */
 #define MOUSE_SCROLL_REVERSE    0x02    /* options bit 1: scrolling follows the finger, as on a phone */
-#define MOUSE_HIDE_NAME         0x04    /* options bits 2-5: what its tile leaves out: its name, */
+#define MOUSE_HIDE_NAME         0x04    /* options bits 2-6: what its tile leaves out: its name, */
 #define MOUSE_HIDE_VSTRIP       0x08    /*   the vertical scroll strip, */
 #define MOUSE_HIDE_HSTRIP       0x10    /*   the horizontal one, */
-#define MOUSE_HIDE_BUTTONS      0x20    /*   the buttons */
-#define MOUSE_OPTIONS           0x3F    /* every option bit */
+#define MOUSE_HIDE_BUTTONS      0x20    /*   the buttons, */
+#define MOUSE_HIDE_PRESETS      0x40    /*   the presets' buttons */
+#define MOUSE_NO_THREE          0x80    /* options bit 7: the pad takes no third finger */
 #define MOUSE_SPEED_MIN         1
 #define MOUSE_SPEED_MAX         100
 #define MOUSE_STEP_MIN          4
+#define MOUSE_PRESETS_MAX       8
+#define MOUSE_NAME_MAX          12      /* bytes */
+#define MOUSE_LEGACY_LEN        18
 #define MOUSE_GESTURES          5
 #define MOUSE_GESTURE_DRAG2     0       /* two fingers dragged */
 #define MOUSE_GESTURE_DRAG3     1       /* three fingers dragged */
@@ -468,20 +474,36 @@ static inline int keyboard_payload_valid(const uint8_t *pay, uint8_t len, uint8_
     return 1;
 }
 
-/* Whether a USB mouse's config payload is one the UI writes: its length, options it
-   knows, speeds in range, and each gesture holding known modifiers and buttons and
-   doing what its kind can: a drag or pinch moves or scrolls, a tap clicks. */
-static inline int mouse_payload_valid(const uint8_t *pay, uint8_t len) {
-    if (len != MOUSE_PAYLOAD_LEN || (pay[0] & ~MOUSE_OPTIONS)) return 0;
-    if (pay[1] < MOUSE_SPEED_MIN || pay[1] > MOUSE_SPEED_MAX || pay[2] < MOUSE_STEP_MIN) return 0;
-    for (int g = 0; g < MOUSE_GESTURES; g++) {
-        const uint8_t *q = pay + 3 + 3 * g;
+/* Whether a USB mouse preset's gestures (MOUSE_GESTURES × 3 bytes) are ones the UI
+   writes: each holding known modifiers and buttons, and doing what its kind can: a
+   drag or pinch moves or scrolls, a tap clicks. */
+static inline int mouse_gestures_valid(const uint8_t *q) {
+    for (int g = 0; g < MOUSE_GESTURES; g++, q += 3) {
         int tap = g == MOUSE_GESTURE_TAP2 || g == MOUSE_GESTURE_TAP3;
         if ((q[0] & ~MOUSE_MODIFIERS) || (q[1] & ~MOUSE_BUTTONS)) return 0;
         if (q[2] != MOUSE_ACT_NONE && q[2] != (tap ? MOUSE_ACT_CLICK : MOUSE_ACT_MOVE)
             && !(!tap && q[2] == MOUSE_ACT_SCROLL)) return 0;
     }
     return 1;
+}
+
+/* Whether a USB mouse's config payload is one the UI writes: speeds in range, 1 to
+   MOUSE_PRESETS_MAX presets, the one in use among them, each named with 1 to
+   MOUSE_NAME_MAX bytes (no control characters) and with valid gestures, and nothing
+   after them. */
+static inline int mouse_payload_valid(const uint8_t *pay, uint8_t len) {
+    if (len < 5 || pay[1] < MOUSE_SPEED_MIN || pay[1] > MOUSE_SPEED_MAX || pay[2] < MOUSE_STEP_MIN) return 0;
+    if (pay[4] < 1 || pay[4] > MOUSE_PRESETS_MAX || pay[3] >= pay[4]) return 0;
+    unsigned at = 5;
+    for (int k = 0; k < pay[4]; k++) {
+        if (at >= len) return 0;
+        uint8_t n = pay[at];
+        if (n < 1 || n > MOUSE_NAME_MAX || at + 1u + n + 3u * MOUSE_GESTURES > len) return 0;
+        for (uint8_t i = 1; i <= n; i++) if (pay[at + i] < 0x20 || pay[at + i] == 0x7F) return 0;
+        if (!mouse_gestures_valid(pay + at + 1 + n)) return 0;
+        at += 1u + n + 3u * MOUSE_GESTURES;
+    }
+    return at == len;
 }
 
 /* Whether a USB mouse's command is one the device acts on: its length, and only known

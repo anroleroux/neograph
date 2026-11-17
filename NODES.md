@@ -593,6 +593,54 @@ it. Text is typed as on a US keyboard layout.
 | Default label | Mouse |
 
 Plugged into a PC, the device is also a USB mouse. This node is a touch pad in the
+Command view, as wide as four controls (a phone's whole width). A new mouse shows a
+row of preset buttons, the pad, and Left, Middle and Right buttons, each held while
+you touch it. Its title and two scroll strips (one right of the pad, one below) can
+be shown with **Show**.
+
+- **One finger** moves the pointer. A quick tap clicks (with Tap to click on).
+- **The strips** turn the scroll wheels, a click for each scroll step dragged.
+- **Two and three fingers** do what the preset in use says: a drag or pinch moves the
+  pointer or scrolls, while holding keys (Ctrl, Shift, Alt, Win) and mouse buttons; a
+  tap clicks buttons, with keys held. Two fingers moving the same way are a drag,
+  moving apart or together a pinch. With **Three fingers** off, a third finger is
+  ignored.
+- **Presets** hold what the gestures do. A mouse has up to 8; the buttons above the
+  pad switch between them at once, even mid-use. A new mouse has two:
+
+  | Gesture | Standard | Blender |
+  |---|---|---|
+  | Two-finger drag | Scroll | Move, holding Middle: orbit |
+  | Three-finger drag | Move, holding Left: drag | Move, holding Shift and Middle: pan |
+  | Pinch | Scroll, holding Ctrl: zoom | Scroll: zoom |
+  | Two-finger tap | Click Right | Click Right |
+  | Three-finger tap | Click Middle | Click Middle |
+
+- **Nothing sticks.** If the browser goes quiet for a second with something held (the
+  page closed, the phone locked, the WiFi dropped), the device lets go of it.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Show | Title, Presets, Vertical scroll, Horizontal scroll, Buttons (each on or off) | Presets, Buttons | The parts of the tile shown. The pad grows into the room of those hidden. The preset buttons show only with two presets or more. |
+| Tap to click | On, Off | On | Whether a quick one-finger tap clicks the left button. |
+| Scrolling | Traditional, Natural | Traditional | **Traditional:** a finger up scrolls up, as a wheel. **Natural:** the page follows the finger, as on a phone. |
+| Three fingers | On, Off | On | **Off:** a third finger on the pad is ignored, and the three-finger gestures leave these settings. |
+| Pointer speed | 0.1 to 10 | 2.0 | Mouse counts per pixel dragged. The PC's own pointer speed also applies. |
+| Scroll step (px) | 4 to 255 | 24 | Pixels dragged for each click of the wheel. |
+| Preset | The mouse's presets | Standard | The preset in use, and the one the gesture settings below change. |
+| Preset name | Up to 12 characters | | Renames the preset in use. Each name is its own. |
+| Presets | Copy, + Standard, + Blender, Delete | | **Copy** adds a copy of the preset in use; **+ Standard** and **+ Blender** add those afresh; **Delete** deletes the preset in use (not the last one). A new preset is put in use. |
+| Two-finger drag, Three-finger drag, Pinch | Nothing, Move pointer, Scroll | as the preset | What the gesture does. A pinch apart moves up, or scrolls up. |
+| Two-finger tap, Three-finger tap | Nothing, Click | as the preset | What the tap does. |
+| Keys | Ctrl, Shift, Alt, Win (each on or off) | as the preset | Held on the keyboard while the gesture lasts: pressed before its buttons, let go after them. |
+| Buttons | Left, Middle, Right (each on or off) | as the preset | With Move pointer: held while the gesture lasts. With Click: clicked. |
+
+---|---|
+| Category | Hardware output (USB), with its own pad |
+| Inputs, outputs | None: it takes no wires |
+| Default label | Mouse |
+
+Plugged into a PC, the device is also a USB mouse. This node is a touch pad in the
 Command view: as wide as four controls (a phone's whole width), with a vertical scroll
 strip right of it, a horizontal one below, and Left, Middle and Right buttons, each
 held while you touch it.
@@ -1079,7 +1127,7 @@ Pressing the button sets the latch, which runs the blink. The counter counts the
 blinks; at the third, Done resets the latch, which stops the blink and resets the
 counter, ready for the next press.
 
-The demo graph, which a new device starts from, has this loop inside a block,
+The offline demo's graph has this loop inside a block,
 "Blink 3": a momentary button **Blink 3 times** → the block → a light in the Command
 view. The block's input, Start, sets the latch; its output, Blink, is the blink.
 Double-click the block to see the loop. Below it, a slider **Level** drives a

@@ -862,18 +862,17 @@ function demoGraph() {
     new uiNeoPixel(100, 420);                   // n11: a 4 × 4 array on GPIO 16, a bar along its top row
     createEdge('n10', 'n11');                   // slider → NeoPixels
 }
-// The browser-only build starts on the demo graph. A device's page starts on the
-// Network view, with nothing to show until it is connected: a device that has no
-// graph saved then gets the demo graph (see deviceConfig).
+// The browser-only build starts on the demo graph, to try things on with no device.
+// A device's page starts on the Network view, with nothing to show until it is
+// connected: a device that has no graph saved then shows an empty one (see deviceConfig).
 demoGraph(); //offline
 toGraph(); //offline
 setLinked(linked);
 
-// A device's config has arrived: show its graph, or the demo graph if it has none
-// and there is none here.
+// A device's config has arrived: show its graph. A device with none saved (one just
+// flashed) shows an empty graph.
 function deviceConfig(payload) {
     gfig = payload;
     setLinked(true);
     unmarshalConfigs(gfig);
-    if (!Object.keys(mainElements()).length) demoGraph();
 }

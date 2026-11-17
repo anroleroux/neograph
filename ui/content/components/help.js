@@ -95,7 +95,8 @@ const NODE_HELP = {
     ],
     mouse: [
         "Plugged into a PC, the device is also a USB mouse. This node is a touch pad in the Command view: one finger moves the pointer and a tap clicks; the strips scroll; the buttons are held while touched.",
-        "Two- and three-finger drags, a pinch and two- and three-finger taps do what you set below, holding keys and buttons: the Blender preset orbits with two fingers (middle-drag) and pans with three (Shift+middle-drag).",
+        "Two- and three-finger drags, a pinch and two- and three-finger taps do what the preset in use says, holding keys and buttons: Blender orbits with two fingers (middle-drag) and pans with three (Shift+middle-drag).",
+        "Add, rename and delete presets below; the buttons above the pad switch between them at once. Three fingers Off ignores a third finger, where a phone tracks them poorly.",
     ],
     compare: [
         "On while its number input is above (or below) the threshold. The threshold is in the input's unit: °C, volts, or 0 to 1 for a slider.",

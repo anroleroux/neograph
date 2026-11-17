@@ -472,7 +472,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `25` Servo | 12 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin · bytes 4–5: angles at input 0 and 1 · bytes 6–9: pulses at 0° and 180° · bytes 10–11: speed limit. See [Servos](#servos). |
 | `26` NeoPixels | 20–38 | Bytes 0–2: source reference · bytes 3–5: on/off source reference (each 0 = not connected) · byte 6: GPIO pin · byte 7: layout · byte 8: options · byte 9: brightness · byte 10: the bytes of its size, *k* · then its size · then its graphic: its type, the bytes of its settings, and those · then, in a chain, its data line in's source reference. See [NeoPixels](#neopixels). |
 | `23` USB keyboard | 6, or 5–68 | Bytes 0–2: source reference (0 = not connected) · byte 3: `KEYBOARD_COMBO` (0) or `KEYBOARD_TEXT` (1) · then a combo's HID modifier bits and HID key, or 1–64 characters of text. See [USB keyboards](#usb-keyboards). |
-| `27` USB mouse | 18 (`MOUSE_PAYLOAD_LEN`) | Its pad's settings; the device ignores them. Byte 0: options, bit 0 `MOUSE_TAP_CLICK`: a one-finger tap clicks (UI default on); bit 1 `MOUSE_SCROLL_REVERSE`: scrolling follows the finger (UI default off); bits 2–5, what its tile leaves out: its name (`MOUSE_HIDE_NAME`), the vertical scroll strip (`MOUSE_HIDE_VSTRIP`), the horizontal one (`MOUSE_HIDE_HSTRIP`) and the buttons (`MOUSE_HIDE_BUTTONS`) (UI default none). Other bits are 0 · byte 1: pointer speed, tenths of a count per pixel dragged, `MOUSE_SPEED_MIN` (1) to `MOUSE_SPEED_MAX` (100; UI default 20) · byte 2: scroll step, pixels dragged a wheel click, `MOUSE_STEP_MIN` (4) to 255 (UI default 24) · bytes 3–17: `MOUSE_GESTURES` (5) gestures, 3 bytes each. See [USB mice](#usb-mice). |
+| `27` USB mouse | 27–229 (or 18) | Its pad's settings; the device ignores them. Byte 0: options, bit 0 `MOUSE_TAP_CLICK`: a one-finger tap clicks (UI default on); bit 1 `MOUSE_SCROLL_REVERSE`: scrolling follows the finger (UI default off); bits 2–6, what its tile leaves out: its name (`MOUSE_HIDE_NAME`), the vertical scroll strip (`MOUSE_HIDE_VSTRIP`), the horizontal one (`MOUSE_HIDE_HSTRIP`), the buttons (`MOUSE_HIDE_BUTTONS`) and the presets' buttons (`MOUSE_HIDE_PRESETS`) (UI default: the name and both strips); bit 7 `MOUSE_NO_THREE`: the pad takes no third finger (UI default off) · byte 1: pointer speed, tenths of a count per pixel dragged, `MOUSE_SPEED_MIN` (1) to `MOUSE_SPEED_MAX` (100; UI default 20) · byte 2: scroll step, pixels dragged a wheel click, `MOUSE_STEP_MIN` (4) to 255 (UI default 24) · byte 3: the preset in use, from 0 · byte 4: its presets, 1 to `MOUSE_PRESETS_MAX` (8) · then each preset: its name's length, 1 to `MOUSE_NAME_MAX` (12), its name (UTF-8, no control characters), and `MOUSE_GESTURES` (5) gestures, 3 bytes each. One of `MOUSE_LEGACY_LEN` (18) bytes, saved before presets, has bytes 0–2, then one preset's gestures, unnamed. See [USB mice](#usb-mice). |
 
 Without `MSG_FLAG_OUTPUT` each [source reference](#source-references) is a byte
 shorter, and so is everything after it: an LED is 2 bytes, a GPO 3, a PWM 15, a
@@ -624,8 +624,9 @@ A1 00 00 05 04  FF 38 00 78                     #   at (-200, 120)
 
 When a config arrives, the UI rebuilds the graph from it:
 
-- **If the config has no control messages** (a first-boot config), the UI keeps the
-  graph it has, so a new device starts from the built-in demo graph: a button `n1`
+- **If the config has no control messages** (a first-boot config), the graph is
+  empty: a device just flashed starts with no nodes. The browser-only build
+  ([offline demo](README.md)) starts from the built-in demo graph instead: a button `n1`
   driving the onboard LED `n2`, and a momentary button `n3` driving a light `n5`
   through a copy `n4` of the [block](#blocks) "Blink 3" (its parts `n6` to `n9`).
   Inside the block is the [blink-three-times loop](#loops) of `logic-loop-config`:
@@ -1402,14 +1403,21 @@ browser drives it, and the graph takes no part.
   [keyboard](#usb-keyboards) and the serial console. It comes up whatever the graph.
 - **Its tile.** A pad, a vertical scroll strip beside it, a horizontal one below, and
   Left, Middle and Right buttons, each held while touched. The tile spans the Command
-  view's width, so a phone shows the pad large. Its name, either strip and the buttons
-  can each be hidden (`MOUSE_HIDE_` options); the pad takes their room.
+  view's width, so a phone shows the pad large. Its name, its presets' buttons, either
+  strip and the buttons can each be hidden (`MOUSE_HIDE_` options); the pad takes their
+  room. A new mouse shows its presets' buttons, the pad and the buttons.
+- **Presets.** A mouse has 1 to 8 named presets, each with its own gestures (below),
+  and uses one at a time. A row of small buttons above the pad, one for each preset,
+  switches between them at once, while the pad is in use; it is there only with two
+  or more. A new mouse has two, **Standard** and **Blender**. The settings add one (a
+  copy of the one in use, or Standard or Blender afresh), rename and delete them; the
+  rest of the settings are the mouse's, whichever preset is in use.
 - **One finger** on the pad moves the pointer: each pixel dragged is the pointer
   speed in tenths of a count. A quick tap (under 250 ms, moving under 10 px) clicks
   the left button, with `MOUSE_TAP_CLICK`. **The strips** turn the wheels: each
   scroll step dragged is one click, up and right; with `MOUSE_SCROLL_REVERSE`, the
   other way, so the page follows the finger.
-- **Gestures with more fingers** do what the settings say. Each of the five
+- **Gestures with more fingers** do what the preset in use says. Each of the five
   (`MOUSE_GESTURE_`: two-finger drag, three-finger drag, pinch, two-finger tap,
   three-finger tap) holds keyboard modifiers (left Ctrl `01`, Shift `02`, Alt `04`, Win
   `08`) and mouse buttons (left `01`, right `02`, middle `04`) while it does one thing
@@ -1427,11 +1435,12 @@ browser drives it, and the graph takes no part.
 
   The modifiers are held on the keyboard before the buttons are pressed, a command
   earlier, and let go after them, so a program sees Shift+middle-drag, not a middle
-  drag that Shift joins. The UI has two presets: **Standard** (two fingers scroll,
-  three drag with the left button, a pinch is Ctrl+wheel, a two-finger tap a right
-  click, a three-finger tap a middle click) and **Blender** (two fingers orbit,
-  middle-drag; three pan, Shift+middle-drag; a pinch zooms, the wheel; the taps as
-  Standard).
+  drag that Shift joins. **Standard:** two fingers scroll, three drag with the left
+  button, a pinch is Ctrl+wheel, a two-finger tap a right click, a three-finger tap a
+  middle click. **Blender:** two fingers orbit (middle-drag), three pan
+  (Shift+middle-drag), a pinch zooms (the wheel), the taps as Standard.
+- **Three fingers off** (`MOUSE_NO_THREE`): a third finger on the pad is ignored, so
+  three are two, and the three-finger gestures leave the settings.
 - **Commands.** At most once an animation frame while the pad is used, the UI sends
   a [command](#01-command): the buttons and modifiers held, and the pointer's move
   and wheel clicks since the last, in whole counts (the rest is kept for the next).
@@ -1448,16 +1457,18 @@ browser drives it, and the graph takes no part.
   the PC reports of up to 127 counts or clicks each way, one each millisecond until
   nothing waits. Several mouse nodes share the one USB mouse.
 
-A mouse `n1` set up for Blender:
+A mouse `n1` as it starts, using its Blender preset:
 
 ```hex example=mouse-config
-0A 00 17                                        # Config, 23 bytes
-27 00 00 01 12  01 14 18                        # mouse n1: tap clicks, speed 2.0, 24 px a click
-                00 04 01                        #   two-finger drag: middle held, moves (orbit)
-                02 04 01                        #   three-finger drag: Shift, middle held, moves (pan)
-                00 00 02                        #   pinch: scrolls (zoom)
-                00 02 03                        #   two-finger tap: right click
-                00 04 03                        #   three-finger tap: middle click
+0A 00 39                                        # Config, 57 bytes
+27 00 00 01 34  1D 14 18 01 02                  # mouse n1: tap clicks, name and strips hidden; speed 2.0,
+                                                #   24 px a click; preset 1 in use, of 2
+                08 53 74 61 6E 64 61 72 64      #   preset 0, "Standard":
+                00 00 02  00 01 01  01 00 02    #     two fingers scroll, three drag (left), pinch Ctrl+wheel
+                00 02 03  00 04 03              #     two-finger tap right click, three-finger middle
+                07 42 6C 65 6E 64 65 72         #   preset 1, "Blender":
+                00 04 01  02 04 01  00 00 02    #     orbit (middle), pan (Shift+middle), zoom (wheel)
+                00 02 03  00 04 03              #     the taps as Standard
 ```
 
 ### Stepper motors

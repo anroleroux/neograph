@@ -559,16 +559,22 @@ void test_mouse_config(void)
     config_element_iterator it;
     messages(&it, ex);
 
-    assert_message(&it, MSG_HW_MOUSE, 1, MOUSE_PAYLOAD_LEN);
+    assert_message(&it, MSG_HW_MOUSE, 1, 52);
     TEST_ASSERT_TRUE(mouse_payload_valid(it.pay, it.len));
-    TEST_ASSERT_EQUAL_HEX8(MOUSE_TAP_CLICK, it.pay[0]);
+    TEST_ASSERT_EQUAL_HEX8(MOUSE_TAP_CLICK | MOUSE_HIDE_NAME | MOUSE_HIDE_VSTRIP | MOUSE_HIDE_HSTRIP, it.pay[0]);
     TEST_ASSERT_EQUAL_UINT8(20, it.pay[1]);
     TEST_ASSERT_EQUAL_UINT8(24, it.pay[2]);
-    const uint8_t *pan = it.pay + 3 + 3 * MOUSE_GESTURE_DRAG3;     /* Shift + middle drag */
+    TEST_ASSERT_EQUAL_UINT8(1, it.pay[3]);                           /* Blender in use */
+    TEST_ASSERT_EQUAL_UINT8(2, it.pay[4]);
+    TEST_ASSERT_EQUAL_UINT8(8, it.pay[5]);
+    TEST_ASSERT_EQUAL_MEMORY("Standard", it.pay + 6, 8);
+    const uint8_t *blender = it.pay + 6 + 8 + 3 * MOUSE_GESTURES;
+    TEST_ASSERT_EQUAL_UINT8(7, blender[0]);
+    TEST_ASSERT_EQUAL_MEMORY("Blender", blender + 1, 7);
+    const uint8_t *pan = blender + 8 + 3 * MOUSE_GESTURE_DRAG3;      /* Shift + middle drag */
     TEST_ASSERT_EQUAL_HEX8(0x02, pan[0]);
     TEST_ASSERT_EQUAL_HEX8(0x04, pan[1]);
     TEST_ASSERT_EQUAL_HEX8(MOUSE_ACT_MOVE, pan[2]);
-    TEST_ASSERT_EQUAL_HEX8(MOUSE_ACT_SCROLL, it.pay[3 + 3 * MOUSE_GESTURE_PINCH + 2]);
     TEST_ASSERT_FALSE(it.next(&it));
 
     /* Core 1 runs nothing for it. */
@@ -595,46 +601,75 @@ void test_command_mouse(void)
     TEST_ASSERT_FALSE(it.next(&it));
 }
 
-/* The settings the UI writes: known options, speeds in range, and each gesture doing
+/* The settings the UI writes: speeds in range, 1 to MOUSE_PRESETS_MAX presets with the
+ * one in use among them, names of 1 to MOUSE_NAME_MAX bytes, and each gesture doing
  * what its kind can. */
 void test_mouse_payload_valid(void)
 {
-    uint8_t p[MOUSE_PAYLOAD_LEN + 1] = { MOUSE_TAP_CLICK | MOUSE_SCROLL_REVERSE, MOUSE_SPEED_MAX, MOUSE_STEP_MIN };
-    TEST_ASSERT_TRUE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));                /* every gesture off */
-    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN - 1));
-    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN + 1));
+    /* Options, speed, step, preset 0 of 1: "A", every gesture off. */
+    uint8_t p[5 + MOUSE_PRESETS_MAX * (1 + MOUSE_NAME_MAX + 3 * MOUSE_GESTURES) + 1] =
+        { 0xFF, MOUSE_SPEED_MAX, MOUSE_STEP_MIN, 0, 1, 1, 'A' };            /* every option */
+    uint8_t len = 5 + 1 + 1 + 3 * MOUSE_GESTURES;
+    TEST_ASSERT_TRUE(mouse_payload_valid(p, len));
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len - 1));
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len + 1));                         /* something after */
 
-    p[0] = MOUSE_OPTIONS;                                                       /* every part hidden */
-    TEST_ASSERT_TRUE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
-    p[0] = 0x40;                                                                /* no such option */
-    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
-    p[0] = 0;
     p[1] = MOUSE_SPEED_MIN - 1;
-    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
     p[1] = MOUSE_SPEED_MAX + 1;
-    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
     p[1] = MOUSE_SPEED_MIN;
     p[2] = MOUSE_STEP_MIN - 1;
-    TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
     p[2] = 255;
-    TEST_ASSERT_TRUE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+    p[3] = 1;                                                                   /* in use: no such preset */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
+    p[3] = 0;
+    p[4] = 0;                                                                   /* no presets */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
+    p[4] = 2;                                                                   /* a second, missing */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
+    p[4] = 1;
+    p[6] = 0x1F;                                                                /* a control character */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
+    p[6] = 'A';
+    p[5] = 0;                                                                   /* no name */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, len - 1));
+    p[5] = 1;
 
     for (int g = 0; g < MOUSE_GESTURES; g++) {
-        uint8_t *q = p + 3 + 3 * g;
+        uint8_t *q = p + 7 + 3 * g;
         int tap = g == MOUSE_GESTURE_TAP2 || g == MOUSE_GESTURE_TAP3;
         q[0] = MOUSE_MODIFIERS; q[1] = MOUSE_BUTTONS;
         for (uint8_t act = 0; act < 5; act++) {
             q[2] = act;
             int ok = act == MOUSE_ACT_NONE || (tap ? act == MOUSE_ACT_CLICK : act == MOUSE_ACT_MOVE || act == MOUSE_ACT_SCROLL);
-            TEST_ASSERT_EQUAL_INT_MESSAGE(ok, mouse_payload_valid(p, MOUSE_PAYLOAD_LEN), "gesture and action");
+            TEST_ASSERT_EQUAL_INT_MESSAGE(ok, mouse_payload_valid(p, len), "gesture and action");
         }
         q[2] = MOUSE_ACT_NONE;
         q[0] = 0x10;                                                            /* a right-hand modifier */
-        TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+        TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
         q[0] = 0; q[1] = 0x08;                                                  /* a fourth button */
-        TEST_ASSERT_FALSE(mouse_payload_valid(p, MOUSE_PAYLOAD_LEN));
+        TEST_ASSERT_FALSE(mouse_payload_valid(p, len));
         q[1] = 0;
     }
+
+    /* MOUSE_PRESETS_MAX presets, each named with MOUSE_NAME_MAX bytes: the most there can be; one more is too many. */
+    p[4] = MOUSE_PRESETS_MAX;
+    uint8_t at = 5;
+    for (int k = 0; k < MOUSE_PRESETS_MAX; k++) {
+        p[at] = MOUSE_NAME_MAX;
+        memset(p + at + 1, 'a' + k, MOUSE_NAME_MAX);
+        memset(p + at + 1 + MOUSE_NAME_MAX, 0, 3 * MOUSE_GESTURES);
+        at += 1 + MOUSE_NAME_MAX + 3 * MOUSE_GESTURES;
+    }
+    p[3] = MOUSE_PRESETS_MAX - 1;
+    TEST_ASSERT_TRUE(mouse_payload_valid(p, at));
+    p[5] = MOUSE_NAME_MAX + 1;                                                  /* a name too long */
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, at));
+    p[5] = MOUSE_NAME_MAX;
+    p[4] = MOUSE_PRESETS_MAX + 1;
+    TEST_ASSERT_FALSE(mouse_payload_valid(p, at));
 }
 
 void test_mouse_report_valid(void)
