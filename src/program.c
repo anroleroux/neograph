@@ -233,7 +233,7 @@ static float signal_full(const hw_program *p, uint8_t s) {
     case MSG_HW_LIGHT:
         for (uint8_t i = 0; i < p->node_count; i++) {
             const prog_node *n = &p->nodes[i];
-            if (n->type == MSG_HW_LIGHT && s >= n->out && s < n->out + 4) return light_full(&n->light, (uint8_t)(s - n->out));
+            if (n->type == MSG_HW_LIGHT && s >= n->out && s < n->out + LIGHT_OUTPUTS) return light_full(&n->light, (uint8_t)(s - n->out));
         }
         return 1;
     case MSG_LOGIC_COUNTER:
@@ -456,12 +456,12 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
         }
 
         case MSG_HW_LIGHT: {
-            // Four signals, in a row: its µA, reflected µA, reading and load.
+            // Five signals, in a row: its background µA, reflected µA, reading, load and LED.
             light_payload light;
             if (!light_payload_read(itr.pay, itr.len, &light)) break;
             if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
             bool all = true;
-            for (uint8_t k = 1; k < 4; k++) all = all && add_signal(p, itr.id, k, itr.type, 0) == s + k;
+            for (uint8_t k = 1; k < LIGHT_OUTPUTS; k++) all = all && add_signal(p, itr.id, k, itr.type, 0) == s + k;
             if (!all) break;
             if ((n = add_node(p, itr.type, itr.id))) {
                 n->out = s;
@@ -749,11 +749,9 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
                 if (k) put(&t, " %u:%lu", l->pins[k], (unsigned long)l->ohms[k]);
                 else put(&t, " %lu", (unsigned long)l->ohms[0]);
             }
-            if (l->led != LIGHT_NO_PIN)
-                put(&t, " led %u%s reflect %u led %u us bursts %u", l->led, l->options & LIGHT_LED_LOW ? " low" : "",
-                    l->reflect_range, l->led_us, l->bursts);
+            if (l->options & LIGHT_REFLECT) put(&t, " reflect %u bursts %u", l->reflect_range, l->bursts);
             put(&t, " settle %u us samples %u -> ", l->settle_us, l->samples);
-            for (uint8_t k = 0; k < 4; k++) {
+            for (uint8_t k = 0; k < LIGHT_OUTPUTS; k++) {
                 if (k) put(&t, " ");
                 put_signal(&t, (uint8_t)(n->out + k));
             }

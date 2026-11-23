@@ -80,10 +80,10 @@ static void check_under(const uint8_t *p, size_t len, uint16_t id, const neopixe
 
 /* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
    count, a DS18B20's temperature and found, an encoder's position and pressed, an
-   ultrasonic ranger's distance and echo, a light sensor's four, one for the others. */
+   ultrasonic ranger's distance and echo, a light sensor's five, one for the others. */
 static uint8_t outputs_of(uint8_t type) {
     if (type == MSG_HW_CLOCK) return 3;     /* its hour, minute and second */
-    if (type == MSG_HW_LIGHT) return 4;     /* its µA, reflected µA, reading and load */
+    if (type == MSG_HW_LIGHT) return LIGHT_OUTPUTS;     /* its µA, reflected µA, reading, load and LED */
     return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20
         || type == MSG_HW_ENCODER || type == MSG_HW_ULTRASONIC ? 2 : 1;
 }
@@ -102,7 +102,7 @@ static bool has_refs(uint8_t type) {
 static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE, MSG_LOGIC_AND, MSG_LOGIC_OR,
                                    MSG_LOGIC_NOT, MSG_LOGIC_DELAY, MSG_LOGIC_PULSE, MSG_LOGIC_BLINK,
                                    MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20,
-                                   MSG_HW_ENCODER, MSG_HW_ULTRASONIC, 0 };
+                                   MSG_HW_ENCODER, MSG_HW_ULTRASONIC, MSG_HW_LIGHT, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20, MSG_HW_ENCODER, MSG_HW_CLOCK,
                                     MSG_HW_ULTRASONIC, MSG_HW_LIGHT, MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, MSG_LOGIC_SINE, 0 };
 
@@ -159,6 +159,8 @@ static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_
     if (type == MSG_HW_ENCODER && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
     /* An ultrasonic ranger's distance (0) is floating, its echo (1) boolean. */
     if (type == MSG_HW_ULTRASONIC && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
+    /* A light sensor's LED is boolean, its other four floating. */
+    if (type == MSG_HW_LIGHT && (src.output == LIGHT_LED_OUTPUT) != (types == BOOLEAN)) { fail(what); return; }
     for (; *types; types++) if (type == *types) return;
     fail(what);
 }

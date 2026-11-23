@@ -530,17 +530,25 @@ Things to know:
 | | |
 |---|---|
 | Category | Hardware input |
-| Outputs | Four numbers: **µA**, the photocurrent; **Reflected**, the LED's light sent back, in µA; **Raw**, its ADC reading, 0–4095; **Load**, the resistance it read through, in kΩ |
+| Outputs | **µA**: number, the background light; **Reflected**: number, the LED's light sent back, in µA; **Raw**: number, its ADC reading, 0–4095; **Load**: number, the resistance it read through, in kΩ; **LED**: on/off, the LED it flashes to see reflections |
 | Default label | Light |
 
 A phototransistor, such as a BPT-BP0334, read on an ADC pin through a load resistor
 the device switches to change its sensitivity: a high load for dim light, a low one for
-sun. With an LED it also measures light reflected back from something in front of it,
-leaving out daylight and lamp flicker. The offline demo passes a cloud over it and waves
-a hand over its LED.
+sun. It tracks two things:
+
+- **µA, the background light**, as an absolute value: the photocurrent, so it reads
+  the same whatever range it is on. When it changes range, Raw and Load change, µA
+  doesn't. It is read only while its LED is off.
+- **Reflected, for proximity:** it flashes its **LED** output, on for one scan and off
+  for the next, and measures how much more light comes back while it is on. Something
+  nearer sends more back; daylight and lamp flicker drop out.
+
+Wire **LED** to whatever lights your LED: a GPO driving a transistor, or NeoPixels'
+on/off input. The offline demo passes a cloud over it and a hand in front of it.
 
 Pick the output the next wire leaves from in **Wire from**, and each wire is labelled
-with it. µA and Reflected go to a compare (on when something is close, or when it gets
+with it. µA and Reflected go to a compare (on when something is near, or when it gets
 dark), a plot, a scale, or a PWM, servo or NeoPixels; Raw and Load show what it is doing.
 
 | Setting | Values | Default | What it does |
@@ -549,39 +557,38 @@ dark), a plot, a scale, or a PWM, servo or NeoPixels; Raw and Load show what it 
 | Load 1–3 pin | None, or a GPIO not used by another node | GPIO 2, 3, 4 | The pin each switched load resistor goes to. |
 | Load 1–3 | 10 Ω – 100 MΩ, such as 4.7k or 1M | 1 kΩ, 10 kΩ, 100 kΩ | The resistor on that pin. |
 | Always-on load | 10 Ω – 100 MΩ, or none | 1 MΩ | The resistor from the sense pin straight to GND. |
-| Ranging | Auto, Fixed | Auto | Auto picks the range from its readings; Fixed reads on one. |
-| Range | Its ranges | — | With Fixed: the one it reads on. |
+| Ranging | Auto, Fixed | Auto | Auto picks the range for µA from its readings; Fixed reads on one. |
+| Range | Its ranges | — | With Fixed: the one it reads µA on. |
 | Settle (µs) | 0–3000 | 1000 | How long it waits after switching a load. |
 | Samples | 1–64 | 16 | ADC reads averaged into each reading. |
-| LED pin | None, or a GPIO not used by another node | None | The pin driving its LED. With None it measures no reflections. |
-| LED on when | High, Low | High | With an LED: High for an LED switched by an NPN transistor. |
-| Reflection range | Its ranges | 100 kΩ | With an LED: the range it measures reflections on. |
-| LED wait (µs) | 10–1000 | 300 | With an LED: how long it waits after turning it on or off, before reading. |
-| Bursts | 1–50 | 8 | With an LED: bursts, one each 10 ms, averaged into a Reflected reading. |
-| Wire from | µA, Reflected, Raw, Load | µA | Which output the next wire leaves from. |
+| Reflections | On, Off | On | On: it flashes LED and measures Reflected. Off: LED stays off, Reflected is 0, and µA is read every scan. |
+| Reflection range | Its ranges | 100 kΩ | With reflections: the range it measures them on. |
+| Bursts | 1–50 | 8 | With reflections: on-off flashes, one each 20 ms, averaged into a Reflected reading. 8 is one every 160 ms. |
+| Wire from | µA, Reflected, Raw, Load, LED | µA | Which output the next wire leaves from. |
 | Command view | Show, Hide | Hide | A tile such as "16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA". |
 
 Things to know:
 
 - **Wiring:** collector to 3.3 V, emitter to the sense pin. From the sense pin, the
-  always-on load to GND, and each switched load to its pin. The LED goes through a
-  transistor on its pin. Every pin can be changed; loads you haven't fitted are None.
+  always-on load to GND, and each switched load to its pin. Every pin can be changed;
+  loads you haven't fitted are None. An infrared LED (it peaks at 940 nm) suits it best.
+- **The LED must follow LED within a scan:** a GPO, or NeoPixels (a long chain of
+  several hundred LEDs takes too long to send). Logic such as AND or NOT in between is
+  fine; a delay, or the onboard LED (the WiFi chip drives it, late), isn't.
 - **Ranges:** range 0 is the always-on load alone; each switched load is in parallel
   with it, so 100 kΩ with 1 MΩ always on is 90.9 kΩ. The device switches one load in at
   a time by driving its pin low, and lets the others go. On the RP2350 a let-go pin also
   has its input buffer turned off, so it doesn't leak into the sense pin (erratum E9).
 - **Auto** starts on the most sensitive range, steps down one range when a reading
   passes 3900 and back up when one is under 200, if it would fit there; the gap keeps
-  it from flapping.
+  it from flapping. Reflections stay on their own range.
 - **µA** is the reading in volts over the load it read through. It is approximate: the
   resistors' tolerance, and on the 1 MΩ range the ADC itself, shift it.
-- **Reflected** is, for each burst, the reading with the LED on less the mean of the
-  readings with it off just before and after, so daylight and 100 Hz mains flicker drop
-  out. It is measured on the Reflection range, not the auto one. If µA and Reflected are
-  on the same range, µA comes from the burst's LED-off readings.
-- **It holds the device** for its readings each scan: about 2.7 ms with the defaults
-  and an LED. A longer Settle or LED wait holds it longer.
-- **After a save** it keeps its readings until the next one.
+- **Reflected** is, for each flash, the reading with the LED on less the mean of the
+  readings with it off just before and after. The readings are 10 ms apart, so each
+  meets the 100 Hz flicker of mains lamps at the same point, and it drops out.
+- **It holds the device** for its settle times: about 1 ms a scan with the defaults.
+- **After a save** it keeps its readings until the next one; LED starts off.
 
 ---
 
@@ -1203,8 +1210,8 @@ for a longer kick, or to a Counter to count the ticks.
 
 | From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT, SIN |
 |---|---|---|---|---|
-| BTN, GPI, DS (Found), ENC (Pressed), US (Echo) | ✓ | | | ✓ |
-| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position), US (cm), LS (any) | | ✓ | ✓ | |
+| BTN, GPI, DS (Found), ENC (Pressed), US (Echo), LS (LED) | ✓ | | | ✓ |
+| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position), US (cm), LS (µA, Reflected, Raw, Load) | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
 | SCL, MIN, MAX, SIN, CNT (Count), CLK (Hour, Minute or Second) | | ✓ | ✓ | |
 

@@ -375,7 +375,7 @@ typedef struct {
     struct {
         uint8_t range;          // the range it reads its light on
         uint8_t selected;       // the range switched in, or LIGHT_NO_RANGE before the first
-        light_bursts bursts;    // LED bursts since the last reflection reading
+        light_reflect reflect;  // its LED's on and off scans, since the last reflection reading
     } light;                    // light sensor
 } node_state;
 
@@ -885,9 +885,10 @@ static void ultrasonic_scan(hw_program *p, const prog_node *n, node_state *st, u
 // ── Light sensors ──
 // A phototransistor into a sense node on an ADC pin, with load resistors from the sense
 // node: one always on, and up to three switched in by driving their GPIO low. Only one
-// switched load is in at a time; range 0 has none. Each scan it reads its light, and
-// with an LED one burst: a reading with the LED off, on, then off again (light.h does the
-// arithmetic). PROTOCOL.md, "Light sensors", describes it.
+// switched load is in at a time; range 0 has none. Each scan it reads its background
+// light; with reflections, it also reads its reflection range and turns its LED output
+// on or off for the next scan, whatever LED that drives (light.h has the arithmetic).
+// PROTOCOL.md, "Light sensors", describes it.
 
 // RP2350 erratum E9: a Bank 0 pad with its input buffer on (PADS_BANK0 GPIOn.IE) leaks
 // current, and can latch near 2 V, while the pin is held mid-rail. A switched-out load's
@@ -936,16 +937,12 @@ static uint16_t light_read(const light_payload *l) {
     return (uint16_t)((sum + l->samples / 2) / l->samples);
 }
 
-static void light_led(const light_payload *l, bool on) {
-    gpio_put(l->led, on != !!(l->options & LIGHT_LED_LOW));
-}
-
-// Its pins, all or none: the ADC pin, each load's pin let go, and its LED's off.
-static bool light_setup(const prog_node *n, node_state *st) {
+// Its pins, all or none: the ADC pin, and each load's pin let go. Its LED output starts
+// off, and its reflection with none.
+static bool light_setup(hw_program *p, const prog_node *n, node_state *st) {
     const light_payload *l = &n->light;
-    uint8_t pins[2 + LIGHT_LOADS], count = 0;
+    uint8_t pins[1 + LIGHT_LOADS], count = 0;
     pins[count++] = n->pin;
-    if (l->led != LIGHT_NO_PIN) pins[count++] = l->led;
     for (uint8_t k = 1; k < LIGHT_RANGES; k++) if (l->pins[k] != LIGHT_NO_PIN) pins[count++] = l->pins[k];
     for (uint8_t i = 0; i < count; i++) {
         if (claim_pin(pins[i])) continue;
@@ -959,11 +956,8 @@ static bool light_setup(const prog_node *n, node_state *st) {
         gpio_init(l->pins[k]);
         light_load_switch(l->pins[k], false);
     }
-    if (l->led != LIGHT_NO_PIN) {
-        gpio_init(l->led);
-        light_led(l, false);
-        gpio_set_dir(l->led, GPIO_OUT);
-    }
+    p->signals[n->out + LIGHT_LED_OUTPUT].value = 0;
+    if (!(l->options & LIGHT_REFLECT)) p->signals[n->out + 1].value = 0;
 
     // Auto-ranging starts on its most sensitive range.
     uint8_t order[LIGHT_RANGES];
@@ -974,32 +968,30 @@ static bool light_setup(const prog_node *n, node_state *st) {
     return true;
 }
 
-// One scan: its light on its range, then with an LED a burst on its reflection range.
-// When the two ranges are the same, its light is the mean of the burst's LED-off
-// readings, and no range is switched.
+// One scan. With its LED off (as the last scan set it): its background light on its
+// range. With reflections: a reading on its reflection range, which is also its
+// background when the two ranges are the same and the LED is off; then its LED output
+// for the next scan. While its LED is on, its background keeps its last reading.
 static void light_scan(hw_program *p, const prog_node *n, node_state *st) {
     const light_payload *l = &n->light;
-    bool led = l->led != LIGHT_NO_PIN;
+    bool reflect = l->options & LIGHT_REFLECT;
+    bool dark = !(reflect && st->light.reflect.led);
     uint8_t k = st->light.range;
     uint16_t raw = 0;
-    if (!led || k != l->reflect_range) {
+    if (dark && (!reflect || k != l->reflect_range)) {
         light_select(n, st, k);
         raw = light_read(l);
     }
-    if (led) {
+    if (reflect) {
         light_select(n, st, l->reflect_range);
-        uint16_t off1 = light_read(l);
-        light_led(l, true);
-        busy_wait_us_32(l->led_us);
-        uint16_t on = light_read(l);
-        light_led(l, false);
-        busy_wait_us_32(l->led_us);
-        uint16_t off2 = light_read(l);
-        if (k == l->reflect_range) raw = (uint16_t)((off1 + off2 + 1) / 2);
+        uint16_t r = light_read(l);
+        if (dark && k == l->reflect_range) raw = r;
         float counts;
-        if (light_burst(&st->light.bursts, off1, on, off2, l->bursts, &counts))
+        if (light_reflect_take(&st->light.reflect, r, l->bursts, &counts))
             p->signals[n->out + 1].value = light_microamps(counts, light_load_ohms(l, l->reflect_range));
+        p->signals[n->out + LIGHT_LED_OUTPUT].value = st->light.reflect.led;
     }
+    if (!dark) return;
 
     float ohms = light_load_ohms(l, k);
     p->signals[n->out].value = light_microamps(raw, ohms);
@@ -1057,7 +1049,7 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
         return ultrasonic_setup(p, n, st);
 
     case MSG_HW_LIGHT:
-        return light_setup(n, st);
+        return light_setup(p, n, st);
 
     case MSG_HW_GPO:
         if (!claim_pin(n->pin)) return false;

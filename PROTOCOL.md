@@ -270,9 +270,9 @@ Core 0 sends the most recently connected client WebSocket text frames:
   whether it answers (output 1), a [rotary encoder](#rotary-encoders) its position in
   clicks (output 0) and whether it is pressed (output 1), an [ultrasonic
   ranger](#ultrasonic-rangers) its distance in cm (output 0) and whether something is
-  within its range (output 1), a [light sensor](#light-sensors) its photocurrent in µA
-  (output 0), its reflected photocurrent in µA (1), its reading (2) and its load in kΩ
-  (3), a [clock](#clocks) its hour,
+  within its range (output 1), a [light sensor](#light-sensors) its background light in µA
+  (output 0), its reflected photocurrent in µA (1), its reading (2), its load in kΩ (3)
+  and its LED (4, on from 0.5), a [clock](#clocks) its hour,
   minute and second (outputs 0–2), an [ADC](#adc-inputs) in volts, a [GPIO input](#gpio-inputs) or
   [logic](#logic) on from 0.5. Other nodes, such as a button or slider, ignore theirs,
   and so does an element the page doesn't have. The UI ignores `uptime N`, and shows
@@ -408,7 +408,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `34` | `MSG_HW_ENCODER` | HW input: a rotary encoder and its push switch; two outputs | Implemented |
 | `35` | `MSG_HW_CLOCK` | HW input: the device's clock, a time of day; three outputs, hour, minute and second | Implemented |
 | `36` | `MSG_HW_ULTRASONIC` | HW input: an ultrasonic ranger on one pin, a distance; two outputs | Implemented |
-| `37` | `MSG_HW_LIGHT` | HW input: a phototransistor on an ADC pin with switched load resistors; four outputs | Implemented |
+| `37` | `MSG_HW_LIGHT` | HW input: a phototransistor on an ADC pin with switched load resistors; five outputs | Implemented |
 | `40` | `MSG_LOGIC_COMPARE` | Logic: a floating input above or below a threshold | Implemented |
 | `41` | `MSG_LOGIC_AND` | Logic: on while every input is on | Implemented |
 | `42` | `MSG_LOGIC_OR` | Logic: on while any input is on | Implemented |
@@ -452,7 +452,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `34` Rotary encoder | 6 (`ENCODER_PAYLOAD_LEN`) | Byte 0: the GPIO of its A (CLK) pin (UI default 6); byte 1: of its B (DT) pin (UI default 7); byte 2: of its push switch (SW, UI default 8), or `ENCODER_NO_BUTTON` (`FF`) for none: [usable](#gpio-pins) pins that differ. Byte 3: options; bits 0–1 (`ENCODER_DETENT_MASK`) its pins' transitions a click, `ENCODER_DETENT_4` (0, UI default), `ENCODER_DETENT_2` (1) or `ENCODER_DETENT_1` (2); bit 2 (`ENCODER_REVERSE`): it counts the other way; bit 3 (`ENCODER_WRAP`): past its ends it goes on from the other (UI default on). Other bits are 0. Bytes 4–5: its steps, big endian, 1 to `ENCODER_STEPS_MAX` (1000; UI default 20). See [Rotary encoders](#rotary-encoders). |
 | `35` Clock | 3 (`CLOCK_PAYLOAD_LEN`; or 0) | Byte 0: options; bit 0 (`CLOCK_SYNC`): internet time (UI default on). Other bits are 0. Bytes 1–2: its time zone, minutes ahead of UTC, a signed 16-bit big-endian number, `CLOCK_ZONE_MIN` (−720) to `CLOCK_ZONE_MAX` (840), a multiple of `CLOCK_ZONE_STEP` (15) (UI default 120: UTC+2). None, saved before clocks had settings, is internet time off, UTC. The device has one clock: the first clock in the config sets it. Set the time with a [command](#01-command). See [Clocks](#clocks). |
 | `36` Ultrasonic ranger | 3 (`ULTRASONIC_PAYLOAD_LEN`) | Byte 0: the GPIO of its signal pin (SIG), a [usable](#gpio-pins) one (UI default 16). Bytes 1–2: its range in cm, big endian, `ULTRASONIC_RANGE_MIN` (10) to `ULTRASONIC_RANGE_MAX` (400; UI default 400). See [Ultrasonic rangers](#ultrasonic-rangers). |
-| `37` Light sensor | 30 (`LIGHT_PAYLOAD_LEN`) | Byte 0: the ADC channel of the sense node, 0 to 2 (UI default 0, GPIO 26). Byte 1: options; bit 0 (`LIGHT_AUTO`): it picks its range (UI default on); bit 1 (`LIGHT_LED_LOW`): its LED is on while its pin is low. Other bits are 0. Byte 2: its range without `LIGHT_AUTO`; byte 3: the range it measures reflections on (UI default 3); each 0 to 3, a range it has. Byte 4: its LED's GPIO, or `LIGHT_NO_PIN` (`FF`, UI default): no reflections. Bytes 5–7: the GPIO of loads 1 to 3, or `FF` (UI default 2, 3 and 4). Each pin [usable](#gpio-pins), and all of them and its sense pin different. Bytes 8–23: the always-on load (UI default 1 MΩ), then loads 1 to 3 (UI default 1 kΩ, 10 kΩ, 100 kΩ), in ohms, 32-bit big endian each, `LIGHT_OHMS_MIN` (10) to `LIGHT_OHMS_MAX` (100 000 000); 0 for none, and for a load without a pin. Bytes 24–25: µs it waits after switching range, 0 to `LIGHT_SETTLE_MAX_US` (3000; UI default 1000). Bytes 26–27: µs it waits after turning its LED on or off, `LIGHT_LED_MIN_US` (10) to `LIGHT_LED_MAX_US` (1000; UI default 300). Byte 28: reads averaged, 1 to `LIGHT_SAMPLES_MAX` (64; UI default 16). Byte 29: bursts averaged, 1 to `LIGHT_BURSTS_MAX` (50; UI default 8). See [Light sensors](#light-sensors). |
+| `37` Light sensor | 27 (`LIGHT_PAYLOAD_LEN`) | Byte 0: the ADC channel of the sense node, 0 to 2 (UI default 0, GPIO 26). Byte 1: options; bit 0 (`LIGHT_AUTO`): it picks its range (UI default on); bit 1 (`LIGHT_REFLECT`): it measures reflections, turning its LED output on and off (UI default on). Other bits are 0. Byte 2: its range without `LIGHT_AUTO`; byte 3: the range it measures reflections on (UI default 3); each 0 to 3, a range it has. Bytes 4–6: the GPIO of loads 1 to 3, or `LIGHT_NO_PIN` (`FF`) (UI default 2, 3 and 4): [usable](#gpio-pins) pins that differ from each other and from its sense pin. Bytes 7–22: the always-on load (UI default 1 MΩ), then loads 1 to 3 (UI default 1 kΩ, 10 kΩ, 100 kΩ), in ohms, 32-bit big endian each, `LIGHT_OHMS_MIN` (10) to `LIGHT_OHMS_MAX` (100 000 000); 0 for none, and for a load without a pin. Bytes 23–24: µs it waits after switching range, 0 to `LIGHT_SETTLE_MAX_US` (3000; UI default 1000). Byte 25: reads averaged, 1 to `LIGHT_SAMPLES_MAX` (64; UI default 16). Byte 26: bursts averaged, 1 to `LIGHT_BURSTS_MAX` (50; UI default 8). See [Light sensors](#light-sensors). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -562,9 +562,9 @@ type:
 
 | Type | Sources | Outputs | Values |
 |---|---|---|---|
-| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `36` ultrasonic ranger's echo (output 1), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4D` logic | 0 or 1 (`00` / `FF`) |
+| Boolean | `10` button, `31` GPIO input, `33` DS18B20's found (output 1), `34` rotary encoder's pressed (output 1), `36` ultrasonic ranger's echo (output 1), `37` light sensor's LED (output 4), `40`–`44` and `48`–`4B` logic, `4C` counter's done (output 0) | `20` LED, `21` GPO, `23` USB keyboard, `26` NeoPixels' on/off, `01` light, `41`–`44` and `48`–`4D` logic | 0 or 1 (`00` / `FF`) |
 | NeoPixel data | `26` NeoPixels' data line out (output 0) | `26` NeoPixels' data line in (after their settings) | What its chain draws on its LEDs; see [NeoPixel chains](#neopixel-chains) |
-| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `35` clock's hour, minute and second (outputs 0–2), `36` ultrasonic ranger's distance (output 0), `37` light sensor's four (outputs 0–3), `45` scale, `46` min, `47` max, `4C` counter's count (output 1), `4D` sine | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps; a clock's hour 0 to 23, its minute and second 0 to 59; an ultrasonic ranger's distance in cm, up to its range; a light sensor's photocurrents in µA, its reading 0 to 4095 and its load in kΩ |
+| Floating | `12` slider, `13` 2D slider (X and Y), `32` ADC, `30` core temperature, `33` DS18B20's temperature (output 0), `34` rotary encoder's position (output 0), `35` clock's hour, minute and second (outputs 0–2), `36` ultrasonic ranger's distance (output 0), `37` light sensor's first four (outputs 0–3), `45` scale, `46` min, `47` max, `4C` counter's count (output 1), `4D` sine | `22` PWM, `24` stepper, `25` servo, `26` NeoPixels, `02` plot, `40` compare, `45` scale, `46` min, `47` max | A slider, or a 2D slider's X or Y, 0 to 1 (`00`–`FF`); an ADC in volts, 0 to 3.3; the core temperature or a DS18B20 in °C; a count, 0 to its preset; an encoder's position, 0 to its steps; a clock's hour 0 to 23, its minute and second 0 to 59; an ultrasonic ranger's distance in cm, up to its range; a light sensor's photocurrents in µA, its reading 0 to 4095 and its load in kΩ |
 
 A source has the same value, in the same unit, on the device (its
 [signal](#signals)) and in the browser. The hardware inputs' values are on both: an
@@ -1013,11 +1013,19 @@ something is within them:
 ### Light sensors
 
 A light sensor node (`37`) reads a phototransistor, such as a BPT-BP0334 (NPN, peak 940
-nm), through a load resistor it switches to change its sensitivity. It is a source with
-four floating outputs: **its photocurrent** in µA (output 0, unit `µA`), **the reflected
-photocurrent** in µA (output 1): light from its LED that something in front of it sends
-back, **its reading**, 0 to 4095 (2), and **its load**, the resistance it read through, in
-kΩ (3). The Command view can show it on a tile (see
+nm), through a load resistor it switches to change its sensitivity, and can measure how
+much of an LED's light something in front of it sends back: how near it is. It is a
+source with five outputs:
+
+| Output | Type | What it is |
+|---|---|---|
+| 0 µA | floating, `µA` | **Its background light**: the photocurrent with its LED off. The same light reads the same on any range. |
+| 1 Reflected | floating, `µA` | **The reflected photocurrent**: what its LED adds; more as something comes nearer. |
+| 2 Raw | floating | Its last background reading, 0 to 4095. |
+| 3 Load | floating, `kΩ` | The load of the range it read the background on. |
+| 4 LED | boolean | **Its LED**: on for the scans it reads with the LED on. Wire it to whatever lights the LED. |
+
+The Command view can show it on a tile (see
 [Hardware input tiles](#hardware-input-tiles)): `16.5 µA (90.91 kΩ, raw 2048), reflected
 1.20 µA`.
 
@@ -1034,8 +1042,9 @@ range 0 the always-on load alone, range *k* load *k* in parallel with it (so 100
 | 2 | 10 kΩ on GPIO 3 | 333 µA | indoors |
 | 1 | 1 kΩ on GPIO 2 | 3.3 mA | sun |
 
-An LED for reflections goes on its LED pin through a transistor: on while the pin is
-high, or with `LIGHT_LED_LOW`, while it is low.
+The LED is any output its LED output (4) is wired to: a GPO driving a transistor, or
+NeoPixels' on/off input. It must follow within a scan: logic between them is fine, but
+not a delay, and not the onboard LED, which the WiFi chip drives late.
 
 **Switching a load.** One switched load is in at a time, none on range 0. In: its pin
 is an output, driven low. Out: its pin is an input with its pulls off and its pad's
@@ -1045,51 +1054,59 @@ load's pin sits at the sense node's voltage, so on the 100 kΩ and 1 MΩ ranges 
 would add to the photocurrent. The buffer is PADS_BANK0 GPIO*n*'s IE bit (bit 6, at
 0x40038000 + 0x04 + 4*n*); switching the load back in turns it on again. The sense pin
 is set up for the ADC, with its pulls and input buffer off. After a switch core 1 waits
-its **settle** time (bytes 24–25), for the sense node to come to the new load.
+its **settle** time (bytes 23–24), for the sense node to come to the new load.
 
-**A reading** is its **samples** (byte 28) ADC reads, averaged: 0 to 4095 for 0 to 3.3 V.
-Its photocurrent is I = V / R: the reading in volts over its range's load
-(`light_microamps`).
+**A reading** is its **samples** (byte 25) ADC reads, averaged: 0 to 4095 for 0 to 3.3 V.
+A photocurrent is I = V / R: the reading in volts over its range's load
+(`light_microamps`), so its background light doesn't jump when it changes range.
 
 **Auto-ranging** (`LIGHT_AUTO`, `light_autorange`) starts on its most sensitive range.
-A reading above 3900 (`LIGHT_RAW_HIGH`), near the top, moves it to the next less
-sensitive range for the next scan; a reading below 200 (`LIGHT_RAW_LOW`) to the next
+A background reading above 3900 (`LIGHT_RAW_HIGH`), near the top, moves it to the next
+less sensitive range for the next reading; one below 200 (`LIGHT_RAW_LOW`) to the next
 more sensitive one, if the reading there would be under 3000 (`LIGHT_RAW_TARGET`), so it
 doesn't move back and forth between them. Without `LIGHT_AUTO` it reads on its range
 (byte 2).
 
-**Reflections** (with an LED pin) are measured by synchronous detection on its
-reflection range (byte 3), whatever range it reads its light on: each scan core 1 reads
-with the LED off, turns it on, waits its **LED** time (bytes 26–27), reads, turns it off,
-waits again and reads. A burst's reflection is the on reading less the mean of the two
-off readings: daylight, and the 100 Hz flicker of lamps on 50 Hz mains, are in all three
-and drop out, a slow change across the burst too. Its **bursts** (byte 29), one a scan,
-are averaged into the reflected photocurrent (`light_burst`), through its reflection
-range's load: 8 bursts are a reading every 80 ms. When it reads its light on its
-reflection range, its light is the mean of the burst's LED-off readings, and no range is
-switched. Something too close or too bright can take the on reading to the top: pick a
-less sensitive reflection range.
+**Reflections** (`LIGHT_REFLECT`) are measured by synchronous detection on its
+reflection range (byte 3), whatever range it reads its background on. Each scan it reads
+the reflection range with its LED as it set it the scan before, then sets its LED output
+the other way for the next scan (`light_reflect_take`): off, on, off, on. The outputs
+run after the inputs in a scan, so the LED has been on or off for about a scan (10 ms)
+when it is read. A **burst** is an off reading, an on reading and the next off reading,
+which also starts the next burst: its reflection is the on reading less the mean of
+the two offs. Daylight is in all three and drops out, and so does the 100 Hz flicker
+of lamps on 50 Hz mains: the scans are 10 ms apart, so each reading meets the flicker
+at the same point. Its **bursts** (byte 26), one each 20 ms, are averaged into its
+reflected photocurrent, through its reflection range's load: 8 bursts are a reading
+every 160 ms. Something too close or too bright can take the on reading to the top:
+pick a less sensitive reflection range.
 
-**On the device.** Each scan a light sensor holds core 1 for its readings and waits: about
-2 × settle when its two ranges differ, plus 2 × its LED time with an LED; about 2.7 ms
-with the UI's defaults. Its pins are its sense pin, its LED's and its loads', all or
-none; one an earlier node has (an ADC on its channel) skips it. A save keeps its
-outputs until they are read again; its reflection takes its bursts.
+**Its background light** is read only while its LED is off: with reflections, every
+other scan, and in between it keeps its last reading. When it reads its background on
+its reflection range, one reading is both. Without reflections it reads its
+background every scan, its LED output stays off and its reflected photocurrent 0.
 
-A light sensor `n1` with the UI's default loads and an LED on GPIO 15, its tile shown:
-the GPO on GPIO 16 is on while more than 5 µA of the LED's light comes back, off again
-below 4 µA:
+**On the device.** Each scan a light sensor holds core 1 for its readings and settle
+times: with its two ranges different, 2 × settle on the scans its LED is off, none on
+the others; about 1 ms a scan on average with the UI's defaults. Its pins are its sense
+pin and its loads', all or none; one an earlier node has (an ADC on its channel) skips
+it. A save keeps its outputs until they are read again, but its LED output starts off.
+
+A light sensor `n1` with the UI's default loads, its tile shown: its LED output drives
+GPO `n4` on GPIO 15, which switches the LED through a transistor, and GPO `n3` on GPIO 16
+is on while more than 5 µA of the LED's light comes back, off again below 4 µA:
 
 ```hex example=light-sensor-config
-0A 00 3D                                        # Config, 61 bytes
-37 02 00 01 1E  00 01 00 03 0F 02 03 04         # light sensor n1, tile shown: ADC0, auto, reflections on
-                                                #   range 3, LED GPIO 15, loads on GPIO 2, 3 and 4
+0A 00 43                                        # Config, 67 bytes
+37 02 00 01 1B  00 03 00 03 02 03 04            # light sensor n1, tile shown: ADC0, auto, reflections
+                                                #   on range 3, loads on GPIO 2, 3 and 4
                 00 0F 42 40  00 00 03 E8        #   always on 1 MΩ; load 1 1 kΩ
                 00 00 27 10  00 01 86 A0        #   load 2 10 kΩ; load 3 100 kΩ
-                03 E8 01 2C 10 08               #   settle 1000 µs, LED 300 µs, 16 samples, 8 bursts
+                03 E8 10 08                     #   settle 1000 µs, 16 samples, 8 bursts
 40 01 00 02 0C  00 01 01 00 40 A0 00 00         # compare n2 ← n1's reflected µA (output 1), above 5
                 3F 80 00 00                     #   hysteresis 1
 21 01 00 03 04  00 02 00 10                     # GPO n3 ← n2, GPIO 16
+21 01 00 04 04  00 01 04 0F                     # GPO n4 ← n1's LED (output 4), GPIO 15
 ```
 
 ### Clocks
@@ -2062,7 +2079,7 @@ Every source in the config has its signals, wired or not:
 | `34` rotary encoder | 2: its position (output 0), pressed (output 1) | clicks, 0 to its steps; 0 or 1 | its position as in the program core 1 ran, within its steps, or 0; pressed 0 |
 | `35` clock | 3, in a row: hour (output 0), minute (1), second (2) | whole numbers, 0 to 23; 0 to 59 | 0, then the clock at the first scan |
 | `36` ultrasonic ranger | 2: its distance (output 0), echo (output 1) | cm, up to its range; 0 or 1 | its range, and 0; or as in the program core 1 ran, if that distance is within its range |
-| `37` light sensor | 4, in a row: µA (output 0), reflected µA (1), reading (2), load (3) | µA; µA; 0 to 4095; kΩ | 0, then its first reading (its reflection after its bursts); or as in the program core 1 ran |
+| `37` light sensor | 5, in a row: background µA (output 0), reflected µA (1), reading (2), load (3), LED (4) | µA; µA; 0 to 4095; kΩ; 0 or 1 | 0, then its first reading (its reflection after its bursts); or as in the program core 1 ran; its LED 0 |
 
 - **The browser sets a UI source's** (button, slider, 2D slider) with a
   [command](#01-command): each byte becomes byte ÷ 255.
@@ -2090,7 +2107,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `34` rotary encoder | its A, B and switch pins | its two signals: its position, pressed | See [Rotary encoders](#rotary-encoders) |
 | `35` clock | the device's clock | its three signals: hour, minute, second | See [Clocks](#clocks) |
 | `36` ultrasonic ranger | its pin: a ping, and its echo | its two signals: its distance, echo | See [Ultrasonic rangers](#ultrasonic-rangers) |
-| `37` light sensor | its sense pin, its loads and its LED | its four signals: µA, reflected µA, reading, load | See [Light sensors](#light-sensors) |
+| `37` light sensor | its sense pin and its loads | its five signals: background µA, reflected µA, reading, load, LED | See [Light sensors](#light-sensors) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
 | `41` AND, `42` OR | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `43` NOT, `44` delay, `48` pulse, `49` blink, `4A` toggle | 1 signal | its signal | See [Logic](#logic) |
@@ -2219,19 +2236,21 @@ LED n3 <- s1
 ```
 
 For the [light-sensor-config example](#light-sensors): its channel, ranging, loads (the
-always-on one, then each switched one's pin and ohms), LED pin, reflection range, LED
-time and bursts, then its settle time and samples, and its four signals. The compare
-reads its reflected µA:
+always-on one, then each switched one's pin and ohms), reflection range and bursts,
+then its settle time and samples, and its five signals. The compare reads its reflected
+µA, and GPO `n4` its LED:
 
 ```program example=light-sensor-config
 s0 n1.0 light = 0
 s1 n1.1 light = 0
 s2 n1.2 light = 0
 s3 n1.3 light = 0
-s4 n2.0 compare = 0
-LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 led 15 reflect 3 led 300 us bursts 8 settle 1000 us samples 16 -> s0 s1 s2 s3
-COMPARE n2 above 5 hysteresis 1 <- s1 -> s4
-GPO n3 pin 16 <- s4
+s4 n1.4 light = 0
+s5 n2.0 compare = 0
+LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 8 settle 1000 us samples 16 -> s0 s1 s2 s3 s4
+COMPARE n2 above 5 hysteresis 1 <- s1 -> s5
+GPO n3 pin 16 <- s5
+GPO n4 pin 15 <- s4
 ```
 
 For the [slider-2d-config example](#2d-sliders): X and Y start at the slider's home,
@@ -2458,9 +2477,8 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - a rotary encoder takes its two or three pins, all or none, as inputs with their
      pull-ups on, and core 1 takes the edges of A and B with an interrupt;
    - an ultrasonic ranger takes its pin as an input with its pull-down on;
-   - a light sensor takes its sense pin for the ADC, its loads' pins switched out
-     (inputs, pulls and input buffers off) and its LED's pin as an output, off: all or
-     none;
+   - a light sensor takes its sense pin for the ADC and its loads' pins switched out
+     (inputs, pulls and input buffers off): all or none;
    - a GPO takes its pin as an output; a PWM takes its pin, and starts its slice at
      the first scan; a servo takes its pin, and starts its slice at 50 Hz at the
      first scan; a stepper takes its four pins as outputs, and holds its coils
@@ -2494,9 +2512,11 @@ Core 1 runs a scan every 10 ms (`SCAN_MS`), and between scans takes core 0's
    - **Ultrasonic ranger:** the outcome of its ping, once its echo pulse has ended or
      the next ping is due, becomes its signals; every 60 ms one ranger pings (see
      [Ultrasonic rangers](#ultrasonic-rangers)).
-   - **Light sensor:** a reading on its range, and with an LED a burst on its
-     reflection range, switching its loads as it goes; with `LIGHT_AUTO` the reading
-     picks its range for the next scan (see [Light sensors](#light-sensors)).
+   - **Light sensor:** with its LED off, a background reading on its range; with
+     `LIGHT_REFLECT`, a reading on its reflection range, after which its LED output
+     goes the other way; switching its loads as it goes. With `LIGHT_AUTO` the
+     background reading picks its range for the next one (see
+     [Light sensors](#light-sensors)).
 3. **The logic**, in program order, writes its signals from the signals it reads
    (see [Logic](#logic)).
 4. **The outputs**, in program order, each from the signals it reads, when the state

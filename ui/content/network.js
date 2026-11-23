@@ -279,7 +279,10 @@ function toggleWebSocket(n,d) {
                         receiveTelemetry(`sig ${e.id} 0 ${(read * ADC_VREF / ADC_RAW_FULL / e.loadOhms(k) * 1e6).toPrecision(4)}`);
                         receiveTelemetry(`sig ${e.id} 2 ${read}`);
                         receiveTelemetry(`sig ${e.id} 3 ${(e.loadOhms(k) / 1000).toPrecision(4)}`);
-                        if (e.led !== LIGHT_NO_PIN) receiveTelemetry(`sig ${e.id} 1 ${(4 * Math.max(0, Math.sin(t / 2)) + 0.05 * (Math.random() - 0.5)).toFixed(3)}`);
+                        if (e.reflect) {
+                            receiveTelemetry(`sig ${e.id} 1 ${(4 * Math.max(0, Math.sin(t / 2)) + 0.05 * (Math.random() - 0.5)).toFixed(3)}`);
+                            receiveTelemetry(`sig ${e.id} ${LIGHT_LED_OUTPUT} ${tick % 4 === 0 ? 1 : 0}`);
+                        }
                     } else if (e instanceof uiADC) {
                         const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * e.channel)) + 0.01 * (Math.random() - 0.5);
                         receiveTelemetry(`sig ${e.id} 0 ${(level * ADC_VREF).toFixed(3)}`);

@@ -50,16 +50,34 @@ float light_full(const light_payload *l, uint8_t k) {
     case 0: return light_microamps(ADC_RAW_FULL, light_load_ohms(l, order[n - 1]));
     case 1: return light_has_range(l, l->reflect_range) ? light_microamps(ADC_RAW_FULL, light_load_ohms(l, l->reflect_range)) : 1;
     case 2: return ADC_RAW_FULL;
-    default: return light_load_ohms(l, order[0]) / 1000.0f;
+    case 3: return light_load_ohms(l, order[0]) / 1000.0f;
+    default: return 1;                  // its LED: on or off
     }
 }
 
-bool light_burst(light_bursts *b, uint16_t off1, uint16_t on, uint16_t off2, uint8_t bursts, float *counts) {
-    // Twice the reflection, so the mean of the two off readings stays whole.
-    b->sum += 2 * (int32_t)on - off1 - off2;
-    if (++b->count < bursts) return false;
-    *counts = (float)b->sum / (2.0f * b->count);
-    b->sum = 0;
-    b->count = 0;
-    return true;
+bool light_reflect_take(light_reflect *r, uint16_t raw, uint8_t bursts, float *counts) {
+    bool done = false;
+    if (r->led) {
+        // On: kept if an off reading came before it.
+        if (r->have_off) {
+            r->on = raw;
+            r->have_on = true;
+        }
+        r->led = false;
+        return false;
+    }
+    if (r->have_on) {
+        r->sum += 2 * (int32_t)r->on - r->off - raw;
+        r->have_on = false;
+        if (++r->count >= bursts) {
+            *counts = (float)r->sum / (2.0f * r->count);
+            r->sum = 0;
+            r->count = 0;
+            done = true;
+        }
+    }
+    r->off = raw;
+    r->have_off = true;
+    r->led = true;
+    return done;
 }

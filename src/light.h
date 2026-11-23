@@ -10,8 +10,9 @@
  * A light sensor (MSG_HW_LIGHT) as core 1 reads it: a phototransistor into a sense node
  * on an ADC pin, with load resistors switched in by GPIOs. This is its arithmetic, with
  * no hardware here, so the tests run it too: each range's load, auto-ranging, a reading
- * as a photocurrent, and averaging LED bursts. hwman.c switches the loads, drives the
- * LED and reads the ADC. PROTOCOL.md, "Light sensors", describes it.
+ * as a photocurrent, and the LED's on and off scans for reflections. hwman.c switches
+ * the loads and reads the ADC; the LED is whatever its LED output is wired to.
+ * PROTOCOL.md, "Light sensors", describes it.
  */
 
 #define LIGHT_RAW_HIGH          3900    /* a reading above this is near the top: a less sensitive range */
@@ -39,18 +40,26 @@ float light_microamps(float raw, float ohms);
 // The full scale of its output k, for an output that takes a fraction (a PWM): its µA
 // (0), the most its least sensitive range reads; its reflected µA (1), the most its
 // reflection range reads; its reading (2), ADC_RAW_FULL; its load (3), in kΩ, its most
-// sensitive range's.
+// sensitive range's; its LED (4), 1.
 float light_full(const light_payload *l, uint8_t k);
 
-// LED bursts averaged into a reflection reading.
+// Reflections: its LED output on for a scan, between scans with it off. Each scan reads
+// the reflection range with the LED as the scan before set it (its outputs run after it,
+// so the LED has been that way for about a scan). A burst is an off reading, an on reading
+// and the next off reading, which also starts the next burst: so a burst every 2 scans.
 typedef struct {
-    int32_t sum;            // the bursts' on reading less the mean of their off readings
+    bool led;               // what its LED output was set to at the last scan
+    bool have_off, have_on; // `off` holds a reading with it off; `on` one with it on, after `off`
+    uint16_t off, on;
+    int32_t sum;            // twice each burst's reflection, since the last result
     uint8_t count;
-} light_bursts;
+} light_reflect;
 
-// Add a burst: the reading with the LED off, then on, then off again. Once it has
-// `bursts` of them, *counts is their mean reflection (on - mean(off)), in ADC counts,
-// the sum starts again, and it returns true.
-bool light_burst(light_bursts *b, uint16_t off1, uint16_t on, uint16_t off2, uint8_t bursts, float *counts);
+// Take this scan's reading on the reflection range, made with its LED as r->led says. An
+// off reading after an off and an on one ends a burst: on less the mean of the two offs.
+// Once `bursts` of them are in, *counts is their mean, in ADC counts, the sum starts
+// again, and it returns true. Afterwards r->led is what its LED output is to be until
+// the next scan: on after an off reading, off after an on one.
+bool light_reflect_take(light_reflect *r, uint16_t raw, uint8_t bursts, float *counts);
 
 #endif
