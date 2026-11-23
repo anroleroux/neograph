@@ -195,6 +195,10 @@ function refAt(m, i) {
     };
 }
 
+// The unit of the value a wire carries: its source's, for the output it leaves from
+// (a source whose outputs differ in unit says so with outputUnit). Undefined if none.
+const connUnit = (conn) => conn ? conn.start.node.outputUnit?.(conn.start.output) ?? conn.start.node.unit : undefined;
+
 // The source reference of a wire, as saved: see refBytes. ID 0 if none.
 const connRef = (conn) => refBytes(conn?.start.node, conn?.start.output, conn?.feedback);
 

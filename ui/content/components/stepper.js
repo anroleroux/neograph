@@ -129,7 +129,7 @@ class uiStepper extends uiComponents {
         settings.appendChild(choiceSetting('Input sets', {position: 'Position', speed: 'Speed'},
             () => this.speedMode ? 'speed' : 'position', (v) => { this.setMode(v); this.createSettings(); }));
         // Per unit of what is wired in: per V for an ADC, per °C for the core temperature.
-        const per = this.inConns()[0]?.start.node.unit || 'unit';
+        const per = connUnit(this.inConns()[0]) || 'unit';
         settings.appendChild(editableSetting(this.speedMode ? `RPM per ${per}` : `Revolutions per ${per}`,
             () => showFloat(this.scale), (v) => this.setScale(v), {type: 'number', step: 'any'}));
 

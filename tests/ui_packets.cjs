@@ -352,7 +352,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US, PLT LGT, KEY MSE, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US LS, PLT LGT, KEY MSE, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -2086,6 +2086,99 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             elements.n4.range].join();
     });
     expect(usBack === '16,100,true,n1:1,n1:0,400', 'an ultrasonic ranger restored as ' + usBack);
+
+    // A light sensor: its loads, ranges and LED; each of its four outputs wires into a
+    // number input; a plot of one takes that output's unit; its tile shows the device's
+    // readings. With the example's pins it marshals as the light-sensor-config example in
+    // PROTOCOL.md, and it restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a light sensor"]').dispatchEvent('click');
+    const lsRows = 'Label:|Sense pin:|Load 1 pin:|Load 1:|Load 2 pin:|Load 2:|Load 3 pin:|Load 3:|Always-on load:|Ranging:'
+        + '|Settle (µs):|Samples:|LED pin:';
+    expect(await keyRows() === lsRows + '|Wire from:|Command view:|Order:',
+        'a new light sensor does not show its settings: ' + await keyRows());
+    const ls = await page.evaluate(() => {
+        const s = selected;
+        // Free the example's pins for it: GPIO 2, 3, 4, 15 and 16, and ADC0.
+        const want = [2, 3, 4, 15, 16, 26];
+        Object.values(elements).filter(e => e !== s && e.usedPins().some(p => want.includes(p))).forEach(e => e.remove());
+        s.setChannel(1);
+        const first = [s.ohms.join(), s.auto, s.reflectRange, s.led, s.settleUs, s.ledUs, s.samples, s.bursts].join(' ');
+        const before = JSON.stringify(s.payload());
+        const rejected = [
+            s.setChannel(3), s.setLoadPin(1, '29'), s.setLoadPin(0, '5'), s.setLoadPin(1, String(ADC_PIN_FIRST + 1)),
+            s.setLoadOhms(1, '5'), s.setLoadOhms(1, '2m'), s.setLoadOhms(1, '200M'), s.setBaseOhms('abc'),
+            s.setSettle(LIGHT_SETTLE_MAX_US + 1), s.setLedTime(LIGHT_LED_MIN_US - 1), s.setSamples(0),
+            s.setBursts(LIGHT_BURSTS_MAX + 1), s.setRange(4), s.setWireOutput(4),
+        ].every(r => r === false) && JSON.stringify(s.payload()) === before;
+        // Its pins: loads on 2, 3, 4, the LED on 15 (one pin can't be two of them).
+        s.setChannel(0);
+        [2, 3, 4].forEach((pin, k) => s.setLoadPin(k + 1, 'none'));
+        const keptOne = s.setBaseOhms('none') === false;       // no range left
+        [2, 3, 4].forEach((pin, k) => s.setLoadPin(k + 1, String(pin)));
+        const clash = s.setLedPin('2') === false;
+        s.setLedPin('15');
+        s.setLoadOhms(1, '1k'); s.setLoadOhms(2, '10 kΩ'); s.setLoadOhms(3, '100000'); s.setBaseOhms('1M');
+        s.setReflectRange(3);                   // it moved to range 0 while it had no loads
+        const ranges = s.ranges().map(k => s.rangeName(k)).join('; ');
+        // Wires: each output into a compare; a plot of its load is in kΩ.
+        const wired = [0, 1, 2, 3].every(o => { s.setWireOutput(o); return !!createEdge(s.name, addNode(MSG_LOGIC_COMPARE).name); })
+            && createEdge(s.name, addNode(MSG_HW_LED).name) === null;
+        const plot = addNode(MSG_UI_GRAPH);
+        createEdge(s.name, plot.name);
+        const plotUnit = plot.unit();
+        s.shown = true;
+        buildCommandInterface();
+        const tile = () => s.tileState.textContent;
+        const tiles = [tile()];
+        receiveTelemetry(`sig ${s.id} 0 16.5`);
+        receiveTelemetry(`sig ${s.id} 2 2048`);
+        receiveTelemetry(`sig ${s.id} 3 90.91`);
+        receiveTelemetry(`sig ${s.id} 1 1.2`);
+        tiles.push(tile(), [0, 1, 2, 3].map(o => s.outputValue(o)).join());
+        const pay = s.payload().map(b => b.toString(16).padStart(2, '0')).join('');
+        // A fixed range shows its range; a load taken away moves the ranges onto one it has.
+        s.auto = false;
+        s.setRange(2);
+        s.createSettings();
+        const fixedRows = [...document.querySelectorAll('#settings .editable .label')].map(l => l.textContent).join('|');
+        s.setLoadPin(2, 'none');
+        const moved = [s.range, s.reflectRange].join();
+        s.setLoadPin(2, '3');
+        s.auto = true;
+        s.setReflectRange(3);
+        saveGraph();
+        return { first, rejected, keptOne, clash, ranges, wired, plotUnit, tiles: tiles.join('|'), pay, fixedRows, moved };
+    });
+    packets.push(...await sent(page));
+    expect(ls.first === '1000000,1000,10000,100000 true 3 255 1000 300 16 8', 'a new light sensor looks ' + ls.first);
+    expect(ls.rejected, 'a light sensor took settings out of range');
+    expect(ls.keptOne && ls.clash, 'a light sensor was left with no range, or two pins on one');
+    expect(ls.ranges === '1 MΩ (always on); 90.91 kΩ (GPIO 4); 9.901 kΩ (GPIO 3); 999 Ω (GPIO 2)', 'a light sensor\'s ranges are ' + ls.ranges);
+    expect(ls.wired, 'a light sensor\'s outputs did not wire as numbers');
+    expect(ls.plotUnit === 'kΩ', 'a plot of a light sensor\'s load shows ' + ls.plotUnit);
+    expect(ls.tiles === '–|16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA|16.5,1.2,2048,90.91',
+        'a light sensor\'s tile showed ' + ls.tiles);
+    expect(ls.pay === '000100030f020304' + '000f4240' + '000003e8' + '00002710' + '000186a0' + '03e8012c1008',
+        'a light sensor marshals as ' + ls.pay);
+    expect(ls.fixedRows.startsWith(lsRows.replace('|Ranging:', '|Ranging:|Range:')), 'a fixed light sensor shows ' + ls.fixedRows);
+    expect(ls.moved === '0,3', 'a light sensor without its range\'s load moved to ' + ls.moved);
+    const lsBack = await page.evaluate(() => {
+        const light = [0x37, MSG_FLAG_SHOWN, 0, 1, LIGHT_PAYLOAD_LEN,
+            1, LIGHT_LED_LOW, 2, 1, LIGHT_NO_PIN, 5, 6, LIGHT_NO_PIN,
+            0, 0, 0, 0,  0, 0, 0x01, 0xF4,  0, 0, 0x13, 0x88,  0, 0, 0, 0,  0, 50, 0, 100, 4, 1];
+        const bad = [...light];
+        bad[3] = 2;
+        bad[5 + 28] = 0;                        // no samples: kept as a new one
+        restoreGraph(configMessages(Uint8Array.from([...light, ...bad])));
+        const s = elements.n1;
+        return [s.channel, s.auto, s.ledLow, s.range, s.reflectRange, s.led, s.pins.slice(1).join(':'), s.ohms.join(':'),
+            s.settleUs, s.ledUs, s.samples, s.bursts, s.shown, s.ranges().join(''),
+            elements.n2.samples, elements.n2.channel].join();
+    });
+    expect(lsBack === '1,false,true,2,1,255,5:6:255,0:500:5000:100000,50,100,4,1,true,21,16,0',
+        'a light sensor restored as ' + lsBack);
 
     // A sine: an on/off wire in runs it, a number wire leaves it; the browser runs the
     // wave, from its offset; off, it rests at its offset. It marshals as the sine-config

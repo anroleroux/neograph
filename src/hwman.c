@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,11 +11,13 @@
 #include "hardware/dma.h"
 #include "hardware/pio.h"
 #include "hardware/irq.h"
+#include "hardware/structs/pads_bank0.h"
 
 #include "clock.h"
 #include "ds18b20.h"
 #include "encoder.h"
 #include "hwman.h"
+#include "light.h"
 #include "neopixel.h"
 #include "program.h"
 #include "protocol.h"
@@ -369,6 +372,11 @@ typedef struct {
                                 // debounce its switch, as a GPIO input's
     uint8_t ultrasonic;         // ultrasonic ranger: its place in ultrasonics[]; `on`: a ping is
                                 // out; `differ`: its pings in a row without an echo
+    struct {
+        uint8_t range;          // the range it reads its light on
+        uint8_t selected;       // the range switched in, or LIGHT_NO_RANGE before the first
+        light_bursts bursts;    // LED bursts since the last reflection reading
+    } light;                    // light sensor
 } node_state;
 
 static node_state states[PROG_NODES_MAX];
@@ -874,6 +882,132 @@ static void ultrasonic_scan(hw_program *p, const prog_node *n, node_state *st, u
     }
 }
 
+// ── Light sensors ──
+// A phototransistor into a sense node on an ADC pin, with load resistors from the sense
+// node: one always on, and up to three switched in by driving their GPIO low. Only one
+// switched load is in at a time; range 0 has none. Each scan it reads its light, and
+// with an LED one burst: a reading with the LED off, on, then off again (light.h does the
+// arithmetic). PROTOCOL.md, "Light sensors", describes it.
+
+// RP2350 erratum E9: a Bank 0 pad with its input buffer on (PADS_BANK0 GPIOn.IE) leaks
+// current, and can latch near 2 V, while the pin is held mid-rail. A switched-out load's
+// pin sits at the sense node's voltage, so its leakage would add to the photocurrent on
+// the 100 kΩ and 1 MΩ ranges. Its pad is let go with its pulls off and IE cleared. The
+// register is the SDK's pads_bank0_hw->io[gpio], as the RP2350 datasheet has it
+// (PADS_BANK0): base 0x40038000, GPIOn at 0x04 + 4n (VOLTAGE_SELECT is at 0x00), IE
+// bit 6 (OD bit 7, ISO bit 8). The checks hold the SDK's names to those numbers.
+static_assert(PADS_BANK0_BASE == 0x40038000u, "PADS_BANK0 base (RP2350 datasheet)");
+static_assert(PADS_BANK0_GPIO0_OFFSET == 0x04u && PADS_BANK0_GPIO1_OFFSET == 0x08u, "PADS_BANK0 GPIOn at 0x04 + 4n");
+static_assert(PADS_BANK0_GPIO0_IE_BITS == 1u << 6, "PADS_BANK0 GPIOn.IE is bit 6");
+
+// Switch a load in or out. In: its pad's input buffer back on, as gpio_init leaves a
+// pad, and the pin driven low. Out: high impedance, its pulls off and its input buffer
+// off (E9 above).
+static void light_load_switch(uint8_t pin, bool in) {
+    if (in) {
+        hw_set_bits(&pads_bank0_hw->io[pin], PADS_BANK0_GPIO0_IE_BITS);
+        gpio_put(pin, 0);
+        gpio_set_dir(pin, GPIO_OUT);
+    } else {
+        gpio_set_dir(pin, GPIO_IN);
+        gpio_disable_pulls(pin);
+        hw_clear_bits(&pads_bank0_hw->io[pin], PADS_BANK0_GPIO0_IE_BITS);
+    }
+}
+
+// Switch range k in, if it isn't, and wait for the sense node to settle: k's load in
+// first, then the others out.
+static void light_select(const prog_node *n, node_state *st, uint8_t k) {
+    if (st->light.selected == k) return;
+    const light_payload *l = &n->light;
+    if (l->pins[k] != LIGHT_NO_PIN) light_load_switch(l->pins[k], true);
+    for (uint8_t j = 1; j < LIGHT_RANGES; j++) {
+        if (j != k && l->pins[j] != LIGHT_NO_PIN) light_load_switch(l->pins[j], false);
+    }
+    st->light.selected = k;
+    busy_wait_us_32(l->settle_us);
+}
+
+// A reading of its sense node: its samples, averaged, 0 to ADC_RAW_FULL.
+static uint16_t light_read(const light_payload *l) {
+    adc_select_input(l->channel);
+    uint32_t sum = 0;
+    for (uint8_t i = 0; i < l->samples; i++) sum += adc_read();
+    return (uint16_t)((sum + l->samples / 2) / l->samples);
+}
+
+static void light_led(const light_payload *l, bool on) {
+    gpio_put(l->led, on != !!(l->options & LIGHT_LED_LOW));
+}
+
+// Its pins, all or none: the ADC pin, each load's pin let go, and its LED's off.
+static bool light_setup(const prog_node *n, node_state *st) {
+    const light_payload *l = &n->light;
+    uint8_t pins[2 + LIGHT_LOADS], count = 0;
+    pins[count++] = n->pin;
+    if (l->led != LIGHT_NO_PIN) pins[count++] = l->led;
+    for (uint8_t k = 1; k < LIGHT_RANGES; k++) if (l->pins[k] != LIGHT_NO_PIN) pins[count++] = l->pins[k];
+    for (uint8_t i = 0; i < count; i++) {
+        if (claim_pin(pins[i])) continue;
+        while (i--) used_pins &= ~(1u << pins[i]);
+        return false;
+    }
+
+    adc_gpio_init(n->pin);      // no pulls, input buffer off
+    for (uint8_t k = 1; k < LIGHT_RANGES; k++) {
+        if (l->pins[k] == LIGHT_NO_PIN) continue;
+        gpio_init(l->pins[k]);
+        light_load_switch(l->pins[k], false);
+    }
+    if (l->led != LIGHT_NO_PIN) {
+        gpio_init(l->led);
+        light_led(l, false);
+        gpio_set_dir(l->led, GPIO_OUT);
+    }
+
+    // Auto-ranging starts on its most sensitive range.
+    uint8_t order[LIGHT_RANGES];
+    light_ranges(l, order);
+    st->light.range = l->options & LIGHT_AUTO ? order[0] : l->range;
+    st->light.selected = LIGHT_NO_RANGE;
+    printf("light sensor on ADC%u, GPIO %u\n", l->channel, n->pin);
+    return true;
+}
+
+// One scan: its light on its range, then with an LED a burst on its reflection range.
+// When the two ranges are the same, its light is the mean of the burst's LED-off
+// readings, and no range is switched.
+static void light_scan(hw_program *p, const prog_node *n, node_state *st) {
+    const light_payload *l = &n->light;
+    bool led = l->led != LIGHT_NO_PIN;
+    uint8_t k = st->light.range;
+    uint16_t raw = 0;
+    if (!led || k != l->reflect_range) {
+        light_select(n, st, k);
+        raw = light_read(l);
+    }
+    if (led) {
+        light_select(n, st, l->reflect_range);
+        uint16_t off1 = light_read(l);
+        light_led(l, true);
+        busy_wait_us_32(l->led_us);
+        uint16_t on = light_read(l);
+        light_led(l, false);
+        busy_wait_us_32(l->led_us);
+        uint16_t off2 = light_read(l);
+        if (k == l->reflect_range) raw = (uint16_t)((off1 + off2 + 1) / 2);
+        float counts;
+        if (light_burst(&st->light.bursts, off1, on, off2, l->bursts, &counts))
+            p->signals[n->out + 1].value = light_microamps(counts, light_load_ohms(l, l->reflect_range));
+    }
+
+    float ohms = light_load_ohms(l, k);
+    p->signals[n->out].value = light_microamps(raw, ohms);
+    p->signals[n->out + 2].value = raw;
+    p->signals[n->out + 3].value = ohms / 1000.0f;
+    if (l->options & LIGHT_AUTO) st->light.range = light_autorange(l, k, raw);
+}
+
 // Set up a node's hardware. Inputs come before outputs in a program, so an
 // input wins a pin an output also names; otherwise the first node on a pin wins.
 static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
@@ -921,6 +1055,9 @@ static bool setup_node(hw_program *p, const prog_node *n, node_state *st) {
 
     case MSG_HW_ULTRASONIC:
         return ultrasonic_setup(p, n, st);
+
+    case MSG_HW_LIGHT:
+        return light_setup(n, st);
 
     case MSG_HW_GPO:
         if (!claim_pin(n->pin)) return false;
@@ -1004,12 +1141,14 @@ static void take_program(void) {
     const hw_program *old = &programs[running];
     hw_program *p = &programs[running ^ 1];
 
-    // A UI source's signals keep their values, so do a DS18B20's and an ultrasonic
-    // ranger's until it is read again, and an encoder's position, so a save neither
-    // moves a slider or a knob's position nor drops a reading.
+    // A UI source's signals keep their values, so do a DS18B20's, an ultrasonic
+    // ranger's and a light sensor's until it is read again (a light sensor's reflection
+    // takes its bursts), and an encoder's position, so a save neither moves a slider or
+    // a knob's position nor drops a reading.
     for (uint8_t i = 0; i < p->signal_count; i++) {
         prog_signal *s = &p->signals[i];
         if (!program_ui_source(s->type) && s->type != MSG_HW_DS18B20 && s->type != MSG_HW_ULTRASONIC
+            && s->type != MSG_HW_LIGHT
             && !(s->type == MSG_HW_ENCODER && s->output == 0)) continue;
         uint8_t was = program_signal(old, s->id, s->output);
         if (was != PROG_NO_SIGNAL) s->value = old->signals[was].value;
@@ -1040,7 +1179,7 @@ static void take_program(void) {
     for (uint8_t i = 0; i < p->node_count; i++) {
         const prog_node *n = &p->nodes[i];
         states[i].ok = setup_node(p, n, &states[i]);
-        if (!states[i].ok) printf("hw man skipping type %02X on ID %u: GPIO %u is not usable or in use\n",
+        if (!states[i].ok) printf("hw man skipping type %02X on ID %u: GPIO %u (or another of its pins) is not usable or in use\n",
                                   n->type, n->id, n->type == MSG_HW_ADC ? ADC_PIN_FIRST + n->pin : n->pin);
         // A keyboard types when its input goes on, not because it was on when set up.
         if (n->type == MSG_HW_KEYBOARD) states[i].on = signal_value(p, n->in[0]) >= 0.5f;
@@ -1142,6 +1281,10 @@ static void scan(uint32_t count) {
 
         case MSG_HW_ULTRASONIC:
             ultrasonic_scan(p, n, st, count);
+            break;
+
+        case MSG_HW_LIGHT:
+            light_scan(p, n, st);
             break;
 
 

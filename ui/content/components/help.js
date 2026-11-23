@@ -69,6 +69,12 @@ const NODE_HELP = {
         "Range, 10 to 400 cm, is as far as it looks. With nothing nearer, cm reads Range and Echo goes off, after three pings in a row without an echo, so one lost ping doesn't show. Wired into a PWM, servo or NeoPixels, cm counts as a fraction of Range. Echo alone is a presence detector: set Range to the distance that should trip it.",
         "It hears things from about 3 cm, in a cone of about 15°; soft or slanted surfaces may not echo. With several rangers, they ping in turn, so each reads less often.",
     ],
+    light: [
+        "A phototransistor light sensor, such as a BPT-BP0334, read on an ADC pin through load resistors the device switches in and out to change its sensitivity. It has four outputs, all numbers: µA, the photocurrent; Reflected, the light from its LED that something in front of it sends back, in µA; Raw, its ADC reading, 0 to 4095; and Load, the resistance it read through, in kΩ. Pick the one the next wire leaves from in Wire from.",
+        "Wire it: the collector to 3.3 V, the emitter to the sense pin (GPIO 26, 27 or 28). From the sense pin, the always-on load to GND, and each switched load to its own GPIO. The device drives one load's pin low to switch it in and lets the others go. A higher load is more sensitive: 1 MΩ alone for dim light, 1 kΩ for sun.",
+        "Ranging: Auto starts on the most sensitive range and moves to a less sensitive one near the top of the ADC (above 3900), and back when the reading is low (below 200) and would still fit. Fixed reads on one range. Settle is how long it waits after switching a load.",
+        "LED pin: an LED (through a transistor) that it pulses each scan, reading with it off, on and off again on the Reflection range; Reflected is the on reading less the off ones, so daylight and mains flicker drop out. It averages Bursts of them. With None, it measures no reflections.",
+    ],
     plot: [
         "A live chart of a number in the Command view, newest on the right. Point at it to read a value.",
         "Wire one number into it: a slider, an ADC, the core temperature, a scale, or a counter's Count. Its history is lost when the page reloads.",

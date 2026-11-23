@@ -244,7 +244,8 @@ function toggleWebSocket(n,d) {
             unmarshalConfigs(gfig);
             // and signals, as telemetry: a chip temperature drifting around 30 °C, a
             // DS18B20 around 22 °C, a rotary encoder's knob turned to and fro, a hand in
-            // front of an ultrasonic ranger, and on each ADC channel a slow wave, in volts.
+            // front of an ultrasonic ranger, a cloud passing a light sensor while a hand
+            // waves over its LED, and on each ADC channel a slow wave, in volts.
             let tick = 0;
             offlineTelemetry = setInterval(() => {
                 const t = performance.now() / 1000;
@@ -269,6 +270,16 @@ function toggleWebSocket(n,d) {
                         const cm = Math.round((5 + (1.2 * e.range - 5) * (0.5 - 0.5 * Math.cos(t / 3)) + Math.random() - 0.5) * 10) / 10;
                         receiveTelemetry(`sig ${e.id} 0 ${Math.min(cm, e.range)}`);
                         receiveTelemetry(`sig ${e.id} 1 ${cm <= e.range ? 1 : 0}`);
+                    } else if (e instanceof uiLight && tick % 2 === 0) {
+                        // Light from 2 µA to 2 mA and back, read on the range that fits it best.
+                        const ua = 2 * Math.pow(1000, 0.5 - 0.5 * Math.cos(t / 10)) * (1 + 0.02 * (Math.random() - 0.5));
+                        const raws = e.ranges().map(k => [k, ua * 1e-6 * e.loadOhms(k) * ADC_RAW_FULL / ADC_VREF]);
+                        const [k, raw] = raws.find(([, r]) => r <= LIGHT_RAW_HIGH) ?? raws[raws.length - 1];
+                        const read = Math.min(ADC_RAW_FULL, Math.round(raw));
+                        receiveTelemetry(`sig ${e.id} 0 ${(read * ADC_VREF / ADC_RAW_FULL / e.loadOhms(k) * 1e6).toPrecision(4)}`);
+                        receiveTelemetry(`sig ${e.id} 2 ${read}`);
+                        receiveTelemetry(`sig ${e.id} 3 ${(e.loadOhms(k) / 1000).toPrecision(4)}`);
+                        if (e.led !== LIGHT_NO_PIN) receiveTelemetry(`sig ${e.id} 1 ${(4 * Math.max(0, Math.sin(t / 2)) + 0.05 * (Math.random() - 0.5)).toFixed(3)}`);
                     } else if (e instanceof uiADC) {
                         const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * e.channel)) + 0.01 * (Math.random() - 0.5);
                         receiveTelemetry(`sig ${e.id} 0 ${(level * ADC_VREF).toFixed(3)}`);

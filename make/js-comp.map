@@ -17,6 +17,7 @@
 {{ds18b20-js}}:ui/content/components/ds18b20.js
 {{encoder-js}}:ui/content/components/encoder.js
 {{ultrasonic-js}}:ui/content/components/ultrasonic.js
+{{light-js}}:ui/content/components/light.js
 {{clock-js}}:ui/content/components/clock.js
 {{keyboard-js}}:ui/content/components/keyboard.js
 {{mouse-js}}:ui/content/components/mouse.js

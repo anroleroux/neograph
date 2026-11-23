@@ -89,7 +89,7 @@ class uiPlot extends uiComponents {
 
     // The unit of the source wired in, '' if it has none (a slider) or there is no source.
     sourceUnit() {
-        return this.inConns()[0]?.start.node.unit ?? '';
+        return connUnit(this.inConns()[0]) ?? '';
     }
 
     // The unit the plot shows: its own if set, otherwise its source's.

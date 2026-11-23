@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "program.h"
+#include "light.h"
 #include "protocol.h"
 #include "config/config_iterator.h"
 
@@ -208,7 +209,8 @@ static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
 // PWM's: 1 for a slider (its values are 0 to 1) or a scale, 3.3 V for an ADC,
 // CORE_TEMP_FULL °C for the core temperature, for a min or max that of what it
 // picks from, for a counter's count its preset, for an encoder's position its
-// steps, and for an ultrasonic ranger's distance its range.
+// steps, for an ultrasonic ranger's distance its range, and for a light sensor's
+// photocurrent the most its least sensitive range reads (see light_full).
 static float signal_full(const hw_program *p, uint8_t s) {
     if (s == PROG_NO_SIGNAL) return 1;
     switch (p->signals[s].type) {
@@ -226,6 +228,12 @@ static float signal_full(const hw_program *p, uint8_t s) {
         // Its distance: its range; echo: 0 or 1.
         for (uint8_t i = 0; i < p->node_count; i++) {
             if (p->nodes[i].type == MSG_HW_ULTRASONIC && p->nodes[i].out == s) return (float)p->nodes[i].range;
+        }
+        return 1;
+    case MSG_HW_LIGHT:
+        for (uint8_t i = 0; i < p->node_count; i++) {
+            const prog_node *n = &p->nodes[i];
+            if (n->type == MSG_HW_LIGHT && s >= n->out && s < n->out + 4) return light_full(&n->light, (uint8_t)(s - n->out));
         }
         return 1;
     case MSG_LOGIC_COUNTER:
@@ -447,6 +455,22 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_LIGHT: {
+            // Four signals, in a row: its µA, reflected µA, reading and load.
+            light_payload light;
+            if (!light_payload_read(itr.pay, itr.len, &light)) break;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            bool all = true;
+            for (uint8_t k = 1; k < 4; k++) all = all && add_signal(p, itr.id, k, itr.type, 0) == s + k;
+            if (!all) break;
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->out = s;
+                n->pin = ADC_PIN_FIRST + light.channel;
+                n->light = light;
+            }
+            break;
+        }
+
         default:
             // A logic element's signal, for the elements that read it; its node
             // comes after the inputs.
@@ -619,6 +643,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_DS18B20: return "ds18b20";
     case MSG_HW_ENCODER: return "encoder";
     case MSG_HW_ULTRASONIC: return "ultrasonic";
+    case MSG_HW_LIGHT: return "light";
     case MSG_HW_CLOCK: return "clock";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
@@ -713,6 +738,27 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put(&t, " echo ");
             put_signal(&t, n->out_count);
             break;
+        case MSG_HW_LIGHT: {
+            const light_payload *l = &n->light;
+            put(&t, "LIGHT n%u adc %u", n->id, l->channel);
+            if (l->options & LIGHT_AUTO) put(&t, " auto");
+            else put(&t, " range %u", l->range);
+            put(&t, " loads");
+            for (uint8_t k = 0; k < LIGHT_RANGES; k++) {
+                if (!light_has_range(l, k)) continue;
+                if (k) put(&t, " %u:%lu", l->pins[k], (unsigned long)l->ohms[k]);
+                else put(&t, " %lu", (unsigned long)l->ohms[0]);
+            }
+            if (l->led != LIGHT_NO_PIN)
+                put(&t, " led %u%s reflect %u led %u us bursts %u", l->led, l->options & LIGHT_LED_LOW ? " low" : "",
+                    l->reflect_range, l->led_us, l->bursts);
+            put(&t, " settle %u us samples %u -> ", l->settle_us, l->samples);
+            for (uint8_t k = 0; k < 4; k++) {
+                if (k) put(&t, " ");
+                put_signal(&t, (uint8_t)(n->out + k));
+            }
+            break;
+        }
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);

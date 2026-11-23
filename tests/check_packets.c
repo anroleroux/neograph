@@ -80,9 +80,10 @@ static void check_under(const uint8_t *p, size_t len, uint16_t id, const neopixe
 
 /* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
    count, a DS18B20's temperature and found, an encoder's position and pressed, an
-   ultrasonic ranger's distance and echo, one for the others. */
+   ultrasonic ranger's distance and echo, a light sensor's four, one for the others. */
 static uint8_t outputs_of(uint8_t type) {
     if (type == MSG_HW_CLOCK) return 3;     /* its hour, minute and second */
+    if (type == MSG_HW_LIGHT) return 4;     /* its µA, reflected µA, reading and load */
     return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20
         || type == MSG_HW_ENCODER || type == MSG_HW_ULTRASONIC ? 2 : 1;
 }
@@ -103,7 +104,7 @@ static const uint8_t BOOLEAN[] = { MSG_UI_BUTTON, MSG_HW_GPI, MSG_LOGIC_COMPARE,
                                    MSG_LOGIC_TOGGLE, MSG_LOGIC_LATCH, MSG_LOGIC_COUNTER, MSG_HW_DS18B20,
                                    MSG_HW_ENCODER, MSG_HW_ULTRASONIC, 0 };
 static const uint8_t FLOATING[] = { MSG_UI_SLIDER, MSG_UI_SLIDER_2D, MSG_HW_ADC, MSG_HW_CORE, MSG_HW_DS18B20, MSG_HW_ENCODER, MSG_HW_CLOCK,
-                                    MSG_HW_ULTRASONIC, MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, MSG_LOGIC_SINE, 0 };
+                                    MSG_HW_ULTRASONIC, MSG_HW_LIGHT, MSG_LOGIC_SCALE, MSG_LOGIC_MIN, MSG_LOGIC_MAX, MSG_LOGIC_COUNTER, MSG_LOGIC_SINE, 0 };
 
 /* What a reference to a block's output stands for, as the device reads it
    (resolve_ref in src/program.c): the reference in the block's table. */
@@ -225,6 +226,11 @@ static void check_config(const uint8_t *p, size_t len) {
         case MSG_HW_ULTRASONIC:
             if (!ultrasonic_payload_valid(it.pay, it.len)) fail("ultrasonic ranger message is not one the device runs");
             break;
+        case MSG_HW_LIGHT: {
+            light_payload light;
+            if (!light_payload_read(it.pay, it.len, &light)) fail("light sensor message is not one the device runs");
+            break;
+        }
         case MSG_HW_CLOCK: {
             uint8_t options;
             int16_t zone;
@@ -492,7 +498,7 @@ int main(int argc, char **argv) {
             if (it.flags & ~(MSG_FLAG_OUTPUT | MSG_FLAG_SHOWN | MSG_FLAG_PART)) fail("a message's flags set an unknown bit");
             else if ((it.flags & MSG_FLAG_SHOWN) && it.type != MSG_HW_CORE && it.type != MSG_HW_ADC && it.type != MSG_HW_GPI
                      && it.type != MSG_HW_DS18B20 && it.type != MSG_HW_ENCODER && it.type != MSG_HW_CLOCK
-                     && it.type != MSG_HW_ULTRASONIC
+                     && it.type != MSG_HW_ULTRASONIC && it.type != MSG_HW_LIGHT
                      && !(it.type >= MSG_LOGIC_COMPARE && it.type <= MSG_LOGIC_LAST))
                 fail("MSG_FLAG_SHOWN on a message that is not a hardware input's or logic's");
         if (it.pos != (size_t)data_length) fail("the messages do not fill the payload");

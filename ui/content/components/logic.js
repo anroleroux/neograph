@@ -277,7 +277,7 @@ class uiCompare extends uiLogic {
 
     // The unit of the source wired in, such as °C, for the settings' labels.
     unitText() {
-        const unit = this.inConns()[0]?.start.node.unit;
+        const unit = connUnit(this.inConns()[0]);
         return unit ? ` (${unit})` : '';
     }
 
@@ -436,7 +436,7 @@ class uiScale extends uiLogic {
     }
 
     logicSettings(settings) {
-        const unit = this.inConns()[0]?.start.node.unit;
+        const unit = connUnit(this.inConns()[0]);
         const labels = [`Input from${unit ? ` (${unit})` : ''}`, `Input to${unit ? ` (${unit})` : ''}`, 'Output from', 'Output to'];
         labels.forEach((label, i) => settings.appendChild(editableSetting(label, () => showFloat(this.range[i]),
             (v) => this.setEnd(i, v), {type: 'number', step: 'any'})));
@@ -468,7 +468,7 @@ class uiExtreme extends uiLogic {
 
     // The unit of what it picks from: its first wired input's.
     get unit() {
-        return this.inConns()[0]?.start.node.unit ?? '';
+        return connUnit(this.inConns()[0]) ?? '';
     }
 
     compute() {

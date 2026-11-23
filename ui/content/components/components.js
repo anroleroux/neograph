@@ -36,6 +36,8 @@
 
 /* {{ultrasonic-js}} */
 
+/* {{light-js}} */
+
 /* {{clock-js}} */
 
 /* {{keyboard-js}} */
