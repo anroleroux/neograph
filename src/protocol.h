@@ -266,6 +266,8 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
                   reflection, 1 to LIGHT_BURSTS_MAX
      bytes 27-30  its minimum reflection in µA, a 32-bit big-endian float, finite and 0
                   or more: an object reflecting less is not there
+     bytes 31-32  ms from the start of one reflection reading to the next, big endian, up
+                  to LIGHT_EVERY_MAX_MS; its LEDs stay off in between. 0: one after another
    The pins (its ADC pin's included) differ, its range and reflection range have their
    load, and it has at least one range. Its outputs (LIGHT_OUT_): its background light, in
    µA, read with its LEDs off; the object's reflected light in µA; the left and the right
@@ -274,7 +276,7 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    scans it reads with that LED on. Two more signals, not outputs (nothing can be wired
    to them), are for its Command view tile: its last background reading, 0 to
    ADC_RAW_FULL (LIGHT_SIG_RAW), and the load it was read through, in kΩ (LIGHT_SIG_LOAD). */
-#define LIGHT_PAYLOAD_LEN       31
+#define LIGHT_PAYLOAD_LEN       33
 #define LIGHT_AUTO              0x01
 #define LIGHT_REFLECT           0x02
 #define LIGHT_DIRECTION         0x04
@@ -298,6 +300,7 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define LIGHT_SETTLE_MAX_US     3000
 #define LIGHT_SAMPLES_MAX       64
 #define LIGHT_BURSTS_MAX        50
+#define LIGHT_EVERY_MAX_MS      60000
 
 /* Clock (MSG_HW_CLOCK): the device has one clock, a time of day, which every clock node
    reads. Three outputs, each a whole number: its hour (0, 0 to 23), its minute (1) and its
@@ -506,6 +509,7 @@ typedef struct {
     uint16_t settle_us;
     uint8_t samples, bursts;
     float min_ua;                           /* the least reflection that is an object, µA */
+    uint16_t every_ms;                      /* from one reflection reading's start to the next's; 0: at once */
 } light_payload;
 
 static inline uint32_t light_u32(const uint8_t *p) {
@@ -536,6 +540,7 @@ static inline int light_payload_read(const uint8_t *pay, uint8_t len, light_payl
     out->bursts = pay[26];
     uint32_t min = light_u32(pay + 27);
     memcpy(&out->min_ua, &min, sizeof out->min_ua);
+    out->every_ms = (uint16_t)(pay[31] << 8 | pay[32]);
 
     if (out->channel >= ADC_CHANNELS || (out->options & ~(LIGHT_AUTO | LIGHT_REFLECT | LIGHT_DIRECTION))) return 0;
     if ((out->options & LIGHT_DIRECTION) && !(out->options & LIGHT_REFLECT)) return 0;
@@ -558,7 +563,7 @@ static inline int light_payload_read(const uint8_t *pay, uint8_t len, light_payl
     if (!(out->options & LIGHT_AUTO) && !light_has_range(out, out->range)) return 0;
     if ((out->options & LIGHT_REFLECT) && !light_has_range(out, out->reflect_range)) return 0;
     return out->settle_us <= LIGHT_SETTLE_MAX_US && out->samples >= 1 && out->samples <= LIGHT_SAMPLES_MAX
-        && out->bursts >= 1 && out->bursts <= LIGHT_BURSTS_MAX;
+        && out->bursts >= 1 && out->bursts <= LIGHT_BURSTS_MAX && out->every_ms <= LIGHT_EVERY_MAX_MS;
 }
 
 /* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which

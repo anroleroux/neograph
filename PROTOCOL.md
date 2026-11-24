@@ -453,7 +453,7 @@ I (MSG_INPUT_BIT, 0x10): 0 = output,     1 = input
 | `34` Rotary encoder | 6 (`ENCODER_PAYLOAD_LEN`) | Byte 0: the GPIO of its A (CLK) pin (UI default 6); byte 1: of its B (DT) pin (UI default 7); byte 2: of its push switch (SW, UI default 8), or `ENCODER_NO_BUTTON` (`FF`) for none: [usable](#gpio-pins) pins that differ. Byte 3: options; bits 0–1 (`ENCODER_DETENT_MASK`) its pins' transitions a click, `ENCODER_DETENT_4` (0, UI default), `ENCODER_DETENT_2` (1) or `ENCODER_DETENT_1` (2); bit 2 (`ENCODER_REVERSE`): it counts the other way; bit 3 (`ENCODER_WRAP`): past its ends it goes on from the other (UI default on). Other bits are 0. Bytes 4–5: its steps, big endian, 1 to `ENCODER_STEPS_MAX` (1000; UI default 20). See [Rotary encoders](#rotary-encoders). |
 | `35` Clock | 3 (`CLOCK_PAYLOAD_LEN`; or 0) | Byte 0: options; bit 0 (`CLOCK_SYNC`): internet time (UI default on). Other bits are 0. Bytes 1–2: its time zone, minutes ahead of UTC, a signed 16-bit big-endian number, `CLOCK_ZONE_MIN` (−720) to `CLOCK_ZONE_MAX` (840), a multiple of `CLOCK_ZONE_STEP` (15) (UI default 120: UTC+2). None, saved before clocks had settings, is internet time off, UTC. The device has one clock: the first clock in the config sets it. Set the time with a [command](#01-command). See [Clocks](#clocks). |
 | `36` Ultrasonic ranger | 3 (`ULTRASONIC_PAYLOAD_LEN`) | Byte 0: the GPIO of its signal pin (SIG), a [usable](#gpio-pins) one (UI default 16). Bytes 1–2: its range in cm, big endian, `ULTRASONIC_RANGE_MIN` (10) to `ULTRASONIC_RANGE_MAX` (400; UI default 400). See [Ultrasonic rangers](#ultrasonic-rangers). |
-| `37` Light sensor | 31 (`LIGHT_PAYLOAD_LEN`) | Byte 0: the ADC channel of the sense node, 0 to 2 (UI default 0, GPIO 26). Byte 1: options; bit 0 (`LIGHT_AUTO`): it picks its range (UI default on); bit 1 (`LIGHT_REFLECT`): object detection (UI default off); bit 2 (`LIGHT_DIRECTION`): directional detection, only with `LIGHT_REFLECT` (UI default off). Other bits are 0. Byte 2: its range without `LIGHT_AUTO`; byte 3: the range it measures reflections on (UI default 3); each 0 to 3, a range it has. Bytes 4–6: the GPIO of loads 1 to 3, or `LIGHT_NO_PIN` (`FF`) (UI default 2, 3 and 4): [usable](#gpio-pins) pins that differ from each other and from its sense pin. Bytes 7–22: the always-on load (UI default 1 MΩ), then loads 1 to 3 (UI default 1 kΩ, 10 kΩ, 100 kΩ), in ohms, 32-bit big endian each, `LIGHT_OHMS_MIN` (10) to `LIGHT_OHMS_MAX` (100 000 000); 0 for none, and for a load without a pin. Bytes 23–24: µs it waits after switching range, 0 to `LIGHT_SETTLE_MAX_US` (3000; UI default 1000). Byte 25: reads averaged, 1 to `LIGHT_SAMPLES_MAX` (64; UI default 16). Byte 26: bursts averaged, 1 to `LIGHT_BURSTS_MAX` (50; UI default 4). Bytes 27–30: its minimum reflection in µA, a 32-bit big-endian float, finite and 0 or more (UI default 1). See [Light sensors](#light-sensors). |
+| `37` Light sensor | 33 (`LIGHT_PAYLOAD_LEN`) | Byte 0: the ADC channel of the sense node, 0 to 2 (UI default 0, GPIO 26). Byte 1: options; bit 0 (`LIGHT_AUTO`): it picks its range (UI default on); bit 1 (`LIGHT_REFLECT`): object detection (UI default off); bit 2 (`LIGHT_DIRECTION`): directional detection, only with `LIGHT_REFLECT` (UI default off). Other bits are 0. Byte 2: its range without `LIGHT_AUTO`; byte 3: the range it measures reflections on (UI default 3); each 0 to 3, a range it has. Bytes 4–6: the GPIO of loads 1 to 3, or `LIGHT_NO_PIN` (`FF`) (UI default 2, 3 and 4): [usable](#gpio-pins) pins that differ from each other and from its sense pin. Bytes 7–22: the always-on load (UI default 1 MΩ), then loads 1 to 3 (UI default 1 kΩ, 10 kΩ, 100 kΩ), in ohms, 32-bit big endian each, `LIGHT_OHMS_MIN` (10) to `LIGHT_OHMS_MAX` (100 000 000); 0 for none, and for a load without a pin. Bytes 23–24: µs it waits after switching range, 0 to `LIGHT_SETTLE_MAX_US` (3000; UI default 1000). Byte 25: reads averaged, 1 to `LIGHT_SAMPLES_MAX` (64; UI default 16). Byte 26: bursts averaged, 1 to `LIGHT_BURSTS_MAX` (50; UI default 4). Bytes 27–30: its minimum reflection in µA, a 32-bit big-endian float, finite and 0 or more (UI default 1). Bytes 31–32: ms from the start of one reflection reading to the next, big endian, 0 to `LIGHT_EVERY_MAX_MS` (60 000); 0, the UI default, is one after another. See [Light sensors](#light-sensors). |
 | `32` ADC | 1 | Byte 0: the ADC channel, 0 to `ADC_CHANNELS` − 1 (2), on GPIO `ADC_PIN_FIRST` (26) + channel (UI default 0). See [ADC inputs](#adc-inputs). |
 | `20` LED | 3 | Bytes 0–2: source reference (0 = not connected) |
 | `21` GPO | 4 | Bytes 0–2: source reference (0 = not connected) · byte 3: GPIO pin, a [usable](#gpio-pins) one (UI default 1) |
@@ -1097,6 +1097,15 @@ reading to the top: pick a less sensitive reflection range.
 **An object is there** while its reflection is at least its **minimum** (bytes 27–30,
 in µA).
 
+**Its pace** (bytes 31–32, `light_pace_measure`, `light_pace_rest`). With 0, one
+reflection reading follows another, so its LED flashes every other scan. With a time,
+a reading starts that often (to the scan): it flashes its bursts, then rests with its
+LEDs off until the next is due, reading only its background, every scan, without
+switching to the reflection range. With 1 burst and 2000 ms, its LED is on for one scan
+(10 ms) every 2 s. A reading is in once its last LED's is: with directional detection
+and an object, the right LED's. A time shorter than a reading takes is the same as 0.
+Its reflections, direction and whether there is an object hold between readings.
+
 **Directional detection** (`LIGHT_DIRECTION`) costs nothing while there is no object.
 Once there is one, its LEDs take turns: its LED, the left one, the right one, each
 between off scans, so each LED's burst is every 60 ms: with 4 bursts, every 240 ms.
@@ -1118,17 +1127,18 @@ pin and its loads', all or none; one an earlier node has (an ADC on its channel)
 it. A save keeps its background until it is read again; its reflections, direction and
 LEDs start at 0.
 
-A light sensor `n1` with the UI's default loads and directional detection, its tile
-shown: its LED, left LED and right LED drive GPOs `n2`, `n3` and `n4` on GPIO 15, 14 and
-13, each switching an LED through a transistor:
+A light sensor `n1` with the UI's default loads and directional detection, taking a
+reflection reading every 2 s, its tile shown: its LED, left LED and right LED drive GPOs
+`n2`, `n3` and `n4` on GPIO 15, 14 and 13, each switching an LED through a transistor:
 
 ```hex example=light-sensor-config
-0A 00 3F                                        # Config, 63 bytes
-37 02 00 01 1F  00 07 00 03 02 03 04            # light sensor n1, tile shown: ADC0, auto, object and
+0A 00 41                                        # Config, 65 bytes
+37 02 00 01 21  00 07 00 03 02 03 04            # light sensor n1, tile shown: ADC0, auto, object and
                                                 #   directional detection on range 3, loads on GPIO 2, 3, 4
                 00 0F 42 40  00 00 03 E8        #   always on 1 MΩ; load 1 1 kΩ
                 00 00 27 10  00 01 86 A0        #   load 2 10 kΩ; load 3 100 kΩ
                 03 E8 10 04  3F 80 00 00        #   settle 1000 µs, 16 samples, 4 bursts, an object from 1 µA
+                07 D0                           #   a reflection reading every 2000 ms
 21 01 00 02 04  00 01 05 0F                     # GPO n2 ← n1's LED (output 5), GPIO 15
 21 01 00 03 04  00 01 06 0E                     # GPO n3 ← n1's left LED (output 6), GPIO 14
 21 01 00 04 04  00 01 07 0D                     # GPO n4 ← n1's right LED (output 7), GPIO 13
@@ -2262,7 +2272,7 @@ LED n3 <- s1
 
 For the [light-sensor-config example](#light-sensors): its channel, ranging, loads (the
 always-on one, then each switched one's pin and ohms), reflection range, bursts,
-minimum and `direction`, then its settle time and samples, and its ten signals: its
+minimum, `direction` and its time between readings, then its settle time and samples, and its ten signals: its
 eight outputs, then its reading and load. The GPOs read its three LEDs:
 
 ```program example=light-sensor-config
@@ -2276,7 +2286,7 @@ s6 n1.6 light = 0
 s7 n1.7 light = 0
 s8 n1.8 light = 0
 s9 n1.9 light = 0
-LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 min 1 direction settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7 raw s8 load s9
+LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 min 1 direction every 2000 ms settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7 raw s8 load s9
 GPO n2 pin 15 <- s5
 GPO n3 pin 14 <- s6
 GPO n4 pin 13 <- s7

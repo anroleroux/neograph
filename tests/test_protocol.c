@@ -2369,7 +2369,7 @@ void test_ultrasonic_program(void)
 static const uint8_t LIGHT_PAY[LIGHT_PAYLOAD_LEN] = {
     0, LIGHT_AUTO | LIGHT_REFLECT | LIGHT_DIRECTION, 0, 3, 2, 3, 4,
     0x00, 0x0F, 0x42, 0x40,  0x00, 0x00, 0x03, 0xE8,  0x00, 0x00, 0x27, 0x10,  0x00, 0x01, 0x86, 0xA0,
-    0x03, 0xE8, 16, 4,  0x3F, 0x80, 0x00, 0x00,
+    0x03, 0xE8, 16, 4,  0x3F, 0x80, 0x00, 0x00,  0, 0,
 };
 
 void test_light_payload(void)
@@ -2386,6 +2386,7 @@ void test_light_payload(void)
     TEST_ASSERT_EQUAL_UINT8(16, l.samples);
     TEST_ASSERT_EQUAL_UINT8(4, l.bursts);
     TEST_ASSERT_EQUAL_FLOAT(1, l.min_ua);
+    TEST_ASSERT_EQUAL_UINT16(0, l.every_ms);
     TEST_ASSERT_FALSE(light_payload_read(LIGHT_PAY, LIGHT_PAYLOAD_LEN - 1, &l));
 
     /* Each change on its own is one the device doesn't run. */
@@ -2405,12 +2406,14 @@ void test_light_payload(void)
         { 26, LIGHT_BURSTS_MAX + 1 },
         { 27, 0xBF },                       /* a minimum of -1 µA */
         { 27, 0x7F },                       /* not finite: 0x7F800000 is infinity */
+        { 31, 0xEA },                       /* every 60001 ms: over LIGHT_EVERY_MAX_MS */
     };
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
         uint8_t pay[LIGHT_PAYLOAD_LEN];
         memcpy(pay, LIGHT_PAY, sizeof pay);
         pay[bad[i].at] = bad[i].value;
         if (bad[i].at == 10) memset(pay + 7, 0, 3);
+        if (bad[i].at == 31) pay[32] = 0x61;
         TEST_ASSERT_FALSE_MESSAGE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l), "a bad light payload was taken");
     }
 
@@ -2550,6 +2553,55 @@ void test_light_reflect(void)
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 200, counts[0]);
 }
 
+/* Its LEDs over `scans` scans, measuring every `every` scans with `leds` LEDs (as
+   light_scan runs them): how many scans each LED was lit, and how many readings came in. */
+static void light_run(uint32_t every, uint8_t leds, uint8_t bursts, uint32_t scans, uint32_t lit[LIGHT_LEDS],
+                      uint32_t *readings, uint32_t *first_on)
+{
+    light_reflect r = { .lit = LIGHT_DARK };
+    light_pace pace = { 0 };
+    float counts[LIGHT_LEDS];
+    memset(lit, 0, LIGHT_LEDS * sizeof lit[0]);
+    *readings = 0;
+    *first_on = UINT32_MAX;
+    for (uint32_t scan = 0; scan < scans; scan++) {
+        if (!light_pace_measure(&pace, every)) continue;
+        uint8_t ready = light_reflect_take(&r, r.lit == LIGHT_DARK ? 1000 : 1100, leds, bursts, counts);
+        if (ready >> (leds - 1) & 1) ++*readings;
+        if (light_pace_rest(&pace, every, ready >> (leds - 1) & 1)) light_reflect_rest(&r);
+        if (r.lit != LIGHT_DARK) {
+            lit[r.lit]++;
+            if (*first_on == UINT32_MAX) *first_on = scan;
+        }
+    }
+}
+
+void test_light_pace(void)
+{
+    uint32_t lit[LIGHT_LEDS], readings, first;
+    /* One after another (every 0), one burst a reading: lit every other scan, a reading
+       every 2 scans. */
+    light_run(0, 1, 1, 100, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(50, lit[LIGHT_LED_OBJECT]);
+    TEST_ASSERT_EQUAL_UINT32(49, readings);
+    /* Every 200 scans (2 s), one burst: lit one scan in 200, a reading each time. */
+    light_run(200, 1, 1, 1000, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(5, lit[LIGHT_LED_OBJECT]);
+    TEST_ASSERT_EQUAL_UINT32(5, readings);
+    TEST_ASSERT_EQUAL_UINT32(0, first);
+    /* Every 100 scans, 4 bursts: 4 scans lit each time. */
+    light_run(100, 1, 4, 1000, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(40, lit[LIGHT_LED_OBJECT]);
+    TEST_ASSERT_EQUAL_UINT32(10, readings);
+    /* Three LEDs, 2 bursts each, every 50 scans: 12 scans of 50 measuring, 2 lit each. */
+    light_run(50, LIGHT_LEDS, 2, 500, lit, &readings, &first);
+    for (uint8_t led = 0; led < LIGHT_LEDS; led++) TEST_ASSERT_EQUAL_UINT32(20, lit[led]);
+    TEST_ASSERT_EQUAL_UINT32(10, readings);
+    /* A time shorter than a reading takes: one after another. */
+    light_run(3, 1, 4, 100, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(50, lit[LIGHT_LED_OBJECT]);
+}
+
 void test_light_program(void)
 {
     static hw_program p;
@@ -2572,22 +2624,35 @@ void test_light_program(void)
     memcpy(cfg + at, LIGHT_PAY, LIGHT_PAYLOAD_LEN);
     cfg[at + 25] = 0;
     at += LIGHT_PAYLOAD_LEN;
+    /* n5: a reading every 2 s. */
+    memcpy(cfg + at, head, sizeof head);
+    cfg[at + 3] = 5;
+    at += sizeof head;
+    memcpy(cfg + at, LIGHT_PAY, LIGHT_PAYLOAD_LEN);
+    memcpy(cfg + at, (const uint8_t[]){ 1 }, 1);    /* ADC1 */
+    cfg[at + 31] = 0x07;
+    cfg[at + 32] = 0xD0;
+    at += LIGHT_PAYLOAD_LEN;
 
     program_compile(cfg, at, &p);
-    TEST_ASSERT_EQUAL_UINT8(LIGHT_SIGNALS, p.signal_count);
-    TEST_ASSERT_EQUAL_UINT8(3, p.node_count);
+    TEST_ASSERT_EQUAL_UINT8(2 * LIGHT_SIGNALS, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(4, p.node_count);
     const prog_node *n = &p.nodes[0];
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_LIGHT, n->type);
     TEST_ASSERT_EQUAL_UINT8(26, n->pin);
     for (uint8_t k = 0; k < LIGHT_SIGNALS; k++) TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, k), n->out + k);
     TEST_ASSERT_EQUAL_FLOAT(1, n->light.min_ua);
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 36.3f, p.nodes[1].in_full[0]);
-    TEST_ASSERT_EQUAL_UINT8(n->out + LIGHT_OUT_LED_LEFT, p.nodes[2].in[0]);
-    char text[512];
-    program_describe(&p, text, sizeof text);
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_LIGHT, p.nodes[1].type);         /* n5: inputs come first */
+    TEST_ASSERT_EQUAL_UINT16(2000, p.nodes[1].light.every_ms);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 36.3f, p.nodes[2].in_full[0]);
+    TEST_ASSERT_EQUAL_UINT8(n->out + LIGHT_OUT_LED_LEFT, p.nodes[3].in[0]);
+    char text[2048];
+    TEST_ASSERT_LESS_THAN(sizeof text, program_describe(&p, text, sizeof text));
     TEST_ASSERT_NOT_NULL(strstr(text, "s9 n1.9 light = 0\n"));
     TEST_ASSERT_NOT_NULL(strstr(text, "LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 "
                                       "min 1 direction settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7 raw s8 load s9\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "LIGHT n5 adc 1 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 "
+                                      "min 1 direction every 2000 ms settle 1000 us samples 16 -> s10 "));
 }
 
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
@@ -2850,6 +2915,7 @@ int main(void)
     RUN_TEST(test_light_ranges);
     RUN_TEST(test_light_current);
     RUN_TEST(test_light_reflect);
+    RUN_TEST(test_light_pace);
     RUN_TEST(test_light_program);
     RUN_TEST(test_sine);
     RUN_TEST(test_clock);

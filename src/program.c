@@ -750,9 +750,11 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
                 if (k) put(&t, " %u:%lu", l->pins[k], (unsigned long)l->ohms[k]);
                 else put(&t, " %lu", (unsigned long)l->ohms[0]);
             }
-            if (l->options & LIGHT_REFLECT)
+            if (l->options & LIGHT_REFLECT) {
                 put(&t, " reflect %u bursts %u min %.4g%s", l->reflect_range, l->bursts, (double)l->min_ua,
                     l->options & LIGHT_DIRECTION ? " direction" : "");
+                if (l->every_ms) put(&t, " every %u ms", l->every_ms);
+            }
             put(&t, " settle %u us samples %u -> ", l->settle_us, l->samples);
             for (uint8_t k = 0; k < LIGHT_SIGNALS; k++) {
                 if (k) put(&t, k == LIGHT_SIG_RAW ? " raw " : k == LIGHT_SIG_LOAD ? " load " : " ");

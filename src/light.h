@@ -72,6 +72,25 @@ typedef struct {
 // only; LIGHT_LEDS: the object's, left, right). The bursts of an LED past `leds` are dropped.
 uint8_t light_reflect_take(light_reflect *r, uint16_t raw, uint8_t leds, uint8_t bursts, float counts[LIGHT_LEDS]);
 
+// Its pace: from the start of one reflection reading to the next, `every` scans (0: one
+// after another), resting in between with its LEDs off.
+typedef struct {
+    bool resting;
+    uint32_t since;         // scans done since its reflection reading began
+} light_pace;
+
+// At the start of a scan: whether it measures reflections this scan, or rests.
+bool light_pace_measure(light_pace *p, uint32_t every);
+
+// After a scan it measured reflections in, `done` if its reading is in (its last LED's).
+// Returns true if it now rests until the next is due (the caller puts its LEDs out with
+// light_reflect_rest).
+bool light_pace_rest(light_pace *p, uint32_t every, bool done);
+
+// Rest between reflection readings: its LEDs off, and the next reading starts afresh, from
+// an off reading and its first LED.
+void light_reflect_rest(light_reflect *r);
+
 // An object's direction from its left and right reflections, in µA: (right - left) /
 // (right + left), -1 (left) to 1 (right), each taken as 0 if below 0. 0 if neither
 // reaches `min_ua`: nothing there.

@@ -2115,6 +2115,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             s.setSettle(LIGHT_SETTLE_MAX_US + 1), s.setSamples(0), s.setBursts(LIGHT_BURSTS_MAX + 1), s.setRange(4),
             s.setWireOutput(LIGHT_OUTPUTS), s.setMinReflection('-1'), s.setMinReflection('abc'),
             s.setDirection(true),                               // not without object detection
+            s.setEvery('61'), s.setEvery('-1'), s.setEvery('x'),
         ].every(r => r === false) && JSON.stringify(s.payload()) === before;
         // Its pins: loads on 2, 3, 4 (one pin can't be two of them).
         s.setChannel(0);
@@ -2180,9 +2181,11 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         s.setDirection(true);
         s.setReflectRange(3);
         s.setMinReflection('0.25');
+        s.setEvery('2.5');
+        const every = s.payload().slice(31).join();
         saveGraph();
         return { first, rejected, keptOne, clash, ranges, reflectRows, directed, wired, units, hidden, tiles: tiles.join('|'), pay,
-            fixedRows, offPay, moved, min: s.payload().slice(27).join() };
+            fixedRows, offPay, moved, min: s.payload().slice(27, 31).join(), every };
     });
     packets.push(...await sent(page));
     expect(ls.first === '1000000,1000,10000,100000 true false false 3 1000 16 4 1 '
@@ -2191,7 +2194,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(ls.rejected, 'a light sensor took settings out of range');
     expect(ls.keptOne && ls.clash, 'a light sensor was left with no range, or two loads on one pin');
     expect(ls.ranges === '1 MΩ (always on); 90.91 kΩ (GPIO 4); 9.901 kΩ (GPIO 3); 999 Ω (GPIO 2)', 'a light sensor\'s ranges are ' + ls.ranges);
-    expect(ls.reflectRows === lsRows + '|Reflection range:|Bursts:|Min reflection (µA):|Directional:|Wire from:|Command view:|Order:',
+    expect(ls.reflectRows === lsRows + '|Reflection range:|Bursts:|Measure every (s):|Min reflection (µA):|Directional:|Wire from:|Command view:|Order:',
         'a light sensor with object detection shows ' + ls.reflectRows);
     expect(ls.directed, 'a light sensor with object detection took no directional detection');
     expect(ls.wired, 'a light sensor\'s outputs did not wire by type');
@@ -2200,27 +2203,28 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         + '|16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA, left 0.40 µA, right 0.95 µA'
         + '|16.5,1.2,0.4,0.95,0.4074,,1,,2048,90.91', 'a light sensor\'s tile showed ' + ls.tiles);
     expect(ls.hidden, 'a light sensor offers its reading or load to wire from');
-    expect(ls.pay === '00070003020304' + '000f4240' + '000003e8' + '00002710' + '000186a0' + '03e81004' + '3f800000',
+    expect(ls.pay === '00070003020304' + '000f4240' + '000003e8' + '00002710' + '000186a0' + '03e81004' + '3f800000' + '0000',
         'a light sensor marshals as ' + ls.pay);
     expect(ls.fixedRows === lsRows.replace('|Ranging:', '|Ranging:|Range:') + '|Wire from:|Command view:|Order:',
         'a fixed light sensor without object detection shows ' + ls.fixedRows);
     expect(ls.offPay === '0,2', 'a light sensor without detection or ranging marshals options and range as ' + ls.offPay);
     expect(ls.moved === '0,3', 'a light sensor without its range\'s load moved to ' + ls.moved);
     expect(ls.min === '62,128,0,0', 'a light sensor\'s minimum of 0.25 µA marshals as ' + ls.min);
+    expect(ls.every === '9,196', 'a light sensor measuring every 2.5 s marshals that as ' + ls.every);
     const lsBack = await page.evaluate(() => {
         const light = [0x37, MSG_FLAG_SHOWN, 0, 1, LIGHT_PAYLOAD_LEN,
             1, LIGHT_REFLECT | LIGHT_DIRECTION, 2, 1, 5, 6, LIGHT_NO_PIN,
-            0, 0, 0, 0,  0, 0, 0x01, 0xF4,  0, 0, 0x13, 0x88,  0, 0, 0, 0,  0, 50, 4, 1,  0x40, 0x00, 0x00, 0x00];
+            0, 0, 0, 0,  0, 0, 0x01, 0xF4,  0, 0, 0x13, 0x88,  0, 0, 0, 0,  0, 50, 4, 1,  0x40, 0x00, 0x00, 0x00,  0x03, 0xE8];
         const bad = [...light];
         bad[3] = 2;
         bad[5 + 1] = LIGHT_DIRECTION;           // directional without object detection: kept as a new one
         restoreGraph(configMessages(Uint8Array.from([...light, ...bad])));
         const s = elements.n1;
         return [s.channel, s.auto, s.reflect, s.direction, s.range, s.reflectRange, s.pins.slice(1).join(':'), s.ohms.join(':'),
-            s.settleUs, s.samples, s.bursts, s.minUa, s.shown, s.ranges().join(''),
+            s.settleUs, s.samples, s.bursts, s.minUa, s.everyMs, s.shown, s.ranges().join(''),
             elements.n2.reflect, elements.n2.direction, elements.n2.channel].join();
     });
-    expect(lsBack === '1,false,true,true,2,1,5:6:255,0:500:5000:100000,50,4,1,2,true,21,false,false,0',
+    expect(lsBack === '1,false,true,true,2,1,5:6:255,0:500:5000:100000,50,4,1,2,1000,true,21,false,false,0',
         'a light sensor restored as ' + lsBack);
 
     // A sine: an on/off wire in runs it, a number wire leaves it; the browser runs the

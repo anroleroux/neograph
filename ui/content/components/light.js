@@ -38,6 +38,7 @@ class uiLight extends uiComponents {
         this.reflect = false;       // object detection: it flashes its LED and measures reflections
         this.direction = false;     // directional detection, with an object: its left and right LEDs too
         this.minUa = 1;             // µA: the least reflection that is an object
+        this.everyMs = 0;           // ms from one reflection reading's start to the next's; 0: one after another
         this.auto = true;           // it picks its range
         this.range = 0;             // its range when it doesn't
         this.reflectRange = 3;      // the range it measures reflections on: 100 kΩ
@@ -218,6 +219,16 @@ class uiLight extends uiComponents {
         this.minUa = v;
     }
 
+    // Seconds from one reflection reading to the next, to the ms, 0 to LIGHT_EVERY_MAX_MS /
+    // 1000: its LEDs rest off between them. 0: one after another.
+    setEvery(v) {
+        v = String(v).trim();
+        if (!/^\d*\.?\d+$/.test(v)) return false;
+        const ms = Math.round(Number(v) * 1000);
+        if (ms > LIGHT_EVERY_MAX_MS) return false;
+        this.everyMs = ms;
+    }
+
     // A range it has: 0 to LIGHT_RANGES - 1.
     setRange(k) {
         k = Number(k);
@@ -349,6 +360,9 @@ class uiLight extends uiComponents {
             settings.appendChild(selectSetting('Reflection range', rangeOptions, () => this.reflectRange, (k) => this.setReflectRange(k)));
             settings.appendChild(editableSetting('Bursts', () => String(this.bursts), (v) => this.setBursts(v),
                 {type: 'number', min: 1, max: LIGHT_BURSTS_MAX, step: 1}));
+            settings.appendChild(editableSetting('Measure every (s)', () => this.everyMs ? String(this.everyMs / 1000) : '0',
+                (v) => this.setEvery(v), {type: 'number', min: 0, max: LIGHT_EVERY_MAX_MS / 1000, step: 'any',
+                    title: '0: one reading after another; otherwise its LEDs rest off between readings'}));
             settings.appendChild(editableSetting('Min reflection (µA)', () => String(+this.minUa.toPrecision(6)),
                 (v) => this.setMinReflection(v), {type: 'number', min: 0, step: 'any'}));
             settings.appendChild(choiceSetting('Directional', {on: 'On', off: 'Off'},
@@ -384,7 +398,7 @@ class uiLight extends uiComponents {
         const u16 = (v) => [(v >> 8) & 0xFF, v & 0xFF];
         return [this.channel, this.options(), this.range, this.reflectRange, ...this.pins.slice(1),
             ...[0, 1, 2, 3].flatMap(k => u32(k === 0 || this.hasRange(k) ? this.ohms[k] : 0)),
-            ...u16(this.settleUs), this.samples, this.bursts, ...float32Bytes(this.minUa)];
+            ...u16(this.settleUs), this.samples, this.bursts, ...float32Bytes(this.minUa), ...u16(this.everyMs)];
     }
 
     marshal() {
@@ -401,10 +415,11 @@ class uiLight extends uiComponents {
         const pins = [LIGHT_NO_PIN, pay[4], pay[5], pay[6]];
         const ohms = [0, 1, 2, 3].map(k => u32(7 + 4 * k));
         const settleUs = pay[23] << 8 | pay[24], samples = pay[25], bursts = pay[26], minUa = float32At(pay, 27);
+        const everyMs = pay[31] << 8 | pay[32];
 
         if (channel >= ADC_CHANNELS || options & ~(LIGHT_AUTO | LIGHT_REFLECT | LIGHT_DIRECTION)) return;
         if (options & LIGHT_DIRECTION && !(options & LIGHT_REFLECT)) return;
-        if (!Number.isFinite(minUa) || !(minUa >= 0)) return;
+        if (!Number.isFinite(minUa) || !(minUa >= 0) || everyMs > LIGHT_EVERY_MAX_MS) return;
         const taken = [ADC_PIN_FIRST + channel, ...pins.slice(1)].filter(pin => pin !== LIGHT_NO_PIN);
         if (!taken.every(pinUsable) || new Set(taken).size !== taken.length) return;
         const fitted = (k) => k === 0 ? ohms[0] !== 0 : pins[k] !== LIGHT_NO_PIN;
@@ -418,7 +433,7 @@ class uiLight extends uiComponents {
         const used = pinsInUse(this);
         if (taken.some(pin => used.has(pin))) return;
 
-        Object.assign(this, { channel, range, reflectRange, pins, settleUs, samples, bursts, minUa });
+        Object.assign(this, { channel, range, reflectRange, pins, settleUs, samples, bursts, minUa, everyMs });
         // A load without a pin keeps its default ohms, for when it gets one.
         ohms.forEach((v, k) => { if (k === 0 || fitted(k)) this.ohms[k] = v; });
         this.auto = !!(options & LIGHT_AUTO);

@@ -569,6 +569,7 @@ a plot, a scale, or a PWM, servo or NeoPixels; the LEDs to a GPO or NeoPixels.
 | Object detection | On, Off | Off | On: it flashes LED and measures Reflected. |
 | Reflection range | Its ranges | 100 kΩ | With object detection: the range it measures reflections on. |
 | Bursts | 1–50 | 4 | With object detection: flashes averaged into each reflection reading. |
+| Measure every (s) | 0–60 | 0 | With object detection: how often it takes a reflection reading. 0: one after another, so the LED flashes every other scan. Otherwise it flashes its Bursts, then rests with the LEDs off until the next reading is due: 1 burst every 2 s is one 10 ms flash every 2 s. Reflected, Left, Right and Direction hold in between. |
 | Min reflection (µA) | 0 or more | 1 | With object detection: the least Reflected that counts as an object. |
 | Directional | On, Off | Off | With object detection: on, it finds which side an object is on. |
 | Wire from | Its eight outputs | µA | Which output the next wire leaves from. |
@@ -585,9 +586,11 @@ Things to know:
 - **The LEDs must follow their outputs within a scan:** GPOs, or NeoPixels (a long chain
   of several hundred LEDs takes too long to send). Logic such as AND or NOT in between
   is fine; a delay, or the onboard LED (the WiFi chip drives it, late), isn't.
-- **How often:** with only object detection a reflection reading comes every 20 ms ×
-  Bursts, so 80 ms by default. While directional detection has an object, each of its
-  three LEDs gets a turn, so every 60 ms × Bursts: 240 ms by default.
+- **How often:** with only object detection a reflection reading takes 20 ms × Bursts,
+  so 80 ms by default. While directional detection has an object, each of its three
+  LEDs gets a turn, so 60 ms × Bursts: 240 ms by default. Measure every spaces the
+  readings out, so the LEDs are dark most of the time; a time shorter than a reading
+  takes is the same as 0.
 - **Ranges:** range 0 is the always-on load alone; each switched load is in parallel
   with it, so 100 kΩ with 1 MΩ always on is 90.9 kΩ. The device switches one load in at
   a time by driving its pin low, and lets the others go. On the RP2350 a let-go pin also

@@ -185,12 +185,14 @@ const ULTRASONIC_RANGE_MAX   = 400;   // cm: as far as the ranger hears
 // directional detection, only with LIGHT_REFLECT); its range without LIGHT_AUTO; its
 // reflection range; loads 1 to 3's GPIOs (LIGHT_NO_PIN: none); the always-on load then
 // loads 1 to 3 in ohms (4 bytes BE each, 0: none); settle µs (2 bytes BE); samples;
-// bursts; its minimum reflection in µA (float32 BE). Range 0 is the always-on load alone,
+// bursts; its minimum reflection in µA (float32 BE); ms from one reflection reading's
+// start to the next's, its LEDs off in between (2 bytes BE, up to LIGHT_EVERY_MAX_MS; 0:
+// one after another). Range 0 is the always-on load alone,
 // range k load k in parallel with it. Outputs (LIGHT_OUT_): background µA, reflected µA,
 // left µA, right µA, direction (-1 to 1), all numbers; then its LED, left LED and right
 // LED, on/off. Two more signals, not outputs, are for its tile: its last background
 // reading, 0 to ADC_RAW_FULL (LIGHT_SIG_RAW), and its load in kΩ (LIGHT_SIG_LOAD).
-const LIGHT_PAYLOAD_LEN      = 31;
+const LIGHT_PAYLOAD_LEN      = 33;
 const LIGHT_AUTO             = 0x01;
 const LIGHT_REFLECT          = 0x02;
 const LIGHT_DIRECTION        = 0x04;
@@ -214,6 +216,7 @@ const LIGHT_OHMS_MAX         = 100000000;
 const LIGHT_SETTLE_MAX_US    = 3000;
 const LIGHT_SAMPLES_MAX      = 64;
 const LIGHT_BURSTS_MAX       = 50;
+const LIGHT_EVERY_MAX_MS     = 60000;
 
 // Clock (MSG_HW_CLOCK): the device has one clock, which every clock node reads. Outputs:
 // its hour (0), minute (1) and second (2), whole numbers. Its payload: options

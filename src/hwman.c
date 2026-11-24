@@ -376,6 +376,7 @@ typedef struct {
         uint8_t range;          // the range it reads its light on
         uint8_t selected;       // the range switched in, or LIGHT_NO_RANGE before the first
         light_reflect reflect;  // its LEDs' on and off scans, since their last reflection readings
+        light_pace pace;        // its reflection readings' pace: resting between them
     } light;                    // light sensor
 } node_state;
 
@@ -970,16 +971,19 @@ static bool light_setup(hw_program *p, const prog_node *n, node_state *st) {
 }
 
 // One scan. With its LEDs off (as the last scan set them): its background light on its
-// range; while one is on, its background keeps its last reading. With object detection: a
-// reading on its reflection range, which is also its background when the two ranges are
-// the same and its LEDs are off; then its LED outputs for the next scan. With directional
-// detection, its left and right LEDs take their turns while the object's reflection is
-// at least its minimum; otherwise left, right and direction are 0.
+// range; while one is on, its background keeps its last reading. With object detection,
+// unless it is resting between reflection readings: a reading on its reflection range,
+// which is also its background when the two ranges are the same and its LEDs are off;
+// then its LED outputs for the next scan. With directional detection, its left and right
+// LEDs take their turns while the object's reflection is at least its minimum; otherwise
+// left, right and direction are 0. With a time between readings (every_ms), once its
+// last LED's reading is in it rests, its LEDs off, until the next is due.
 static void light_scan(hw_program *p, const prog_node *n, node_state *st) {
     const light_payload *l = &n->light;
     prog_signal *out = &p->signals[n->out];
     light_reflect *r = &st->light.reflect;
-    bool reflect = l->options & LIGHT_REFLECT;
+    uint32_t every = l->every_ms / SCAN_MS;     // scans from one reading's start to the next's
+    bool reflect = (l->options & LIGHT_REFLECT) && light_pace_measure(&st->light.pace, every);
     bool dark = !reflect || r->lit == LIGHT_DARK;
     uint8_t k = st->light.range;
     uint16_t raw = 0;
@@ -1000,6 +1004,8 @@ static void light_scan(hw_program *p, const prog_node *n, node_state *st) {
             if (ready >> led & 1) out[LIGHT_OUT_REFLECTED + led].value = light_microamps(counts[led], ohms);
         if (leds == 1) out[LIGHT_OUT_LEFT].value = out[LIGHT_OUT_RIGHT].value = 0;
         out[LIGHT_OUT_DIRECTION].value = light_direction(out[LIGHT_OUT_LEFT].value, out[LIGHT_OUT_RIGHT].value, l->min_ua);
+        // A reading is in once its last LED's is: rest until the next is due, or go on.
+        if (light_pace_rest(&st->light.pace, every, ready >> (leds - 1) & 1)) light_reflect_rest(r);
         for (uint8_t led = 0; led < LIGHT_LEDS; led++) out[LIGHT_OUT_LED + led].value = r->lit == led;
     }
     if (!dark) return;

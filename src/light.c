@@ -87,6 +87,33 @@ uint8_t light_reflect_take(light_reflect *r, uint16_t raw, uint8_t leds, uint8_t
     return ready;
 }
 
+bool light_pace_measure(light_pace *p, uint32_t every) {
+    if (p->resting) {
+        if (p->since < every) {
+            p->since++;
+            return false;
+        }
+        p->resting = false;
+        p->since = 0;
+    }
+    return true;
+}
+
+bool light_pace_rest(light_pace *p, uint32_t every, bool done) {
+    ++p->since;
+    if (!every || !done) return false;
+    if (p->since >= every) {        // it took as long as its time: the next starts at once
+        p->since = 0;
+        return false;
+    }
+    p->resting = true;
+    return true;
+}
+
+void light_reflect_rest(light_reflect *r) {
+    *r = (light_reflect){ .lit = LIGHT_DARK };
+}
+
 float light_direction(float left, float right, float min_ua) {
     if (left < 0) left = 0;
     if (right < 0) right = 0;
