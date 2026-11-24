@@ -80,10 +80,10 @@ static void check_under(const uint8_t *p, size_t len, uint16_t id, const neopixe
 
 /* The outputs a source of a type has: a 2D slider's X and Y, a counter's done and
    count, a DS18B20's temperature and found, an encoder's position and pressed, an
-   ultrasonic ranger's distance and echo, a light sensor's five, one for the others. */
+   ultrasonic ranger's distance and echo, a light sensor's eight, one for the others. */
 static uint8_t outputs_of(uint8_t type) {
     if (type == MSG_HW_CLOCK) return 3;     /* its hour, minute and second */
-    if (type == MSG_HW_LIGHT) return LIGHT_OUTPUTS;     /* its µA, reflected µA, reading, load and LED */
+    if (type == MSG_HW_LIGHT) return LIGHT_OUTPUTS;     /* its four µA, direction and three LEDs */
     return type == MSG_UI_SLIDER_2D || type == MSG_LOGIC_COUNTER || type == MSG_HW_DS18B20
         || type == MSG_HW_ENCODER || type == MSG_HW_ULTRASONIC ? 2 : 1;
 }
@@ -159,8 +159,8 @@ static void check_source(const uint8_t *p, size_t len, msg_ref src, const uint8_
     if (type == MSG_HW_ENCODER && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
     /* An ultrasonic ranger's distance (0) is floating, its echo (1) boolean. */
     if (type == MSG_HW_ULTRASONIC && src.output != (types == BOOLEAN ? 1 : 0)) { fail(what); return; }
-    /* A light sensor's LED is boolean, its other four floating. */
-    if (type == MSG_HW_LIGHT && (src.output == LIGHT_LED_OUTPUT) != (types == BOOLEAN)) { fail(what); return; }
+    /* A light sensor's LEDs are boolean, its other outputs floating. */
+    if (type == MSG_HW_LIGHT && (src.output >= LIGHT_OUT_LED) != (types == BOOLEAN)) { fail(what); return; }
     for (; *types; types++) if (type == *types) return;
     fail(what);
 }

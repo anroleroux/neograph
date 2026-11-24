@@ -456,7 +456,8 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
         }
 
         case MSG_HW_LIGHT: {
-            // Five signals, in a row: its background µA, reflected µA, reading, load and LED.
+            // LIGHT_OUTPUTS signals, in a row: its background, reflected, left and right µA, its
+            // direction, then its LED, left LED and right LED.
             light_payload light;
             if (!light_payload_read(itr.pay, itr.len, &light)) break;
             if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
@@ -749,7 +750,9 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
                 if (k) put(&t, " %u:%lu", l->pins[k], (unsigned long)l->ohms[k]);
                 else put(&t, " %lu", (unsigned long)l->ohms[0]);
             }
-            if (l->options & LIGHT_REFLECT) put(&t, " reflect %u bursts %u", l->reflect_range, l->bursts);
+            if (l->options & LIGHT_REFLECT)
+                put(&t, " reflect %u bursts %u min %.4g%s", l->reflect_range, l->bursts, (double)l->min_ua,
+                    l->options & LIGHT_DIRECTION ? " direction" : "");
             put(&t, " settle %u us samples %u -> ", l->settle_us, l->samples);
             for (uint8_t k = 0; k < LIGHT_OUTPUTS; k++) {
                 if (k) put(&t, " ");

@@ -6,13 +6,14 @@ const LIGHT_RAW_HIGH = 3900;
 // on an ADC pin, with load resistors from the sense node: one to GND that is always on
 // (or none), and up to LIGHT_LOADS more, each to a GPIO the device drives low to switch
 // it in. A range is the load the photocurrent flows through: range 0 the always-on load
-// alone, range k load k in parallel with it. With Reflections on, it turns its LED output
-// on and off, a scan each, and measures how much of that LED's light something in front
-// of it sends back. A source with five outputs: its background light in µA (with its LED
-// off), the reflected photocurrent in µA, its ADC reading (0 to ADC_RAW_FULL) and the load
-// of the range it read on, in kΩ, all numbers; and its LED, on/off, for a GPO or
-// NeoPixels to light the LED with. Its readings reach the browser as telemetry, for its
-// tile and the nodes wired to it.
+// alone, range k load k in parallel with it. It reads the background light. With object
+// detection it turns its LED output on and off, a scan each, and measures how much of
+// that LED's light an object in front of it sends back; with directional detection too,
+// while there is an object, it also flashes a left and a right LED in turn, and gives the
+// object's direction. A source with eight outputs (LIGHT_OUT_): the background, reflected,
+// left and right light in µA and the direction, -1 to 1, all numbers; then its LED, left
+// LED and right LED, on/off, for GPOs or NeoPixels to light the LEDs with. Its readings
+// reach the browser as telemetry, for its tile and the nodes wired to it.
 class uiLight extends uiComponents {
     constructor(x = 0, y = 0) {
         super("light", x, y);
@@ -21,11 +22,7 @@ class uiLight extends uiComponents {
         this.tc = MSG_HW_LIGHT;
 
         this.outputs.push(
-            { type: "float", name: "µA", conns: [] },
-            { type: "float", name: "Reflected", conns: [] },
-            { type: "float", name: "Raw", conns: [] },
-            { type: "float", name: "Load", conns: [] },
-            { type: "bool", name: "LED", conns: [] },
+            ...uiLight.OUTPUT_NAMES.map((name, k) => ({ type: k >= LIGHT_OUT_LED ? "bool" : "float", name, conns: [] })),
         );
         this.actDir = "outputs";
         this.actNum = 0;            // the output the next wire leaves from
@@ -37,20 +34,24 @@ class uiLight extends uiComponents {
         // pin). A load without a pin keeps its ohms, for when it gets one again.
         this.pins = [LIGHT_NO_PIN, ...uiLight.freePins(this, [2, 3, 4], ADC_PIN_FIRST + this.channel)];
         this.ohms = [1000000, 1000, 10000, 100000];
-        this.reflect = true;        // it measures reflections, driving its LED output
+        this.reflect = false;       // object detection: it flashes its LED and measures reflections
+        this.direction = false;     // directional detection, with an object: its left and right LEDs too
+        this.minUa = 1;             // µA: the least reflection that is an object
         this.auto = true;           // it picks its range
         this.range = 0;             // its range when it doesn't
         this.reflectRange = 3;      // the range it measures reflections on: 100 kΩ
         this.settleUs = 1000;       // µs it waits after switching range
         this.samples = 16;          // ADC reads averaged into a reading
-        this.bursts = 8;            // LED bursts averaged into a reflection
-        this.values = [NaN, NaN, NaN, NaN, NaN];    // its outputs; none yet
+        this.bursts = 4;            // LED bursts averaged into a reflection
+        this.values = Array(LIGHT_OUTPUTS).fill(NaN);   // its outputs; none yet
         this.unit = 'µA';
         this.shown = false;         // a tile in the Command view
         this.fixRanges();
 
         this.buildGraphElement();
     }
+
+    static OUTPUT_NAMES = ['µA', 'Reflected', 'Left', 'Right', 'Direction', 'LED', 'LED Left', 'LED Right'];
 
     // Pins for its loads: each preferred one if no other node (nor `taken`) uses it,
     // otherwise the lowest free one; none if there is none.
@@ -190,10 +191,30 @@ class uiLight extends uiComponents {
         this.fixRanges();
     }
 
-    // Reflections on or off: off, its LED output stays off and Reflected reads 0.
+    // Object detection on or off. Off, its LEDs stay off, its reflections and direction
+    // read 0, and directional detection goes off too.
     setReflect(on) {
         this.reflect = !!on;
-        if (!this.reflect) this.signal(1, NaN);
+        if (this.reflect) return;
+        this.direction = false;
+        for (let k = LIGHT_OUT_REFLECTED; k < LIGHT_OUTPUTS; k++) this.signal(k, NaN);
+    }
+
+    // Directional detection on or off: only with object detection.
+    setDirection(on) {
+        if (on && !this.reflect) return false;
+        this.direction = !!on;
+        if (!this.direction) [LIGHT_OUT_LEFT, LIGHT_OUT_RIGHT, LIGHT_OUT_DIRECTION, LIGHT_OUT_LED_LEFT, LIGHT_OUT_LED_RIGHT]
+            .forEach(k => this.signal(k, NaN));
+    }
+
+    // The least reflection that is an object, µA: a number 0 or more, as a float32 keeps it.
+    setMinReflection(v) {
+        v = String(v).trim();
+        if (!/^\d*\.?\d+(e[+-]?\d+)?$/i.test(v)) return false;
+        v = Math.fround(Number(v));
+        if (!Number.isFinite(v) || v < 0) return false;
+        this.minUa = v;
     }
 
     // A range it has: 0 to LIGHT_RANGES - 1.
@@ -244,30 +265,36 @@ class uiLight extends uiComponents {
     }
 
     outputValue(output) {
-        if (output === LIGHT_LED_OUTPUT) return Number.isNaN(this.values[output]) ? null : Number(this.values[output] >= 0.5);
+        if (output >= LIGHT_OUT_LED) return Number.isNaN(this.values[output]) ? null : Number(this.values[output] >= 0.5);
         return this.values[output];
     }
 
-    // Its outputs' units: µA, µA, ADC counts (none), kΩ, and none for its LED.
+    // Its outputs' units: µA for its four lights, none for its direction and LEDs.
     outputUnit(output) {
-        return ['µA', 'µA', '', 'kΩ', ''][output];
+        return output <= LIGHT_OUT_RIGHT ? 'µA' : '';
     }
 
-    // Its signals from the device (PROTOCOL.md, "Telemetry text frames"): its background
-    // µA (output 0), reflected µA (1), reading (2), load in kΩ (3) and LED (4).
+    // Its signals from the device (PROTOCOL.md, "Telemetry text frames"), LIGHT_OUT_.
     signal(output, value) {
         if (!(output >= 0 && output < LIGHT_OUTPUTS)) return;
         this.values[output] = value;
         this.emit(this.outputValue(output), output);
-        if (output !== LIGHT_LED_OUTPUT && this.tileState?.isConnected) this.tileState.textContent = this.reading();
+        if (output < LIGHT_OUT_LED && this.tileState?.isConnected) this.tileState.textContent = this.reading();
+    }
+
+    // Whether there is an object: its reflection is at least its minimum.
+    object() {
+        return this.reflect && this.values[LIGHT_OUT_REFLECTED] >= this.minUa;
     }
 
     reading() {
-        const [ua, reflected, raw, kohms] = this.values;
+        const [ua, reflected, left, right] = this.values;
         if (!Number.isFinite(ua)) return '–';
-        let text = uiLight.formatMicroamps(ua);
-        if (Number.isFinite(kohms) && Number.isFinite(raw)) text += ` (${uiLight.formatOhms(kohms * 1000)}, raw ${Math.round(raw)})`;
-        if (this.reflect && Number.isFinite(reflected)) text += `, reflected ${uiLight.formatMicroamps(reflected)}`;
+        const f = uiLight.formatMicroamps;
+        let text = f(ua);
+        if (this.reflect && Number.isFinite(reflected)) text += `, reflected ${f(reflected)}`;
+        if (this.direction && this.object() && Number.isFinite(left) && Number.isFinite(right))
+            text += `, left ${f(left)}, right ${f(right)}`;
         return text;
     }
 
@@ -310,16 +337,20 @@ class uiLight extends uiComponents {
         settings.appendChild(editableSetting('Samples', () => String(this.samples), (v) => this.setSamples(v),
             {type: 'number', min: 1, max: LIGHT_SAMPLES_MAX, step: 1}));
 
-        settings.appendChild(choiceSetting('Reflections', {on: 'On', off: 'Off'},
+        settings.appendChild(choiceSetting('Object detection', {on: 'On', off: 'Off'},
             () => this.reflect ? 'on' : 'off', (v) => { this.setReflect(v === 'on'); redraw(); }));
         if (this.reflect) {
             settings.appendChild(selectSetting('Reflection range', rangeOptions, () => this.reflectRange, (k) => this.setReflectRange(k)));
             settings.appendChild(editableSetting('Bursts', () => String(this.bursts), (v) => this.setBursts(v),
                 {type: 'number', min: 1, max: LIGHT_BURSTS_MAX, step: 1}));
+            settings.appendChild(editableSetting('Min reflection (µA)', () => String(+this.minUa.toPrecision(6)),
+                (v) => this.setMinReflection(v), {type: 'number', min: 0, step: 'any'}));
+            settings.appendChild(choiceSetting('Directional', {on: 'On', off: 'Off'},
+                () => this.direction ? 'on' : 'off', (v) => this.setDirection(v === 'on')));
         }
 
-        settings.appendChild(choiceSetting('Wire from', {0: 'µA', 1: 'Reflected', 2: 'Raw', 3: 'Load', 4: 'LED'},
-            () => String(this.actNum), (o) => this.setWireOutput(Number(o))));
+        settings.appendChild(selectSetting('Wire from', uiLight.OUTPUT_NAMES.map((name, k) => [k, name]),
+            () => this.actNum, (o) => this.setWireOutput(Number(o))));
         settings.appendChild(shownSetting(this));
     }
 
@@ -337,7 +368,8 @@ class uiLight extends uiComponents {
     }
 
     options() {
-        return (this.auto ? LIGHT_AUTO : 0) | (this.reflect ? LIGHT_REFLECT : 0);
+        return (this.auto ? LIGHT_AUTO : 0) | (this.reflect ? LIGHT_REFLECT : 0)
+            | (this.reflect && this.direction ? LIGHT_DIRECTION : 0);
     }
 
     // See MSG_HW_LIGHT in protocol.js: a load without a pin is 0 ohms.
@@ -346,7 +378,7 @@ class uiLight extends uiComponents {
         const u16 = (v) => [(v >> 8) & 0xFF, v & 0xFF];
         return [this.channel, this.options(), this.range, this.reflectRange, ...this.pins.slice(1),
             ...[0, 1, 2, 3].flatMap(k => u32(k === 0 || this.hasRange(k) ? this.ohms[k] : 0)),
-            ...u16(this.settleUs), this.samples, this.bursts];
+            ...u16(this.settleUs), this.samples, this.bursts, ...float32Bytes(this.minUa)];
     }
 
     marshal() {
@@ -362,9 +394,11 @@ class uiLight extends uiComponents {
         const channel = pay[0], options = pay[1], range = pay[2], reflectRange = pay[3];
         const pins = [LIGHT_NO_PIN, pay[4], pay[5], pay[6]];
         const ohms = [0, 1, 2, 3].map(k => u32(7 + 4 * k));
-        const settleUs = pay[23] << 8 | pay[24], samples = pay[25], bursts = pay[26];
+        const settleUs = pay[23] << 8 | pay[24], samples = pay[25], bursts = pay[26], minUa = float32At(pay, 27);
 
-        if (channel >= ADC_CHANNELS || options & ~(LIGHT_AUTO | LIGHT_REFLECT)) return;
+        if (channel >= ADC_CHANNELS || options & ~(LIGHT_AUTO | LIGHT_REFLECT | LIGHT_DIRECTION)) return;
+        if (options & LIGHT_DIRECTION && !(options & LIGHT_REFLECT)) return;
+        if (!Number.isFinite(minUa) || !(minUa >= 0)) return;
         const taken = [ADC_PIN_FIRST + channel, ...pins.slice(1)].filter(pin => pin !== LIGHT_NO_PIN);
         if (!taken.every(pinUsable) || new Set(taken).size !== taken.length) return;
         const fitted = (k) => k === 0 ? ohms[0] !== 0 : pins[k] !== LIGHT_NO_PIN;
@@ -378,11 +412,12 @@ class uiLight extends uiComponents {
         const used = pinsInUse(this);
         if (taken.some(pin => used.has(pin))) return;
 
-        Object.assign(this, { channel, range, reflectRange, pins, settleUs, samples, bursts });
+        Object.assign(this, { channel, range, reflectRange, pins, settleUs, samples, bursts, minUa });
         // A load without a pin keeps its default ohms, for when it gets one.
         ohms.forEach((v, k) => { if (k === 0 || fitted(k)) this.ohms[k] = v; });
         this.auto = !!(options & LIGHT_AUTO);
         this.reflect = !!(options & LIGHT_REFLECT);
+        this.direction = !!(options & LIGHT_DIRECTION);
         this.fixRanges();
     }
 }

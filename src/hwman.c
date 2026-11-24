@@ -375,7 +375,7 @@ typedef struct {
     struct {
         uint8_t range;          // the range it reads its light on
         uint8_t selected;       // the range switched in, or LIGHT_NO_RANGE before the first
-        light_reflect reflect;  // its LED's on and off scans, since the last reflection reading
+        light_reflect reflect;  // its LEDs' on and off scans, since their last reflection readings
     } light;                    // light sensor
 } node_state;
 
@@ -885,9 +885,10 @@ static void ultrasonic_scan(hw_program *p, const prog_node *n, node_state *st, u
 // ── Light sensors ──
 // A phototransistor into a sense node on an ADC pin, with load resistors from the sense
 // node: one always on, and up to three switched in by driving their GPIO low. Only one
-// switched load is in at a time; range 0 has none. Each scan it reads its background
-// light; with reflections, it also reads its reflection range and turns its LED output
-// on or off for the next scan, whatever LED that drives (light.h has the arithmetic).
+// switched load is in at a time; range 0 has none. Each scan with its LEDs off it reads
+// its background light; with object detection, it also reads its reflection range each
+// scan and sets its LED outputs for the next, whatever LEDs they drive (light.h has the
+// arithmetic).
 // PROTOCOL.md, "Light sensors", describes it.
 
 // RP2350 erratum E9: a Bank 0 pad with its input buffer on (PADS_BANK0 GPIOn.IE) leaks
@@ -937,8 +938,8 @@ static uint16_t light_read(const light_payload *l) {
     return (uint16_t)((sum + l->samples / 2) / l->samples);
 }
 
-// Its pins, all or none: the ADC pin, and each load's pin let go. Its LED output starts
-// off, and its reflection with none.
+// Its pins, all or none: the ADC pin, and each load's pin let go. Its LEDs start off,
+// and its reflections and direction at 0.
 static bool light_setup(hw_program *p, const prog_node *n, node_state *st) {
     const light_payload *l = &n->light;
     uint8_t pins[1 + LIGHT_LOADS], count = 0;
@@ -956,26 +957,30 @@ static bool light_setup(hw_program *p, const prog_node *n, node_state *st) {
         gpio_init(l->pins[k]);
         light_load_switch(l->pins[k], false);
     }
-    p->signals[n->out + LIGHT_LED_OUTPUT].value = 0;
-    if (!(l->options & LIGHT_REFLECT)) p->signals[n->out + 1].value = 0;
+    for (uint8_t k = LIGHT_OUT_REFLECTED; k < LIGHT_OUTPUTS; k++) p->signals[n->out + k].value = 0;
 
     // Auto-ranging starts on its most sensitive range.
     uint8_t order[LIGHT_RANGES];
     light_ranges(l, order);
     st->light.range = l->options & LIGHT_AUTO ? order[0] : l->range;
     st->light.selected = LIGHT_NO_RANGE;
+    st->light.reflect.lit = LIGHT_DARK;
     printf("light sensor on ADC%u, GPIO %u\n", l->channel, n->pin);
     return true;
 }
 
-// One scan. With its LED off (as the last scan set it): its background light on its
-// range. With reflections: a reading on its reflection range, which is also its
-// background when the two ranges are the same and the LED is off; then its LED output
-// for the next scan. While its LED is on, its background keeps its last reading.
+// One scan. With its LEDs off (as the last scan set them): its background light on its
+// range; while one is on, its background keeps its last reading. With object detection: a
+// reading on its reflection range, which is also its background when the two ranges are
+// the same and its LEDs are off; then its LED outputs for the next scan. With directional
+// detection, its left and right LEDs take their turns while the object's reflection is
+// at least its minimum; otherwise left, right and direction are 0.
 static void light_scan(hw_program *p, const prog_node *n, node_state *st) {
     const light_payload *l = &n->light;
+    prog_signal *out = &p->signals[n->out];
+    light_reflect *r = &st->light.reflect;
     bool reflect = l->options & LIGHT_REFLECT;
-    bool dark = !(reflect && st->light.reflect.led);
+    bool dark = !reflect || r->lit == LIGHT_DARK;
     uint8_t k = st->light.range;
     uint16_t raw = 0;
     if (dark && (!reflect || k != l->reflect_range)) {
@@ -984,19 +989,21 @@ static void light_scan(hw_program *p, const prog_node *n, node_state *st) {
     }
     if (reflect) {
         light_select(n, st, l->reflect_range);
-        uint16_t r = light_read(l);
-        if (dark && k == l->reflect_range) raw = r;
-        float counts;
-        if (light_reflect_take(&st->light.reflect, r, l->bursts, &counts))
-            p->signals[n->out + 1].value = light_microamps(counts, light_load_ohms(l, l->reflect_range));
-        p->signals[n->out + LIGHT_LED_OUTPUT].value = st->light.reflect.led;
+        uint16_t reading = light_read(l);
+        if (dark && k == l->reflect_range) raw = reading;
+        bool object = out[LIGHT_OUT_REFLECTED].value >= l->min_ua;
+        uint8_t leds = (l->options & LIGHT_DIRECTION) && object ? LIGHT_LEDS : 1;
+        float counts[LIGHT_LEDS];
+        uint8_t ready = light_reflect_take(r, reading, leds, l->bursts, counts);
+        float ohms = light_load_ohms(l, l->reflect_range);
+        for (uint8_t led = 0; led < LIGHT_LEDS; led++)
+            if (ready >> led & 1) out[LIGHT_OUT_REFLECTED + led].value = light_microamps(counts[led], ohms);
+        if (leds == 1) out[LIGHT_OUT_LEFT].value = out[LIGHT_OUT_RIGHT].value = 0;
+        out[LIGHT_OUT_DIRECTION].value = light_direction(out[LIGHT_OUT_LEFT].value, out[LIGHT_OUT_RIGHT].value, l->min_ua);
+        for (uint8_t led = 0; led < LIGHT_LEDS; led++) out[LIGHT_OUT_LED + led].value = r->lit == led;
     }
     if (!dark) return;
-
-    float ohms = light_load_ohms(l, k);
-    p->signals[n->out].value = light_microamps(raw, ohms);
-    p->signals[n->out + 2].value = raw;
-    p->signals[n->out + 3].value = ohms / 1000.0f;
+    out[LIGHT_OUT_BACKGROUND].value = light_microamps(raw, light_load_ohms(l, k));
     if (l->options & LIGHT_AUTO) st->light.range = light_autorange(l, k, raw);
 }
 

@@ -18,7 +18,7 @@
  *   - nodes: the elements core 1 runs, in the order it runs them: the hardware
  *     inputs (ADC, GPIO input, core temperature, DS18B20, rotary encoder, clock,
  *     ultrasonic ranger, light sensor), which write a signal (a DS18B20, an encoder or a
- *     ranger two, a clock three, a light sensor five); then the
+ *     ranger two, a clock three, a light sensor eight); then the
  *     logic (compare, AND, OR, NOT, delay, scale, min, max, pulse, blink, toggle,
  *     latch, counter, sine), which reads signals and writes its own, each after the
  *     logic it reads (except through a feedback wire, which it reads as the last
@@ -53,7 +53,7 @@ typedef struct {
                             // stepper: STEPPER_ options; an encoder: ENCODER_ options
     uint8_t out;            // an input or logic: the signal it writes; a clock: its hour's, then its
                             // minute's and second's follow; a light sensor: its background µA, then its
-                            // reflected µA, reading, load and LED follow
+                            // other LIGHT_OUTPUTS - 1 follow
     uint8_t out_count;      // a counter: the signal of its count, its output 1; a DS18B20: of found, its output 1;
                             // an encoder: of pressed, its output 1; an ultrasonic ranger: of echo, its output 1
     uint8_t in_count;       // the signals it reads

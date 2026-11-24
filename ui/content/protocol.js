@@ -66,7 +66,7 @@ const MSG_HW_DS18B20         = 0x33;  // a DS18B20 temperature sensor on a 1-Wir
 const MSG_HW_ENCODER         = 0x34;  // a rotary encoder and its push switch; two outputs
 const MSG_HW_CLOCK           = 0x35;  // the device's clock, a time of day: hour, minute, second
 const MSG_HW_ULTRASONIC      = 0x36;  // an ultrasonic ranger on one pin: a distance; two outputs
-const MSG_HW_LIGHT           = 0x37;  // a phototransistor on an ADC pin with switched load resistors; five outputs
+const MSG_HW_LIGHT           = 0x37;  // a phototransistor on an ADC pin with switched load resistors; eight outputs
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -181,20 +181,30 @@ const ULTRASONIC_RANGE_MIN   = 10;    // cm
 const ULTRASONIC_RANGE_MAX   = 400;   // cm: as far as the ranger hears
 
 // Light sensor (MSG_HW_LIGHT) payload, LIGHT_PAYLOAD_LEN bytes: the ADC channel of the
-// sense node; options (LIGHT_AUTO, LIGHT_REFLECT); its range without LIGHT_AUTO; its
+// sense node; options (LIGHT_AUTO, LIGHT_REFLECT: object detection, LIGHT_DIRECTION:
+// directional detection, only with LIGHT_REFLECT); its range without LIGHT_AUTO; its
 // reflection range; loads 1 to 3's GPIOs (LIGHT_NO_PIN: none); the always-on load then
 // loads 1 to 3 in ohms (4 bytes BE each, 0: none); settle µs (2 bytes BE); samples;
-// bursts. Range 0 is the always-on load alone, range k load k in parallel with it.
-// Outputs: background µA (0), reflected µA (1), reading (2), load kΩ (3), all numbers,
-// and its LED (4, on/off), which it turns on and off to measure reflections.
-const LIGHT_PAYLOAD_LEN      = 27;
+// bursts; its minimum reflection in µA (float32 BE). Range 0 is the always-on load alone,
+// range k load k in parallel with it. Outputs (LIGHT_OUT_): background µA, reflected µA,
+// left µA, right µA, direction (-1 to 1), all numbers; then its LED, left LED and right
+// LED, on/off.
+const LIGHT_PAYLOAD_LEN      = 31;
 const LIGHT_AUTO             = 0x01;
 const LIGHT_REFLECT          = 0x02;
+const LIGHT_DIRECTION        = 0x04;
 const LIGHT_NO_PIN           = 0xFF;
 const LIGHT_LOADS            = 3;
 const LIGHT_RANGES           = 4;
-const LIGHT_OUTPUTS          = 5;
-const LIGHT_LED_OUTPUT       = 4;
+const LIGHT_OUT_BACKGROUND   = 0;
+const LIGHT_OUT_REFLECTED    = 1;
+const LIGHT_OUT_LEFT         = 2;
+const LIGHT_OUT_RIGHT        = 3;
+const LIGHT_OUT_DIRECTION    = 4;
+const LIGHT_OUT_LED          = 5;
+const LIGHT_OUT_LED_LEFT     = 6;
+const LIGHT_OUT_LED_RIGHT    = 7;
+const LIGHT_OUTPUTS          = 8;
 const LIGHT_OHMS_MIN         = 10;
 const LIGHT_OHMS_MAX         = 100000000;
 const LIGHT_SETTLE_MAX_US    = 3000;

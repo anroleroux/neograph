@@ -47,37 +47,50 @@ float light_full(const light_payload *l, uint8_t k) {
     uint8_t order[LIGHT_RANGES];
     uint8_t n = light_ranges(l, order);
     switch (k) {
-    case 0: return light_microamps(ADC_RAW_FULL, light_load_ohms(l, order[n - 1]));
-    case 1: return light_has_range(l, l->reflect_range) ? light_microamps(ADC_RAW_FULL, light_load_ohms(l, l->reflect_range)) : 1;
-    case 2: return ADC_RAW_FULL;
-    case 3: return light_load_ohms(l, order[0]) / 1000.0f;
-    default: return 1;                  // its LED: on or off
+    case LIGHT_OUT_BACKGROUND: return light_microamps(ADC_RAW_FULL, light_load_ohms(l, order[n - 1]));
+    case LIGHT_OUT_REFLECTED:
+    case LIGHT_OUT_LEFT:
+    case LIGHT_OUT_RIGHT:
+        return light_has_range(l, l->reflect_range) ? light_microamps(ADC_RAW_FULL, light_load_ohms(l, l->reflect_range)) : 1;
+    default: return 1;                  // its direction; an LED: on or off
     }
 }
 
-bool light_reflect_take(light_reflect *r, uint16_t raw, uint8_t bursts, float *counts) {
-    bool done = false;
-    if (r->led) {
+uint8_t light_reflect_take(light_reflect *r, uint16_t raw, uint8_t leds, uint8_t bursts, float counts[LIGHT_LEDS]) {
+    if (r->lit != LIGHT_DARK) {
         // On: kept if an off reading came before it.
         if (r->have_off) {
             r->on = raw;
+            r->on_led = r->lit;
             r->have_on = true;
         }
-        r->led = false;
-        return false;
+        r->lit = LIGHT_DARK;
+        return 0;
     }
+    uint8_t ready = 0;
     if (r->have_on) {
-        r->sum += 2 * (int32_t)r->on - r->off - raw;
+        uint8_t k = r->on_led;
+        r->sum[k] += 2 * (int32_t)r->on - r->off - raw;
         r->have_on = false;
-        if (++r->count >= bursts) {
-            *counts = (float)r->sum / (2.0f * r->count);
-            r->sum = 0;
-            r->count = 0;
-            done = true;
+        if (++r->count[k] >= bursts) {
+            counts[k] = (float)r->sum[k] / (2.0f * r->count[k]);
+            r->sum[k] = 0;
+            r->count[k] = 0;
+            ready = (uint8_t)(1u << k);
         }
     }
+    for (uint8_t k = leds; k < LIGHT_LEDS; k++) r->sum[k] = r->count[k] = 0;
     r->off = raw;
     r->have_off = true;
-    r->led = true;
-    return done;
+    if (r->next >= leds) r->next = 0;
+    r->lit = r->next++;
+    return ready;
+}
+
+float light_direction(float left, float right, float min_ua) {
+    if (left < 0) left = 0;
+    if (right < 0) right = 0;
+    if (left < min_ua && right < min_ua) return 0;
+    if (left + right <= 0) return 0;
+    return (right - left) / (right + left);
 }

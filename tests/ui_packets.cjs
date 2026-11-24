@@ -2087,30 +2087,34 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(usBack === '16,100,true,n1:1,n1:0,400', 'an ultrasonic ranger restored as ' + usBack);
 
-    // A light sensor: its loads, ranges and reflections; its first four outputs wire into
-    // number inputs, its LED into an on/off one; a plot of one takes that output's unit;
-    // its tile shows the device's readings. With the example's pins it marshals as the
-    // light-sensor-config example in PROTOCOL.md, and it restores.
+    // A light sensor: its loads and ranges; object detection, then directional detection
+    // only with it; its numbers wire into number inputs, its LEDs into on/off ones; a plot
+    // of one takes that output's unit; its tile shows the device's readings. With the
+    // example's pins it marshals as the light-sensor-config example in PROTOCOL.md, and it
+    // restores.
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add a light sensor"]').dispatchEvent('click');
     const lsRows = 'Label:|Sense pin:|Load 1 pin:|Load 1:|Load 2 pin:|Load 2:|Load 3 pin:|Load 3:|Always-on load:|Ranging:'
-        + '|Settle (µs):|Samples:|Reflections:';
-    expect(await keyRows() === lsRows + '|Reflection range:|Bursts:|Wire from:|Command view:|Order:',
+        + '|Settle (µs):|Samples:|Object detection:';
+    expect(await keyRows() === lsRows + '|Wire from:|Command view:|Order:',
         'a new light sensor does not show its settings: ' + await keyRows());
     const ls = await page.evaluate(() => {
         const s = selected;
-        // Free the example's pins for it: GPIO 2, 3, 4, 15 and 16, and ADC0.
-        const want = [2, 3, 4, 15, 16, 26];
+        const rows = () => [...document.querySelectorAll('#settings .editable .label')].map(l => l.textContent).join('|');
+        // Free the example's pins for it: GPIO 2, 3, 4, 13, 14 and 15, and ADC0.
+        const want = [2, 3, 4, 13, 14, 15, 26];
         Object.values(elements).filter(e => e !== s && e.usedPins().some(p => want.includes(p))).forEach(e => e.remove());
         s.setChannel(1);
-        const first = [s.ohms.join(), s.auto, s.reflect, s.reflectRange, s.settleUs, s.samples, s.bursts].join(' ');
+        const first = [s.ohms.join(), s.auto, s.reflect, s.direction, s.reflectRange, s.settleUs, s.samples, s.bursts, s.minUa,
+            s.outputs.map(o => o.name + ':' + o.type).join(' ')].join(' ');
         const before = JSON.stringify(s.payload());
         const rejected = [
             s.setChannel(3), s.setLoadPin(1, '29'), s.setLoadPin(0, '5'), s.setLoadPin(1, String(ADC_PIN_FIRST + 1)),
             s.setLoadOhms(1, '5'), s.setLoadOhms(1, '2m'), s.setLoadOhms(1, '200M'), s.setBaseOhms('abc'),
-            s.setSettle(LIGHT_SETTLE_MAX_US + 1), s.setSamples(0),
-            s.setBursts(LIGHT_BURSTS_MAX + 1), s.setRange(4), s.setWireOutput(5),
+            s.setSettle(LIGHT_SETTLE_MAX_US + 1), s.setSamples(0), s.setBursts(LIGHT_BURSTS_MAX + 1), s.setRange(4),
+            s.setWireOutput(LIGHT_OUTPUTS), s.setMinReflection('-1'), s.setMinReflection('abc'),
+            s.setDirection(true),                               // not without object detection
         ].every(r => r === false) && JSON.stringify(s.payload()) === before;
         // Its pins: loads on 2, 3, 4 (one pin can't be two of them).
         s.setChannel(0);
@@ -2121,73 +2125,93 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         s.setLoadOhms(1, '1k'); s.setLoadOhms(2, '10 kΩ'); s.setLoadOhms(3, '100000'); s.setBaseOhms('1M');
         s.setReflectRange(3);                   // it moved to range 0 while it had no loads
         const ranges = s.ranges().map(k => s.rangeName(k)).join('; ');
-        // Wires: its numbers into compares, its LED into a GPO, not the other way round;
-        // a plot of its load is in kΩ.
-        const wired = [0, 1, 2, 3].every(o => { s.setWireOutput(o); return !!createEdge(s.name, addNode(MSG_LOGIC_COMPARE).name); })
+        // Object detection shows its settings, and Directional with them.
+        s.setReflect(true);
+        s.createSettings();
+        const reflectRows = rows();
+        const directed = s.setDirection(true) !== false;
+        // Wires: its numbers into compares, its LEDs into GPOs, not the other way round;
+        // a plot of its direction has no unit.
+        const wired = [0, 1, 2, 3, 4].every(o => { s.setWireOutput(o); return !!createEdge(s.name, addNode(MSG_LOGIC_COMPARE).name); })
             && createEdge(s.name, addNode(MSG_HW_GPO).name) === null
-            && (s.setWireOutput(LIGHT_LED_OUTPUT), !!createEdge(s.name, addNode(MSG_HW_GPO).name))
+            && [5, 6, 7].every(o => { s.setWireOutput(o); return !!createEdge(s.name, addNode(MSG_HW_GPO).name); })
             && createEdge(s.name, addNode(MSG_LOGIC_COMPARE).name) === null;
-        s.setWireOutput(3);
+        s.setWireOutput(LIGHT_OUT_DIRECTION);
         const plot = addNode(MSG_UI_GRAPH);
         createEdge(s.name, plot.name);
-        const plotUnit = plot.unit();
+        s.setWireOutput(LIGHT_OUT_LEFT);
+        const plot2 = addNode(MSG_UI_GRAPH);
+        createEdge(s.name, plot2.name);
+        const units = plot.unit() + '|' + plot2.unit();
         s.shown = true;
         buildCommandInterface();
         const tile = () => s.tileState.textContent;
         const tiles = [tile()];
         receiveTelemetry(`sig ${s.id} 0 16.5`);
-        receiveTelemetry(`sig ${s.id} 2 2048`);
-        receiveTelemetry(`sig ${s.id} 3 90.91`);
+        receiveTelemetry(`sig ${s.id} 1 0.5`);
+        tiles.push(tile());                     // under its minimum: no object, no left or right
         receiveTelemetry(`sig ${s.id} 1 1.2`);
-        receiveTelemetry(`sig ${s.id} 4 1`);
-        tiles.push(tile(), [0, 1, 2, 3, 4].map(o => s.outputValue(o)).join());
+        receiveTelemetry(`sig ${s.id} 2 0.4`);
+        receiveTelemetry(`sig ${s.id} 3 0.95`);
+        receiveTelemetry(`sig ${s.id} 4 0.4074`);
+        receiveTelemetry(`sig ${s.id} 6 1`);
+        tiles.push(tile(), s.values.map((v, o) => s.outputValue(o)).join());
         const pay = s.payload().map(b => b.toString(16).padStart(2, '0')).join('');
-        // Reflections off hide their settings; a fixed range shows its range.
+        // Object detection off takes directional detection with it, and hides their settings.
         s.setReflect(false);
         s.auto = false;
         s.setRange(2);
         s.createSettings();
-        const fixedRows = [...document.querySelectorAll('#settings .editable .label')].map(l => l.textContent).join('|');
+        const fixedRows = rows();
         const offPay = s.payload().slice(1, 3).join();
         // A load taken away moves the ranges onto one it has.
-        s.setReflect(true);
         s.setLoadPin(2, 'none');
         const moved = [s.range, s.reflectRange].join();
         s.setLoadPin(2, '3');
         s.auto = true;
+        s.setReflect(true);
+        s.setDirection(true);
         s.setReflectRange(3);
+        s.setMinReflection('0.25');
         saveGraph();
-        return { first, rejected, keptOne, clash, ranges, wired, plotUnit, tiles: tiles.join('|'), pay, fixedRows, offPay, moved };
+        return { first, rejected, keptOne, clash, ranges, reflectRows, directed, wired, units, tiles: tiles.join('|'), pay,
+            fixedRows, offPay, moved, min: s.payload().slice(27).join() };
     });
     packets.push(...await sent(page));
-    expect(ls.first === '1000000,1000,10000,100000 true true 3 1000 16 8', 'a new light sensor looks ' + ls.first);
+    expect(ls.first === '1000000,1000,10000,100000 true false false 3 1000 16 4 1 '
+        + 'µA:float Reflected:float Left:float Right:float Direction:float LED:bool LED Left:bool LED Right:bool',
+        'a new light sensor looks ' + ls.first);
     expect(ls.rejected, 'a light sensor took settings out of range');
     expect(ls.keptOne && ls.clash, 'a light sensor was left with no range, or two loads on one pin');
     expect(ls.ranges === '1 MΩ (always on); 90.91 kΩ (GPIO 4); 9.901 kΩ (GPIO 3); 999 Ω (GPIO 2)', 'a light sensor\'s ranges are ' + ls.ranges);
+    expect(ls.reflectRows === lsRows + '|Reflection range:|Bursts:|Min reflection (µA):|Directional:|Wire from:|Command view:|Order:',
+        'a light sensor with object detection shows ' + ls.reflectRows);
+    expect(ls.directed, 'a light sensor with object detection took no directional detection');
     expect(ls.wired, 'a light sensor\'s outputs did not wire by type');
-    expect(ls.plotUnit === 'kΩ', 'a plot of a light sensor\'s load shows ' + ls.plotUnit);
-    expect(ls.tiles === '–|16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA|16.5,1.2,2048,90.91,1',
-        'a light sensor\'s tile showed ' + ls.tiles);
-    expect(ls.pay === '00030003020304' + '000f4240' + '000003e8' + '00002710' + '000186a0' + '03e81008',
+    expect(ls.units === '|µA', 'plots of a light sensor\'s direction and left show ' + ls.units);
+    expect(ls.tiles === '–|16.5 µA, reflected 0.50 µA|16.5 µA, reflected 1.20 µA, left 0.40 µA, right 0.95 µA'
+        + '|16.5,1.2,0.4,0.95,0.4074,,1,', 'a light sensor\'s tile showed ' + ls.tiles);
+    expect(ls.pay === '00070003020304' + '000f4240' + '000003e8' + '00002710' + '000186a0' + '03e81004' + '3f800000',
         'a light sensor marshals as ' + ls.pay);
-    expect(ls.fixedRows.startsWith(lsRows.replace('|Ranging:', '|Ranging:|Range:') + '|Wire from:'),
-        'a fixed light sensor without reflections shows ' + ls.fixedRows);
-    expect(ls.offPay === '0,2', 'a light sensor without reflections or ranging marshals options and range as ' + ls.offPay);
+    expect(ls.fixedRows === lsRows.replace('|Ranging:', '|Ranging:|Range:') + '|Wire from:|Command view:|Order:',
+        'a fixed light sensor without object detection shows ' + ls.fixedRows);
+    expect(ls.offPay === '0,2', 'a light sensor without detection or ranging marshals options and range as ' + ls.offPay);
     expect(ls.moved === '0,3', 'a light sensor without its range\'s load moved to ' + ls.moved);
+    expect(ls.min === '62,128,0,0', 'a light sensor\'s minimum of 0.25 µA marshals as ' + ls.min);
     const lsBack = await page.evaluate(() => {
         const light = [0x37, MSG_FLAG_SHOWN, 0, 1, LIGHT_PAYLOAD_LEN,
-            1, 0, 2, 1, 5, 6, LIGHT_NO_PIN,
-            0, 0, 0, 0,  0, 0, 0x01, 0xF4,  0, 0, 0x13, 0x88,  0, 0, 0, 0,  0, 50, 4, 1];
+            1, LIGHT_REFLECT | LIGHT_DIRECTION, 2, 1, 5, 6, LIGHT_NO_PIN,
+            0, 0, 0, 0,  0, 0, 0x01, 0xF4,  0, 0, 0x13, 0x88,  0, 0, 0, 0,  0, 50, 4, 1,  0x40, 0x00, 0x00, 0x00];
         const bad = [...light];
         bad[3] = 2;
-        bad[5 + 25] = 0;                        // no samples: kept as a new one
+        bad[5 + 1] = LIGHT_DIRECTION;           // directional without object detection: kept as a new one
         restoreGraph(configMessages(Uint8Array.from([...light, ...bad])));
         const s = elements.n1;
-        return [s.channel, s.auto, s.reflect, s.range, s.reflectRange, s.pins.slice(1).join(':'), s.ohms.join(':'),
-            s.settleUs, s.samples, s.bursts, s.shown, s.ranges().join(''),
-            elements.n2.samples, elements.n2.channel, elements.n2.reflect].join();
+        return [s.channel, s.auto, s.reflect, s.direction, s.range, s.reflectRange, s.pins.slice(1).join(':'), s.ohms.join(':'),
+            s.settleUs, s.samples, s.bursts, s.minUa, s.shown, s.ranges().join(''),
+            elements.n2.reflect, elements.n2.direction, elements.n2.channel].join();
     });
-    expect(lsBack === '1,false,false,2,1,5:6:255,0:500:5000:100000,50,4,1,true,21,16,0,true',
+    expect(lsBack === '1,false,true,true,2,1,5:6:255,0:500:5000:100000,50,4,1,2,true,21,false,false,0',
         'a light sensor restored as ' + lsBack);
 
     // A sine: an on/off wire in runs it, a number wire leaves it; the browser runs the
