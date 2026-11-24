@@ -238,7 +238,7 @@ class uiPlot extends uiComponents {
             const unit = this.unit();
             const show = (v) => v == null ? '–' : axis.format(v, true) + (unit ? ' ' + unit : '');
             if (pointerX == null || pointerX < left) {
-                state.textContent = show(this.valueAt(now));
+                setTileText(state, show(this.valueAt(now)));
             } else {
                 const t = now - span + (pointerX - left) / (w - left) * span;
                 ctx.strokeStyle = 'rgba(32, 32, 43, 0.4)';
@@ -247,7 +247,7 @@ class uiPlot extends uiComponents {
                 ctx.moveTo(Math.round(pointerX) + 0.5, 0);
                 ctx.lineTo(Math.round(pointerX) + 0.5, h);
                 ctx.stroke();
-                state.textContent = `${show(this.valueAt(t))} · ${((now - t) / 1000).toFixed(1)} s ago`;
+                setTileText(state, `${show(this.valueAt(t))} · ${((now - t) / 1000).toFixed(1)} s ago`);
             }
         };
         commandInterface.appendChild(control);

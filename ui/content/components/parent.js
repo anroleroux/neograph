@@ -115,6 +115,18 @@ function parsePin(pin) {
     return /^\d+$/.test(pin) && pinUsable(Number(pin)) ? Number(pin) : null;
 }
 
+// Set a Command view tile's text. Tiles show it in capitals, and a capital µ (Μ) reads as
+// an M, so each µ is kept as it is: µA stays µA, not MA.
+function setTileText(el, text) {
+    el.replaceChildren(...String(text).split('µ').flatMap((part, i) => {
+        if (i === 0) return [part];
+        const mu = document.createElement('span');
+        mu.className = 'keep-case';
+        mu.textContent = 'µ';
+        return [mu, part];
+    }));
+}
+
 // A settings field for a hardware input: whether the Command view shows its
 // tile (MSG_FLAG_SHOWN). Picking one shows or hides the tile at once.
 // Then its place there (see orderSetting).

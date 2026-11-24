@@ -279,7 +279,7 @@ class uiLight extends uiComponents {
         if (!(output >= 0 && output < LIGHT_OUTPUTS)) return;
         this.values[output] = value;
         this.emit(this.outputValue(output), output);
-        if (output < LIGHT_OUT_LED && this.tileState?.isConnected) this.tileState.textContent = this.reading();
+        if (output < LIGHT_OUT_LED && this.tileState?.isConnected) setTileText(this.tileState, this.reading());
     }
 
     // Whether there is an object: its reflection is at least its minimum.
@@ -363,7 +363,7 @@ class uiLight extends uiComponents {
         control.querySelector('.name').textContent = this.label;
         control.title = `${this.label}, ADC${this.channel} on GPIO ${ADC_PIN_FIRST + this.channel}`;
         this.tileState = control.querySelector('.state');
-        this.tileState.textContent = this.reading();
+        setTileText(this.tileState, this.reading());
         commandInterface.appendChild(control);
     }
 
