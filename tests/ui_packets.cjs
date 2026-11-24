@@ -2148,6 +2148,9 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         const tile = () => s.tileState.textContent;
         const tiles = [tile()];
         receiveTelemetry(`sig ${s.id} 0 16.5`);
+        tiles.push(tile());                     // no reading or load yet
+        receiveTelemetry(`sig ${s.id} ${LIGHT_SIG_RAW} 2048`);
+        receiveTelemetry(`sig ${s.id} ${LIGHT_SIG_LOAD} 90.91`);
         receiveTelemetry(`sig ${s.id} 1 0.5`);
         tiles.push(tile());                     // under its minimum: no object, no left or right
         receiveTelemetry(`sig ${s.id} 1 1.2`);
@@ -2156,6 +2159,10 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         receiveTelemetry(`sig ${s.id} 4 0.4074`);
         receiveTelemetry(`sig ${s.id} 6 1`);
         tiles.push(tile(), s.values.map((v, o) => s.outputValue(o)).join());
+        // Its reading and load are no outputs: nothing wires from them, and Wire from doesn't offer them.
+        s.createSettings();
+        const hidden = s.setWireOutput(LIGHT_SIG_RAW) === false && s.outputs.length === LIGHT_OUTPUTS
+            && ![...document.querySelectorAll('#settings select option')].some(o => o.textContent === 'Raw');
         const pay = s.payload().map(b => b.toString(16).padStart(2, '0')).join('');
         // Object detection off takes directional detection with it, and hides their settings.
         s.setReflect(false);
@@ -2174,7 +2181,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         s.setReflectRange(3);
         s.setMinReflection('0.25');
         saveGraph();
-        return { first, rejected, keptOne, clash, ranges, reflectRows, directed, wired, units, tiles: tiles.join('|'), pay,
+        return { first, rejected, keptOne, clash, ranges, reflectRows, directed, wired, units, hidden, tiles: tiles.join('|'), pay,
             fixedRows, offPay, moved, min: s.payload().slice(27).join() };
     });
     packets.push(...await sent(page));
@@ -2189,8 +2196,10 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(ls.directed, 'a light sensor with object detection took no directional detection');
     expect(ls.wired, 'a light sensor\'s outputs did not wire by type');
     expect(ls.units === '|µA', 'plots of a light sensor\'s direction and left show ' + ls.units);
-    expect(ls.tiles === '–|16.5 µA, reflected 0.50 µA|16.5 µA, reflected 1.20 µA, left 0.40 µA, right 0.95 µA'
-        + '|16.5,1.2,0.4,0.95,0.4074,,1,', 'a light sensor\'s tile showed ' + ls.tiles);
+    expect(ls.tiles === '–|16.5 µA|16.5 µA (90.91 kΩ, raw 2048), reflected 0.50 µA'
+        + '|16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA, left 0.40 µA, right 0.95 µA'
+        + '|16.5,1.2,0.4,0.95,0.4074,,1,,2048,90.91', 'a light sensor\'s tile showed ' + ls.tiles);
+    expect(ls.hidden, 'a light sensor offers its reading or load to wire from');
     expect(ls.pay === '00070003020304' + '000f4240' + '000003e8' + '00002710' + '000186a0' + '03e81004' + '3f800000',
         'a light sensor marshals as ' + ls.pay);
     expect(ls.fixedRows === lsRows.replace('|Ranging:', '|Ranging:|Range:') + '|Wire from:|Command view:|Order:',

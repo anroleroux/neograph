@@ -1003,7 +1003,10 @@ static void light_scan(hw_program *p, const prog_node *n, node_state *st) {
         for (uint8_t led = 0; led < LIGHT_LEDS; led++) out[LIGHT_OUT_LED + led].value = r->lit == led;
     }
     if (!dark) return;
-    out[LIGHT_OUT_BACKGROUND].value = light_microamps(raw, light_load_ohms(l, k));
+    float ohms = light_load_ohms(l, k);
+    out[LIGHT_OUT_BACKGROUND].value = light_microamps(raw, ohms);
+    out[LIGHT_SIG_RAW].value = raw;
+    out[LIGHT_SIG_LOAD].value = ohms / 1000.0f;
     if (l->options & LIGHT_AUTO) st->light.range = light_autorange(l, k, raw);
 }
 

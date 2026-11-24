@@ -188,7 +188,8 @@ const ULTRASONIC_RANGE_MAX   = 400;   // cm: as far as the ranger hears
 // bursts; its minimum reflection in µA (float32 BE). Range 0 is the always-on load alone,
 // range k load k in parallel with it. Outputs (LIGHT_OUT_): background µA, reflected µA,
 // left µA, right µA, direction (-1 to 1), all numbers; then its LED, left LED and right
-// LED, on/off.
+// LED, on/off. Two more signals, not outputs, are for its tile: its last background
+// reading, 0 to ADC_RAW_FULL (LIGHT_SIG_RAW), and its load in kΩ (LIGHT_SIG_LOAD).
 const LIGHT_PAYLOAD_LEN      = 31;
 const LIGHT_AUTO             = 0x01;
 const LIGHT_REFLECT          = 0x02;
@@ -205,6 +206,9 @@ const LIGHT_OUT_LED          = 5;
 const LIGHT_OUT_LED_LEFT     = 6;
 const LIGHT_OUT_LED_RIGHT    = 7;
 const LIGHT_OUTPUTS          = 8;
+const LIGHT_SIG_RAW          = 8;
+const LIGHT_SIG_LOAD         = 9;
+const LIGHT_SIGNALS          = 10;
 const LIGHT_OHMS_MIN         = 10;
 const LIGHT_OHMS_MAX         = 100000000;
 const LIGHT_SETTLE_MAX_US    = 3000;

@@ -13,7 +13,8 @@ const LIGHT_RAW_HIGH = 3900;
 // object's direction. A source with eight outputs (LIGHT_OUT_): the background, reflected,
 // left and right light in µA and the direction, -1 to 1, all numbers; then its LED, left
 // LED and right LED, on/off, for GPOs or NeoPixels to light the LEDs with. Its readings
-// reach the browser as telemetry, for its tile and the nodes wired to it.
+// reach the browser as telemetry, for its tile and the nodes wired to it; two more
+// signals, its ADC reading and the load it read through, are for its tile only.
 class uiLight extends uiComponents {
     constructor(x = 0, y = 0) {
         super("light", x, y);
@@ -43,7 +44,7 @@ class uiLight extends uiComponents {
         this.settleUs = 1000;       // µs it waits after switching range
         this.samples = 16;          // ADC reads averaged into a reading
         this.bursts = 4;            // LED bursts averaged into a reflection
-        this.values = Array(LIGHT_OUTPUTS).fill(NaN);   // its outputs; none yet
+        this.values = Array(LIGHT_SIGNALS).fill(NaN);   // its outputs, then its reading and load; none yet
         this.unit = 'µA';
         this.shown = false;         // a tile in the Command view
         this.fixRanges();
@@ -138,7 +139,7 @@ class uiLight extends uiComponents {
     // Each setter returns false, and keeps what it had, for a value it doesn't take.
     // Other pins' readings belong to other nodes, so a new pin drops the old readings.
     dropReadings() {
-        for (let k = 0; k < LIGHT_OUTPUTS; k++) this.signal(k, NaN);
+        for (let k = 0; k < LIGHT_SIGNALS; k++) this.signal(k, NaN);
     }
 
     setChannel(channel) {
@@ -265,7 +266,7 @@ class uiLight extends uiComponents {
     }
 
     outputValue(output) {
-        if (output >= LIGHT_OUT_LED) return Number.isNaN(this.values[output]) ? null : Number(this.values[output] >= 0.5);
+        if (output >= LIGHT_OUT_LED && output < LIGHT_OUTPUTS) return Number.isNaN(this.values[output]) ? null : Number(this.values[output] >= 0.5);
         return this.values[output];
     }
 
@@ -274,12 +275,15 @@ class uiLight extends uiComponents {
         return output <= LIGHT_OUT_RIGHT ? 'µA' : '';
     }
 
-    // Its signals from the device (PROTOCOL.md, "Telemetry text frames"), LIGHT_OUT_.
+    // Its signals from the device (PROTOCOL.md, "Telemetry text frames"): its outputs
+    // (LIGHT_OUT_), handed to the nodes wired to them, then its reading and load
+    // (LIGHT_SIG_RAW, LIGHT_SIG_LOAD), for its tile only.
     signal(output, value) {
-        if (!(output >= 0 && output < LIGHT_OUTPUTS)) return;
+        if (!(output >= 0 && output < LIGHT_SIGNALS)) return;
         this.values[output] = value;
-        this.emit(this.outputValue(output), output);
-        if (output < LIGHT_OUT_LED && this.tileState?.isConnected) setTileText(this.tileState, this.reading());
+        if (output < LIGHT_OUTPUTS) this.emit(this.outputValue(output), output);
+        if ((output < LIGHT_OUT_LED || output >= LIGHT_OUTPUTS) && this.tileState?.isConnected)
+            setTileText(this.tileState, this.reading());
     }
 
     // Whether there is an object: its reflection is at least its minimum.
@@ -292,6 +296,8 @@ class uiLight extends uiComponents {
         if (!Number.isFinite(ua)) return '–';
         const f = uiLight.formatMicroamps;
         let text = f(ua);
+        const raw = this.values[LIGHT_SIG_RAW], kohms = this.values[LIGHT_SIG_LOAD];
+        if (Number.isFinite(raw) && Number.isFinite(kohms)) text += ` (${uiLight.formatOhms(kohms * 1000)}, raw ${Math.round(raw)})`;
         if (this.reflect && Number.isFinite(reflected)) text += `, reflected ${f(reflected)}`;
         if (this.direction && this.object() && Number.isFinite(left) && Number.isFinite(right))
             text += `, left ${f(left)}, right ${f(right)}`;

@@ -572,7 +572,7 @@ a plot, a scale, or a PWM, servo or NeoPixels; the LEDs to a GPO or NeoPixels.
 | Min reflection (µA) | 0 or more | 1 | With object detection: the least Reflected that counts as an object. |
 | Directional | On, Off | Off | With object detection: on, it finds which side an object is on. |
 | Wire from | Its eight outputs | µA | Which output the next wire leaves from. |
-| Command view | Show, Hide | Hide | A tile such as "16.5 µA, reflected 1.20 µA, left 0.40 µA, right 0.95 µA". |
+| Command view | Show, Hide | Hide | A tile such as "16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA, left 0.40 µA, right 0.95 µA". In brackets: the load it read µA through (which range it is on) and its ADC reading, 0–4095 (how near the top). These two show only on the tile; nothing can be wired from them. |
 
 Things to know:
 

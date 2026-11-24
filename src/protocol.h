@@ -271,7 +271,9 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
    µA, read with its LEDs off; the object's reflected light in µA; the left and the right
    LED's reflected light in µA; the object's direction, -1 (left) to 1 (right), 0 with no
    object; all floating. Then its LED, left LED and right LED, boolean: each on for the
-   scans it reads with that LED on. */
+   scans it reads with that LED on. Two more signals, not outputs (nothing can be wired
+   to them), are for its Command view tile: its last background reading, 0 to
+   ADC_RAW_FULL (LIGHT_SIG_RAW), and the load it was read through, in kΩ (LIGHT_SIG_LOAD). */
 #define LIGHT_PAYLOAD_LEN       31
 #define LIGHT_AUTO              0x01
 #define LIGHT_REFLECT           0x02
@@ -288,6 +290,9 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define LIGHT_OUT_LED_LEFT      6
 #define LIGHT_OUT_LED_RIGHT     7
 #define LIGHT_OUTPUTS           8
+#define LIGHT_SIG_RAW           8       /* signals past its outputs, for its tile */
+#define LIGHT_SIG_LOAD          9
+#define LIGHT_SIGNALS           10
 #define LIGHT_OHMS_MIN          10
 #define LIGHT_OHMS_MAX          100000000
 #define LIGHT_SETTLE_MAX_US     3000

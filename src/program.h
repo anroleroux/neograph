@@ -53,7 +53,7 @@ typedef struct {
                             // stepper: STEPPER_ options; an encoder: ENCODER_ options
     uint8_t out;            // an input or logic: the signal it writes; a clock: its hour's, then its
                             // minute's and second's follow; a light sensor: its background µA, then its
-                            // other LIGHT_OUTPUTS - 1 follow
+                            // other LIGHT_SIGNALS - 1 follow
     uint8_t out_count;      // a counter: the signal of its count, its output 1; a DS18B20: of found, its output 1;
                             // an encoder: of pressed, its output 1; an ultrasonic ranger: of echo, its output 1
     uint8_t in_count;       // the signals it reads

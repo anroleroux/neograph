@@ -278,6 +278,8 @@ function toggleWebSocket(n,d) {
                         const read = Math.min(ADC_RAW_FULL, Math.round(raw));
                         const sig = (k, v) => receiveTelemetry(`sig ${e.id} ${k} ${v}`);
                         sig(LIGHT_OUT_BACKGROUND, (read * ADC_VREF / ADC_RAW_FULL / e.loadOhms(k) * 1e6).toPrecision(4));
+                        sig(LIGHT_SIG_RAW, read);
+                        sig(LIGHT_SIG_LOAD, (e.loadOhms(k) / 1000).toPrecision(4));
                         if (e.reflect) {
                             // A hand that comes near and goes every 12 s, sweeping from left to right.
                             const near = 4 * Math.max(0, Math.sin(t / 2)), side = Math.sin(t / 1.3);

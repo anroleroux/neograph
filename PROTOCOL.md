@@ -291,6 +291,7 @@ sig 9 0 42.5                # ultrasonic ranger n9: 42.5 cm
 sig 9 1 1                   # ultrasonic ranger n9: something is within its range
 sig 11 0 16.5               # light sensor n11: background light 16.5 µA
 sig 11 4 -0.42              # light sensor n11: the object is to the left
+sig 11 9 90.91              # light sensor n11, for its tile: on its 100 kΩ range (100 kΩ ‖ 1 MΩ)
 ```
 
 ### Limits
@@ -1031,10 +1032,13 @@ which side the object is on. It is a source with eight outputs (`LIGHT_OUT_`):
 | 6 LED Left | boolean | Its left LED, likewise. |
 | 7 LED Right | boolean | Its right LED, likewise. |
 
-The Command view can show it on a tile (see
-[Hardware input tiles](#hardware-input-tiles)): `16.5 µA`, with object detection
-`16.5 µA, reflected 1.20 µA`, and with an object and directional detection
-`16.5 µA, reflected 1.20 µA, left 0.40 µA, right 0.95 µA`.
+Two more signals are not outputs (nothing can be wired to them) but go to the browser
+with the rest, for its tile: its last background **reading**, 0 to 4095
+(`LIGHT_SIG_RAW`, 8), and the **load** it was read through, in kΩ (`LIGHT_SIG_LOAD`, 9):
+which range it is on, and how near the top. The Command view can show it on a tile
+(see [Hardware input tiles](#hardware-input-tiles)): `16.5 µA (90.91 kΩ, raw 2048)`,
+with object detection `16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA`, and with an
+object and directional detection also `, left 0.40 µA, right 0.95 µA`.
 
 **Wiring.** The collector to 3.3 V, the emitter to the **sense node**, on an ADC pin
 (GPIO 26 to 28, byte 0). From the sense node, the **always-on load** to GND, and each
@@ -2100,7 +2104,7 @@ Every source in the config has its signals, wired or not:
 | `34` rotary encoder | 2: its position (output 0), pressed (output 1) | clicks, 0 to its steps; 0 or 1 | its position as in the program core 1 ran, within its steps, or 0; pressed 0 |
 | `35` clock | 3, in a row: hour (output 0), minute (1), second (2) | whole numbers, 0 to 23; 0 to 59 | 0, then the clock at the first scan |
 | `36` ultrasonic ranger | 2: its distance (output 0), echo (output 1) | cm, up to its range; 0 or 1 | its range, and 0; or as in the program core 1 ran, if that distance is within its range |
-| `37` light sensor | 8, in a row: background, reflected, left and right µA (outputs 0–3), direction (4), LED, left LED, right LED (5–7) | µA; −1 to 1; 0 or 1 | its background 0, then its first reading, or as in the program core 1 ran; the others 0 |
+| `37` light sensor | 10, in a row: background, reflected, left and right µA (outputs 0–3), direction (4), LED, left LED, right LED (5–7); then, for its tile, its reading (8) and load (9), which are not outputs | µA; −1 to 1; 0 or 1; 0 to 4095; kΩ | its background, reading and load 0, then its first reading, or as in the program core 1 ran; the others 0 |
 
 - **The browser sets a UI source's** (button, slider, 2D slider) with a
   [command](#01-command): each byte becomes byte ÷ 255.
@@ -2128,7 +2132,7 @@ of the config; then the **logic**, each after the logic it reads; then the
 | `34` rotary encoder | its A, B and switch pins | its two signals: its position, pressed | See [Rotary encoders](#rotary-encoders) |
 | `35` clock | the device's clock | its three signals: hour, minute, second | See [Clocks](#clocks) |
 | `36` ultrasonic ranger | its pin: a ping, and its echo | its two signals: its distance, echo | See [Ultrasonic rangers](#ultrasonic-rangers) |
-| `37` light sensor | its sense pin and its loads | its eight signals: four µA, direction, three LEDs | See [Light sensors](#light-sensors) |
+| `37` light sensor | its sense pin and its loads | its ten signals: four µA, direction, three LEDs, its reading and load | See [Light sensors](#light-sensors) |
 | `40` compare | 1 signal | its signal | See [Logic](#logic) |
 | `41` AND, `42` OR | 1 to 4 signals | its signal | See [Logic](#logic) |
 | `43` NOT, `44` delay, `48` pulse, `49` blink, `4A` toggle | 1 signal | its signal | See [Logic](#logic) |
@@ -2258,8 +2262,8 @@ LED n3 <- s1
 
 For the [light-sensor-config example](#light-sensors): its channel, ranging, loads (the
 always-on one, then each switched one's pin and ohms), reflection range, bursts,
-minimum and `direction`, then its settle time and samples, and its eight signals. The
-GPOs read its three LEDs:
+minimum and `direction`, then its settle time and samples, and its ten signals: its
+eight outputs, then its reading and load. The GPOs read its three LEDs:
 
 ```program example=light-sensor-config
 s0 n1.0 light = 0
@@ -2270,7 +2274,9 @@ s4 n1.4 light = 0
 s5 n1.5 light = 0
 s6 n1.6 light = 0
 s7 n1.7 light = 0
-LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 min 1 direction settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7
+s8 n1.8 light = 0
+s9 n1.9 light = 0
+LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 min 1 direction settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7 raw s8 load s9
 GPO n2 pin 15 <- s5
 GPO n3 pin 14 <- s6
 GPO n4 pin 13 <- s7

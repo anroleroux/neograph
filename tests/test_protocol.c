@@ -2574,20 +2574,20 @@ void test_light_program(void)
     at += LIGHT_PAYLOAD_LEN;
 
     program_compile(cfg, at, &p);
-    TEST_ASSERT_EQUAL_UINT8(LIGHT_OUTPUTS, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_SIGNALS, p.signal_count);
     TEST_ASSERT_EQUAL_UINT8(3, p.node_count);
     const prog_node *n = &p.nodes[0];
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_LIGHT, n->type);
     TEST_ASSERT_EQUAL_UINT8(26, n->pin);
-    for (uint8_t k = 0; k < LIGHT_OUTPUTS; k++) TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, k), n->out + k);
+    for (uint8_t k = 0; k < LIGHT_SIGNALS; k++) TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, k), n->out + k);
     TEST_ASSERT_EQUAL_FLOAT(1, n->light.min_ua);
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 36.3f, p.nodes[1].in_full[0]);
     TEST_ASSERT_EQUAL_UINT8(n->out + LIGHT_OUT_LED_LEFT, p.nodes[2].in[0]);
     char text[512];
     program_describe(&p, text, sizeof text);
-    TEST_ASSERT_NOT_NULL(strstr(text, "s7 n1.7 light = 0\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "s9 n1.9 light = 0\n"));
     TEST_ASSERT_NOT_NULL(strstr(text, "LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 "
-                                      "min 1 direction settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7\n"));
+                                      "min 1 direction settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7 raw s8 load s9\n"));
 }
 
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */

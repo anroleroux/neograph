@@ -456,13 +456,13 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
         }
 
         case MSG_HW_LIGHT: {
-            // LIGHT_OUTPUTS signals, in a row: its background, reflected, left and right µA, its
-            // direction, then its LED, left LED and right LED.
+            // LIGHT_SIGNALS signals, in a row: its background, reflected, left and right µA, its
+            // direction, its LED, left LED and right LED; then its reading and load, for its tile.
             light_payload light;
             if (!light_payload_read(itr.pay, itr.len, &light)) break;
             if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
             bool all = true;
-            for (uint8_t k = 1; k < LIGHT_OUTPUTS; k++) all = all && add_signal(p, itr.id, k, itr.type, 0) == s + k;
+            for (uint8_t k = 1; k < LIGHT_SIGNALS; k++) all = all && add_signal(p, itr.id, k, itr.type, 0) == s + k;
             if (!all) break;
             if ((n = add_node(p, itr.type, itr.id))) {
                 n->out = s;
@@ -754,8 +754,8 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
                 put(&t, " reflect %u bursts %u min %.4g%s", l->reflect_range, l->bursts, (double)l->min_ua,
                     l->options & LIGHT_DIRECTION ? " direction" : "");
             put(&t, " settle %u us samples %u -> ", l->settle_us, l->samples);
-            for (uint8_t k = 0; k < LIGHT_OUTPUTS; k++) {
-                if (k) put(&t, " ");
+            for (uint8_t k = 0; k < LIGHT_SIGNALS; k++) {
+                if (k) put(&t, k == LIGHT_SIG_RAW ? " raw " : k == LIGHT_SIG_LOAD ? " load " : " ");
                 put_signal(&t, (uint8_t)(n->out + k));
             }
             break;
