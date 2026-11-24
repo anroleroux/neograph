@@ -718,6 +718,48 @@ Core 1's program has the button's signal, and leaves the light out:
 s0 n1.0 button = 0
 ```
 
+### Graph files
+
+The Graph view's **Export** button downloads the graph as a JSON file, and **Import**
+loads one back (`exportGraph`, `importGraph` in `ui/content/graph.js`), to keep a graph
+off the device, across reflashes, or move it to another device. A graph file holds
+exactly the messages **Save** sends for the graph (`graphBytes`): its blocks'
+definitions, each node's control message, label, position, order number and wire
+shapes, and each block copy's parts. It doesn't hold the device's name or networking
+(`B0`–`B3`), so importing it on another device keeps that device's.
+
+```json
+{
+  "format": "neograph-graph",
+  "version": 1,
+  "saved": "2026-11-24T09:30:00.000Z",
+  "nodes": [
+    { "id": 1, "type": "light", "label": "Window" }
+  ],
+  "messages": [
+    "37 02 00 01 21 00 07 00 03 02 03 04 00 0f 42 40 …",
+    "a0 00 00 01 06 57 69 6e 64 6f 77",
+    "a1 00 00 01 04 ff 38 ff 9c"
+  ]
+}
+```
+
+| Field | What it is |
+|---|---|
+| `format` | `neograph-graph` |
+| `version` | `1`. A page reads files up to its own version, and refuses newer ones. |
+| `saved` | When it was exported, ISO 8601 UTC. |
+| `nodes` | Each node of the main graph, its ID, type and label: for people reading the file. Import ignores it. |
+| `messages` | The graph's messages, one per string: the whole message, header included, as hex bytes, two digits each, separated by single spaces. |
+
+**Import** reads `messages` alone, and refuses a file that isn't JSON, has another
+`format` or a newer `version`, a message that isn't hex or isn't exactly one whole
+message, no nodes, or more than the device holds (`PKT_CONFIG_MAX`), saying why.
+Networking messages in it are dropped. Over a graph it asks first. The graph is then
+rebuilt as from a config (see [The graph](#the-graph)) and shown, **not saved**: Save
+sends it to the device. Export and import are offered only while a device is connected,
+as Save is.
+
 ### Hardware input tiles
 
 A hardware input (core temperature, GPIO input, ADC, DS18B20, rotary encoder, clock, ultrasonic ranger, light sensor) or a [logic](#logic) element shows

@@ -2605,6 +2605,68 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             elements.n3.inConns().map(c => c.start.node.name).join(), copy.partMessages().join('.'), idCounter].join();
     });
     expect(example === 'n1 n2 n3,Flip,10,n1,n2,74.5.0.10.3.0.1.0,11', 'the block-config example restored as ' + example);
+
+    // Export and import: the graph (with that block, and a light sensor) downloads as a
+    // graph file; a different graph is put in its place; importing the file through the
+    // Import button brings the first back, byte for byte, and Save sends it. Files that
+    // aren't graph files are turned away with a message, and leave the graph as it was.
+    const dialogs = [];
+    page.on('dialog', d => { dialogs.push(d.type() + ': ' + d.message()); d.accept(); });
+    const before = await page.evaluate(() => {
+        const s = addNode(MSG_HW_LIGHT);
+        s.setLabel('Window');
+        s.setReflect(true);
+        s.setEvery('2');
+        return hexBytes(graphBytes());
+    });
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#graph .export').dispatchEvent('click')]);
+    const exported = fs.readFileSync(await download.path(), 'utf8');
+    const file = JSON.parse(exported);
+    expect(/^neograph-graph-\d{4}-\d{2}-\d{2}\.json$/.test(download.suggestedFilename()), 'the export is named ' + download.suggestedFilename());
+    expect(file.format === 'neograph-graph' && file.version === 1 && !Number.isNaN(Date.parse(file.saved)),
+        'the export\'s header is ' + JSON.stringify({ ...file, nodes: undefined, messages: undefined }));
+    expect(file.nodes.map(n => `${n.id}:${n.type}:${n.label}`).join() === '1:button:BUTTON,2:block:Flip,3:led:Onboard LED,11:light:Window',
+        'the export lists its nodes as ' + JSON.stringify(file.nodes));
+    expect(file.messages.join(' ') === before, 'the export\'s messages are not the graph\'s');
+    const changed = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([0x10, 0, 0, 1, 1, 1])));
+        return Object.keys(elements).join();
+    });
+    dialogs.length = 0;
+    await page.setInputFiles('#import-file', { name: 'graph.json', mimeType: 'application/json', buffer: Buffer.from(exported) });
+    await page.waitForFunction(() => Object.keys(elements).length > 1);
+    const imported = await page.evaluate(() => {
+        const back = hexBytes(graphBytes());
+        saveGraph();
+        return { back, light: [elements.n11.label, elements.n11.reflect, elements.n11.everyMs].join() };
+    });
+    packets.push(...await sent(page));
+    expect(changed === 'n1', 'the graph was not replaced before the import: ' + changed);
+    expect(dialogs.join() === 'confirm: Replace the graph with the imported one? Save sends it to the device.',
+        'importing over a graph asked ' + JSON.stringify(dialogs));
+    expect(imported.back === before, 'the imported graph differs from the exported one');
+    expect(imported.light === 'Window,true,2000', 'the imported light sensor is ' + imported.light);
+    dialogs.length = 0;
+    const badFiles = await page.evaluate((good) => {
+        const f = JSON.parse(good);
+        const tries = [
+            'not json',
+            JSON.stringify({ ...f, format: 'something-else' }),
+            JSON.stringify({ ...f, version: 2 }),
+            JSON.stringify({ ...f, messages: ['10 00 00 01 01 zz'] }),
+            JSON.stringify({ ...f, messages: ['10 00 00 01 05 01'] }),          // says 5 payload bytes, has 1
+            JSON.stringify({ ...f, messages: [] }),
+        ];
+        const was = hexBytes(graphBytes());
+        return { results: tries.map(importGraphText).join(), kept: hexBytes(graphBytes()) === was };
+    }, exported);
+    expect(badFiles.results === 'false,false,false,false,false,false' && badFiles.kept, 'a bad graph file was taken: ' + JSON.stringify(badFiles));
+    expect(dialogs.join('|') === ["alert: That file can't be imported: it is not JSON.",
+        "alert: That file can't be imported: it is not a neoGraph graph file.",
+        "alert: That file can't be imported: it is version 2, newer than this page reads (1).",
+        "alert: That file can't be imported: message 1 is not hex bytes.",
+        "alert: That file can't be imported: message 1 is not one whole message.",
+        "alert: That file can't be imported: it has no nodes."].join('|'), 'bad graph files said ' + JSON.stringify(dialogs));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();
