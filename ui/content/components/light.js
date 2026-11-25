@@ -17,7 +17,7 @@ const LIGHT_RAW_HIGH = 3900;
 // signals, its ADC reading and the load it read through, are for its tile only.
 class uiLight extends uiComponents {
     constructor(x = 0, y = 0) {
-        super("light", x, y);
+        super("lightsensor", x, y);     // not "light": that is the UI light's (uiIndicator)
         this.label = "Light";
 
         this.tc = MSG_HW_LIGHT;

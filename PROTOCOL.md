@@ -734,7 +734,7 @@ shapes, and each block copy's parts. It doesn't hold the device's name or networ
   "version": 1,
   "saved": "2026-11-24T09:30:00.000Z",
   "nodes": [
-    { "id": 1, "type": "light", "label": "Window" }
+    { "id": 1, "type": "lightsensor", "label": "Window" }
   ],
   "messages": [
     "37 02 00 01 21 00 07 00 03 02 03 04 00 0f 42 40 …",

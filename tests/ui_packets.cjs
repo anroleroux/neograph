@@ -2095,6 +2095,25 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     await page.locator('#add .toggle').dispatchEvent('click');
     await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
     await page.locator('#add [title="Add a light sensor"]').dispatchEvent('click');
+    // Every kind of node has a type of its own, and so How it works text of its own.
+    const kinds = await page.evaluate(() => {
+        const sensor = selected;
+        const made = Object.entries(NODE_CLASSES).map(([tc, cls]) => {
+            const n = addNode(Number(tc));
+            const t = [n?.constructor.name, n?.type];
+            n?.remove();
+            return t;
+        }).filter(([cls]) => cls);
+        const byType = new Map();
+        made.forEach(([cls, type]) => byType.set(type, [...(byType.get(type) ?? []), cls]));
+        selectById(sensor.id);
+        return { shared: [...byType].filter(([, c]) => new Set(c).size > 1).map(([t, c]) => t + ': ' + c.join('/')),
+            helpless: made.filter(([, type]) => !NODE_HELP[type]).map(([cls]) => cls),
+            sensor: NODE_HELP[sensor.type][0].slice(0, 30), header: document.querySelector('#settings h3').textContent };
+    });
+    expect(!kinds.shared.length, 'node kinds share a type, so a header and How it works: ' + kinds.shared.join('; '));
+    expect(kinds.sensor === 'A phototransistor light sensor' && kinds.header.startsWith('LIGHTSENSOR '),
+        'a light sensor\'s settings show ' + JSON.stringify(kinds));
     const lsRows = 'Label:|Sense pin:|Load 1 pin:|Load 1:|Load 2 pin:|Load 2:|Load 3 pin:|Load 3:|Always-on load:|Ranging:'
         + '|Settle (µs):|Samples:|Object detection:';
     expect(await keyRows() === lsRows + '|Wire from:|Command view:|Order:',
@@ -2625,7 +2644,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     expect(/^neograph-graph-\d{4}-\d{2}-\d{2}\.json$/.test(download.suggestedFilename()), 'the export is named ' + download.suggestedFilename());
     expect(file.format === 'neograph-graph' && file.version === 1 && !Number.isNaN(Date.parse(file.saved)),
         'the export\'s header is ' + JSON.stringify({ ...file, nodes: undefined, messages: undefined }));
-    expect(file.nodes.map(n => `${n.id}:${n.type}:${n.label}`).join() === '1:button:BUTTON,2:block:Flip,3:led:Onboard LED,11:light:Window',
+    expect(file.nodes.map(n => `${n.id}:${n.type}:${n.label}`).join() === '1:button:BUTTON,2:block:Flip,3:led:Onboard LED,11:lightsensor:Window',
         'the export lists its nodes as ' + JSON.stringify(file.nodes));
     expect(file.messages.join(' ') === before, 'the export\'s messages are not the graph\'s');
     const changed = await page.evaluate(() => {

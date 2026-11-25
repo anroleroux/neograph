@@ -69,7 +69,7 @@ const NODE_HELP = {
         "Range, 10 to 400 cm, is as far as it looks. With nothing nearer, cm reads Range and Echo goes off, after three pings in a row without an echo, so one lost ping doesn't show. Wired into a PWM, servo or NeoPixels, cm counts as a fraction of Range. Echo alone is a presence detector: set Range to the distance that should trip it.",
         "It hears things from about 3 cm, in a cone of about 15°; soft or slanted surfaces may not echo. With several rangers, they ping in turn, so each reads less often.",
     ],
-    light: [
+    lightsensor: [
         "A phototransistor light sensor, such as a BPT-BP0334. It always measures the background light, µA. Turn on Object detection to flash an LED and measure how much of its light something in front of the sensor sends back (Reflected); turn on Directional as well to find which side the object is on (Left, Right, Direction). Pick the output the next wire leaves from in Wire from.",
         "Wiring: collector to 3.3 V, emitter to the Sense pin (GPIO 26, 27 or 28). From the sense pin, the Always-on load to GND, and each switched load (Load 1 to 3) to its own GPIO. To switch a load in, the device drives its pin low; it lets the others go, with their input buffers off so they don't leak (RP2350 erratum E9). Set a pin to None for a load you haven't fitted, and set each load to the resistor you fitted: µA is worked out from it.",
         "Ranges: the always-on load alone is the most sensitive range; each switched load is in parallel with it (100k with 1M always on is 90.9 kΩ). A higher load turns the same light into a higher voltage: 1 MΩ for dim light, about 10 kΩ indoors, 1 kΩ in sun. µA is the current, not the voltage, so it reads the same whatever range it is on.",
