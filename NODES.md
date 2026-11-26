@@ -13,7 +13,7 @@ the TMP button in the HWI group.
 |---|---|---|
 | **UII** | UI inputs: controls you operate in the browser | BTN, SLD, XY |
 | **HWO** | Hardware outputs: what the device drives | LED, GPO, PWM, STP, SRV, NPX |
-| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC, US |
+| **HWI** | Hardware inputs: what the device reads | TMP, ADC, GPI, DS, ENC, US, LS |
 | **UIO** | UI outputs: what the browser shows | PLT, LGT |
 | **USB** | USB: the device acting as a USB device | KEY, MSE |
 | **TM** | Time: logic that waits, or runs for a set time; the clock | DLY, PLS, BLK, CLK |
@@ -524,6 +524,92 @@ Things to know:
 - **Several rangers** ping in turn, so one doesn't hear another's: each reads less
   often. Up to 4 in a graph.
 - **After a save** it keeps its reading until the next one.
+
+### Light sensor: `HWI-LS`
+
+| | |
+|---|---|
+| Category | Hardware input |
+| Outputs | Numbers: **µA**, the background light; **Reflected**, **Left** and **Right**, the light its LEDs send back, in µA; **Direction**, −1 (left) to 1 (right). On/off: **LED**, **LED Left** and **LED Right**, the LEDs it flashes |
+| Default label | Light |
+
+A phototransistor, such as a BPT-BP0334, read on an ADC pin through a load resistor
+the device switches to change its sensitivity: a high load for dim light, a low one for
+sun. It does up to three things, each turned on in its settings:
+
+- **Background light**, always: **µA**, the photocurrent, an absolute value, so it reads
+  the same whatever range it is on.
+- **Object detection:** it flashes its **LED** output, on for one scan and off for the
+  next, and measures how much more light comes back while it is on: **Reflected**. Nearer
+  objects send more back; daylight and lamp flicker drop out. An object is there while
+  Reflected is at least **Min reflection**.
+- **Directional detection** (only with object detection): while there is an object, it
+  also flashes **LED Left** and **LED Right** in turn, and gives **Left**, **Right** and
+  **Direction**: −1 when the object is to the left, 1 to the right, 0 in front or with
+  no object. With no object it does nothing more, so it takes no extra time.
+
+Wire each LED output to whatever lights that LED: a GPO driving a transistor, or
+NeoPixels' on/off input. The offline demo passes a cloud over it, and a hand comes near
+and sweeps across.
+
+Pick the output the next wire leaves from in **Wire from**, and each wire is labelled
+with it. The numbers go to a compare (on when something is near, or when it gets dark),
+a plot, a scale, or a PWM, servo or NeoPixels; the LEDs to a GPO or NeoPixels.
+
+| Setting | Values | Default | What it does |
+|---|---|---|---|
+| Sense pin | ADC0–ADC2 (GPIO 26–28), not used by another node | ADC0, or the first free one | The pin the phototransistor's emitter is on. |
+| Load 1–3 pin | None, or a GPIO not used by another node | GPIO 2, 3, 4 | The pin each switched load resistor goes to. |
+| Load 1–3 | 10 Ω – 100 MΩ, such as 4.7k or 1M | 1 kΩ, 10 kΩ, 100 kΩ | The resistor on that pin. |
+| Always-on load | 10 Ω – 100 MΩ, or none | 1 MΩ | The resistor from the sense pin straight to GND. |
+| Ranging | Auto, Fixed | Auto | Auto picks the range for µA from its readings; Fixed reads on one. |
+| Range | Its ranges | — | With Fixed: the one it reads µA on. |
+| Settle (µs) | 0–3000 | 1000 | How long it waits after switching a load. |
+| Samples | 1–64 | 16 | ADC reads averaged into each reading. |
+| Object detection | On, Off | Off | On: it flashes LED and measures Reflected. |
+| Reflection range | Its ranges | 100 kΩ | With object detection: the range it measures reflections on. |
+| Bursts | 1–50 | 4 | With object detection: flashes averaged into each reflection reading. |
+| Measure every (s) | 0–60 | 0 | With object detection: how often it takes a reflection reading. 0: one after another, so the LED flashes every other scan. Otherwise it flashes its Bursts, then rests with the LEDs off until the next reading is due: 1 burst every 2 s is one 10 ms flash every 2 s. Reflected, Left, Right and Direction hold in between. |
+| Min reflection (µA) | 0 or more | 1 | With object detection: the least Reflected that counts as an object. |
+| Directional | On, Off | Off | With object detection: on, it finds which side an object is on. |
+| Wire from | Its eight outputs | µA | Which output the next wire leaves from. |
+| Command view | Show, Hide | Hide | A tile such as "16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA, left 0.40 µA, right 0.95 µA". In brackets: the load it read µA through (which range it is on) and its ADC reading, 0–4095 (how near the top). These two show only on the tile; nothing can be wired from them. |
+
+Things to know:
+
+- **Wiring:** collector to 3.3 V, emitter to the sense pin. From the sense pin, the
+  always-on load to GND, and each switched load to its pin. Every pin can be changed;
+  loads you haven't fitted are None. Infrared LEDs (it peaks at 940 nm) suit it best.
+  Point LED ahead; put LED Left and LED Right on either side of the sensor, angled a
+  little outwards, and shade the sensor from them so their light only reaches it off
+  the object.
+- **The LEDs must follow their outputs within a scan:** GPOs, or NeoPixels (a long chain
+  of several hundred LEDs takes too long to send). Logic such as AND or NOT in between
+  is fine; a delay, or the onboard LED (the WiFi chip drives it, late), isn't.
+- **How often:** with only object detection a reflection reading takes 20 ms × Bursts,
+  so 80 ms by default. While directional detection has an object, each of its three
+  LEDs gets a turn, so 60 ms × Bursts: 240 ms by default. Measure every spaces the
+  readings out, so the LEDs are dark most of the time; a time shorter than a reading
+  takes is the same as 0.
+- **Ranges:** range 0 is the always-on load alone; each switched load is in parallel
+  with it, so 100 kΩ with 1 MΩ always on is 90.9 kΩ. The device switches one load in at
+  a time by driving its pin low, and lets the others go. On the RP2350 a let-go pin also
+  has its input buffer turned off, so it doesn't leak into the sense pin (erratum E9).
+- **Auto** starts on the most sensitive range, steps down one range when a reading
+  passes 3000 (a sensor saturated in sun reads about 3700, never 4095, so it must move
+  before then) and back up when one is under 200, if it would fit there; the gap keeps
+  it from flapping. Reflections stay on their own range.
+- **µA** is the reading in volts over the load it read through. It is approximate: the
+  resistors' tolerance, and on the 1 MΩ range the ADC itself, shift it. It is read only
+  while the LEDs are off.
+- **Reflected, Left and Right** are, for each flash, the reading with that LED on less
+  the mean of the readings with them all off just before and after. The readings are
+  10 ms apart, so each meets the 100 Hz flicker of mains lamps at the same point, and
+  it drops out. **Direction** is (Right − Left) / (Right + Left): it doesn't depend on
+  how near or shiny the object is. It is 0 while neither reaches Min reflection.
+- **It holds the device** for its settle times: about 1 ms a scan with the defaults.
+- **After a save** it keeps its background reading until the next one; the rest start
+  at 0.
 
 ---
 
@@ -1145,8 +1231,8 @@ for a longer kick, or to a Counter to count the ticks.
 
 | From ↓ / into → | LED, GPO, KEY, LGT | PWM, PLT | CMP, SCL, MIN, MAX | AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT, SIN |
 |---|---|---|---|---|
-| BTN, GPI, DS (Found), ENC (Pressed), US (Echo) | ✓ | | | ✓ |
-| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position), US (cm) | | ✓ | ✓ | |
+| BTN, GPI, DS (Found), ENC (Pressed), US (Echo), LS (LED, LED Left, LED Right) | ✓ | | | ✓ |
+| SLD, XY (X or Y), ADC, TMP, DS (°C), ENC (Position), US (cm), LS (µA, Reflected, Left, Right, Direction) | | ✓ | ✓ | |
 | CMP, AND, OR, NOT, DLY, PLS, BLK, TGL, LCH, CNT (Done) | ✓ | | | ✓ |
 | SCL, MIN, MAX, SIN, CNT (Count), CLK (Hour, Minute or Second) | | ✓ | ✓ | |
 

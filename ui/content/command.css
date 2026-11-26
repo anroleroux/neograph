@@ -91,6 +91,11 @@
     opacity: 0.6;
 }
 
+/* A µ in a tile's state: its capital would read as an M (see setTileText). */
+#command .keep-case {
+    text-transform: none;
+}
+
 #command > * > .light {
     position: absolute;
     top: 0.5em;

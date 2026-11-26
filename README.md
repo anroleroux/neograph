@@ -13,6 +13,8 @@ It allows you to interact with the controller through a browser — defining con
   Send commands to control the controller’s I/O pins and peripherals.  
 - **Data Feedback:**  
   Receive live data from the controller and visualize it on the web interface.  
+- **Export and Import:**  
+  Download the graph as a JSON file and load it back, to keep it across reflashes or move it to another controller.  
 - **Standalone Operation:**  
   Configure the controller to continue running independently after setup.  
 - **USB Keyboard:**  

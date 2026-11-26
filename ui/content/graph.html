@@ -141,6 +141,11 @@
                 <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">US</text>
             </svg>
         </div>
+        <div class="node" data-group="hwi" style="--col: 2; --row: 5" title="Add a light sensor" onclick="addNode(MSG_HW_LIGHT)">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <text x="12" y="14.8" font-size="8" font-family="sans-serif" text-anchor="middle" fill="#BFCDE7C0">LS</text>
+            </svg>
+        </div>
         <!-- Time, under the groups -->
         <div class="node" data-group="tm" style="--col: 1; --row: 4" title="Add a delay" onclick="addNode(MSG_LOGIC_DELAY)">
             <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -247,11 +252,22 @@
                 <path stroke="#BFCDE7C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 7H20M10 11V17M14 11V17M5 7L6 19C6 20.1 6.9 21 8 21H16C17.1 21 18 20.1 18 19L19 7M9 7V4C9 3.4 9.4 3 10 3H14C14.6 3 15 3.4 15 4V7"/>
             </svg>
         </div>
-        <div class="write">
+        <div class="write" title="Save the graph to the device">
             <svg onclick="saveGraph()" width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path stroke="#BFCDE7C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 17H17.01M17.4 14H18C18.9319 14 19.3978 14 19.7654 14.1522C20.2554 14.3552 20.6448 14.7446 20.8478 15.2346C21 15.6022 21 16.0681 21 17C21 17.9319 21 18.3978 20.8478 18.7654C20.6448 19.2554 20.2554 19.6448 19.7654 19.8478C19.3978 20 18.9319 20 18 20H6C5.06812 20 4.60218 20 4.23463 19.8478C3.74458 19.6448 3.35523 19.2554 3.15224 18.7654C3 18.3978 3 17.9319 3 17C3 16.0681 3 15.6022 3.15224 15.2346C3.35523 14.7446 3.74458 14.3552 4.23463 14.1522C4.60218 14 5.06812 14 6 14H6.6M12 15V4M12 15L9 12M12 15L15 12"/>
             </svg>
         </div>
+        <div class="export" title="Export the graph to a file" onclick="exportGraph()">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path stroke="#BFCDE7C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 3H7C5.9 3 5 3.9 5 5V19C5 20.1 5.9 21 7 21H17C18.1 21 19 20.1 19 19V8L14 3ZM14 3V8H19M12 11V17M12 17L9.5 14.5M12 17L14.5 14.5"/>
+            </svg>
+        </div>
+        <div class="import" title="Import a graph from a file" onclick="document.getElementById('import-file').click()">
+            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path stroke="#BFCDE7C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 3H7C5.9 3 5 3.9 5 5V19C5 20.1 5.9 21 7 21H17C18.1 21 19 20.1 19 19V8L14 3ZM14 3V8H19M12 17V11M12 11L9.5 13.5M12 11L14.5 13.5"/>
+            </svg>
+        </div>
+        <input id="import-file" type="file" accept=".json,application/json" hidden onchange="importGraph(this)">
     </div>
     <svg id="svg" class="svg-canvas" viewBox="-400 -300 1600 900" xmlns="http://www.w3.org/2000/svg">
         <defs>

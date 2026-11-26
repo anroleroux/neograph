@@ -244,7 +244,8 @@ function toggleWebSocket(n,d) {
             unmarshalConfigs(gfig);
             // and signals, as telemetry: a chip temperature drifting around 30 °C, a
             // DS18B20 around 22 °C, a rotary encoder's knob turned to and fro, a hand in
-            // front of an ultrasonic ranger, and on each ADC channel a slow wave, in volts.
+            // front of an ultrasonic ranger, a cloud passing a light sensor while a hand
+            // comes near it and sweeps across, and on each ADC channel a slow wave, in volts.
             let tick = 0;
             offlineTelemetry = setInterval(() => {
                 const t = performance.now() / 1000;
@@ -269,6 +270,29 @@ function toggleWebSocket(n,d) {
                         const cm = Math.round((5 + (1.2 * e.range - 5) * (0.5 - 0.5 * Math.cos(t / 3)) + Math.random() - 0.5) * 10) / 10;
                         receiveTelemetry(`sig ${e.id} 0 ${Math.min(cm, e.range)}`);
                         receiveTelemetry(`sig ${e.id} 1 ${cm <= e.range ? 1 : 0}`);
+                    } else if (e instanceof uiLight && tick % 2 === 0) {
+                        // Light from 2 µA to 2 mA and back, read on the range that fits it best.
+                        const ua = 2 * Math.pow(1000, 0.5 - 0.5 * Math.cos(t / 10)) * (1 + 0.02 * (Math.random() - 0.5));
+                        const raws = e.ranges().map(k => [k, ua * 1e-6 * e.loadOhms(k) * ADC_RAW_FULL / ADC_VREF]);
+                        const [k, raw] = raws.find(([, r]) => r <= LIGHT_RAW_HIGH) ?? raws[raws.length - 1];
+                        const read = Math.min(ADC_RAW_FULL, Math.round(raw));
+                        const sig = (k, v) => receiveTelemetry(`sig ${e.id} ${k} ${v}`);
+                        sig(LIGHT_OUT_BACKGROUND, (read * ADC_VREF / ADC_RAW_FULL / e.loadOhms(k) * 1e6).toPrecision(4));
+                        sig(LIGHT_SIG_RAW, read);
+                        sig(LIGHT_SIG_LOAD, (e.loadOhms(k) / 1000).toPrecision(4));
+                        if (e.reflect) {
+                            // A hand that comes near and goes every 12 s, sweeping from left to right.
+                            const near = 4 * Math.max(0, Math.sin(t / 2)), side = Math.sin(t / 1.3);
+                            const noise = () => 0.05 * (Math.random() - 0.5);
+                            sig(LIGHT_OUT_REFLECTED, (near + noise()).toFixed(3));
+                            const object = near >= e.minUa && e.direction;
+                            const left = object ? near * (1 - side) / 2 + noise() : 0, right = object ? near * (1 + side) / 2 + noise() : 0;
+                            sig(LIGHT_OUT_LEFT, left.toFixed(3));
+                            sig(LIGHT_OUT_RIGHT, right.toFixed(3));
+                            sig(LIGHT_OUT_DIRECTION, object ? ((right - left) / (right + left)).toFixed(3) : 0);
+                            const lit = tick % 2 ? -1 : (tick / 2) % (object ? 3 : 1);
+                            [0, 1, 2].forEach(led => sig(LIGHT_OUT_LED + led, lit === led ? 1 : 0));
+                        }
                     } else if (e instanceof uiADC) {
                         const level = 0.5 + 0.4 * Math.sin(t / (4 + 3 * e.channel)) + 0.01 * (Math.random() - 0.5);
                         receiveTelemetry(`sig ${e.id} 0 ${(level * ADC_VREF).toFixed(3)}`);

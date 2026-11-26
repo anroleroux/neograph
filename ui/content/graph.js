@@ -164,6 +164,7 @@ const NODE_CLASSES = {
     [MSG_HW_ADC]: uiADC,
     [MSG_HW_DS18B20]: uiDS18B20,
     [MSG_HW_ULTRASONIC]: uiUltrasonic,
+    [MSG_HW_LIGHT]: uiLight,
     [MSG_HW_ENCODER]: uiEncoder,
     [MSG_HW_CLOCK]: uiClock,
     [MSG_HW_GPI]: uiGPI,
@@ -237,26 +238,31 @@ function buildCommandInterface() {
 // A node's messages: its control message, label, position, order number and wire shapes.
 const nodeMessages = (elm) => [...elm.marshal(), ...elm.marshalLabel(), ...elm.marshalLayout(), ...elm.marshalOrder(), ...elm.marshalWire()];
 
-function saveGraph() {
-    if (!linked) return;
+// The graph's messages, as saved: the blocks the graph has copies of (each definition's
+// name, then its messages, each wrapped whole in a MSG_SUB_PART), then the main graph's
+// nodes, then the parts of each copy of a block, which the device runs.
+function graphBytes() {
     if (editingBlock) editingBlock.update();       // its copies take the definition as it is now
-    buildCommandInterface();
-
     const output = [];
-
-    // Keep the device's networking messages. Graph messages saved before are
-    // dropped: the current graph replaces them.
-    configMessages(gfig ?? new Uint8Array())
-        .filter(m => NETWORK_TYPES.includes(m.type))
-        .forEach(m => output.push(...m.bytes));
-
-    // The blocks the graph has copies of: each definition's name, then its
-    // messages, each wrapped whole in a MSG_SUB_PART. Then the main graph's nodes,
-    // and the parts of each copy of a block, which the device runs.
     const copies = Object.values(mainElements()).filter(e => e instanceof uiSub && e.def);
     for (const def of new Set(copies.map(c => c.def))) output.push(...def.marshal());
     withScope(mainScope, () => Object.values(elements).forEach(elm => output.push(...nodeMessages(elm))));
     copies.forEach(c => output.push(...c.partMessages()));
+    return output;
+}
+
+function saveGraph() {
+    if (!linked) return;
+    const graph = graphBytes();
+    buildCommandInterface();
+
+    // Keep the device's networking messages. Graph messages saved before are
+    // dropped: the current graph replaces them.
+    const output = [];
+    configMessages(gfig ?? new Uint8Array())
+        .filter(m => NETWORK_TYPES.includes(m.type))
+        .forEach(m => output.push(...m.bytes));
+    output.push(...graph);
 
     const binary = Uint8Array.from(output);
     if (PKT_HEADER_LEN + binary.length > PKT_CONFIG_MAX) {
@@ -273,6 +279,96 @@ function saveGraph() {
     console.log(wsConfigMsg) //debug
     socket.send(wsConfigMsg); //online
     offlineConfig = wsConfigMsg; //offline
+}
+
+// ── Export and import ──
+// A graph as a JSON file, to keep it off the device (across reflashes) or move it to
+// another: its messages as saved (graphBytes), each as hex, and for people reading it a
+// list of its nodes. Not the device's name or networking, so importing it on another
+// device keeps that device's. PROTOCOL.md, "Graph files", describes it.
+const GRAPH_FILE_FORMAT = 'neograph-graph';
+const GRAPH_FILE_VERSION = 1;
+
+const hexBytes = (bytes) => [...bytes].map(b => b.toString(16).padStart(2, '0')).join(' ');
+
+// The graph as a graph file's object.
+function graphFile() {
+    const msgs = configMessages(Uint8Array.from(graphBytes()));
+    return {
+        format: GRAPH_FILE_FORMAT,
+        version: GRAPH_FILE_VERSION,
+        saved: new Date().toISOString(),
+        nodes: Object.values(mainElements()).map(e => ({ id: e.id, type: e.type, label: e.label })),
+        messages: msgs.map(m => hexBytes(m.bytes)),
+    };
+}
+
+// Download the graph as a JSON file.
+function exportGraph() {
+    if (!linked) return;
+    const text = JSON.stringify(graphFile(), null, 2);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    a.download = `neograph-graph-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// A graph file's messages (see configMessages), from its text. Throws an Error that
+// says what is wrong with one that isn't a graph file this UI reads.
+function parseGraphFile(text) {
+    let file;
+    try {
+        file = JSON.parse(text);
+    } catch {
+        throw new Error('it is not JSON');
+    }
+    if (file?.format !== GRAPH_FILE_FORMAT) throw new Error('it is not a neoGraph graph file');
+    if (!Number.isInteger(file.version) || file.version < 1) throw new Error('it has no version');
+    if (file.version > GRAPH_FILE_VERSION) throw new Error(`it is version ${file.version}, newer than this page reads (${GRAPH_FILE_VERSION})`);
+    if (!Array.isArray(file.messages)) throw new Error('it has no messages');
+    const bytes = [];
+    file.messages.forEach((m, i) => {
+        if (typeof m !== 'string' || !/^[0-9a-f]{2}( [0-9a-f]{2})*$/i.test(m.trim()))
+            throw new Error(`message ${i + 1} is not hex bytes`);
+        const one = m.trim().split(' ').map(h => parseInt(h, 16));
+        const parsed = configMessages(Uint8Array.from(one));
+        if (parsed.length !== 1 || parsed[0].bytes.length !== one.length) throw new Error(`message ${i + 1} is not one whole message`);
+        bytes.push(...one);
+    });
+    if (PKT_HEADER_LEN + bytes.length > PKT_CONFIG_MAX)
+        throw new Error(`it is ${PKT_HEADER_LEN + bytes.length} bytes, more than the device holds (${PKT_CONFIG_MAX})`);
+    // The device's own networking stays as it is.
+    const msgs = configMessages(Uint8Array.from(bytes)).filter(m => !NETWORK_TYPES.includes(m.type));
+    if (!msgs.some(m => NODE_CLASSES[m.type] && m.id !== 0 && !(m.flags & MSG_FLAG_PART))) throw new Error('it has no nodes');
+    return msgs;
+}
+
+// Replace the graph with a graph file's, once its text is read. It is not saved to the
+// device until Save.
+function importGraphText(text) {
+    let msgs;
+    try {
+        msgs = parseGraphFile(text);
+    } catch (e) {
+        alert(`That file can't be imported: ${e.message}.`);
+        return false;
+    }
+    if (Object.keys(mainElements()).length && !confirm('Replace the graph with the imported one? Save sends it to the device.'))
+        return false;
+    clearSelection();
+    restoreGraph(msgs);
+    return true;
+}
+
+// The Import button: pick a file, then import it.
+function importGraph(input) {
+    const file = input.files[0];
+    input.value = '';               // the same file again is a new pick
+    if (!file || !linked) return;
+    file.text().then(importGraphText);
 }
 
 // Replace the graph with the one saved in a config's messages (see PROTOCOL.md,
@@ -368,7 +464,7 @@ function buildGraph(msgs) {
             elm.setUnit(decoder.decode(m.pay.slice(r + 1)));
         }
         if (m.type === MSG_HW_ADC && m.len >= 1) elm.setChannel(m.pay[0]);
-        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI, MSG_HW_DS18B20, MSG_HW_ENCODER, MSG_HW_CLOCK, MSG_HW_ULTRASONIC].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
+        if ([MSG_HW_CORE, MSG_HW_ADC, MSG_HW_GPI, MSG_HW_DS18B20, MSG_HW_ENCODER, MSG_HW_CLOCK, MSG_HW_ULTRASONIC, MSG_HW_LIGHT].includes(m.type) || isLogic(m.type)) elm.shown = !!(m.flags & MSG_FLAG_SHOWN);
         // Logic with settings takes them from after its source reference (an invalid payload keeps the
         // defaults); a block takes its definition.
         if (elm.restore) elm.restore(m.pay, r, m.len);

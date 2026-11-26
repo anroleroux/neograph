@@ -47,6 +47,18 @@
     padding: var(--step-0);
 }
 
+/* The graph's own buttons, top right: on a narrow screen they wrap onto a second row
+   rather than run under the add menu's plus, top left. */
+#graph > .buttons:not(.add) {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: calc(100% - var(--step-5) - 4 * var(--step-0));
+}
+
+#graph > .buttons:not(.add) > div {
+    margin-bottom: var(--step-0);
+}
+
 #graph > .buttons > div {
     height: var(--step-5);
     border: 3px solid var(--clr-face);
@@ -66,7 +78,7 @@
      LED GPO PWM STP SRV         e.g. UII's or HWO's
      NPX                  (HW outputs: rows 4 and 5)
      TMP ADC GPI DS ENC   (HW inputs: rows 4 and 5)
-     US
+     US LS
      PLT LGT
      KEY
      DLY PLS BLK CLK

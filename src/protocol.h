@@ -6,7 +6,7 @@
  *
  * The PKT_, MSG_, FIELD_, DEV_OPT_, NET_OPT_, NET_LEASE_, PWM_, SLIDER_, BUTTON_, VALUE_, PIN_, ADC_, GPI_,
  * KEYBOARD_, MOUSE_, CORE_, LOGIC_, COMPARE_, DELAY_, SCALE_, COUNTER_, STEPPER_, SERVO_, NEOPIXEL_, DS18B20_,
- * ENCODER_, ULTRASONIC_, SINE_, CLOCK_ and SUB_ constants are mirrored in
+ * ENCODER_, ULTRASONIC_, LIGHT_, SINE_, CLOCK_ and SUB_ constants are mirrored in
  * ui/content/protocol.js; `make test` fails if the two disagree.
  * The FIFO_ constants and helpers are firmware-only (core 0 <-> core 1).
  */
@@ -38,7 +38,7 @@
 #define MSG_FLAG_OUTPUT         0x01
 
 /* Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
-   rotary encoder, clock, ultrasonic ranger) or
+   rotary encoder, clock, ultrasonic ranger, light sensor) or
    a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it. */
 #define MSG_FLAG_SHOWN          0x02
 
@@ -77,6 +77,7 @@
 #define MSG_HW_ENCODER          0x34    /* a rotary encoder and its push switch; two outputs */
 #define MSG_HW_CLOCK            0x35    /* the device's clock, a time of day: hour, minute, second */
 #define MSG_HW_ULTRASONIC       0x36    /* an ultrasonic ranger on one pin: a distance; two outputs */
+#define MSG_HW_LIGHT            0x37    /* a phototransistor on an ADC pin with switched load resistors; eight outputs */
 
 /* Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
    source itself, with one output, 0: boolean, or floating for a scale, min, max or sine. A
@@ -239,6 +240,67 @@ static inline int net_ap_address_usable(const uint8_t a[4]) {
 #define ULTRASONIC_PAYLOAD_LEN  3
 #define ULTRASONIC_RANGE_MIN    10      /* cm */
 #define ULTRASONIC_RANGE_MAX    400     /* cm: as far as the ranger hears */
+
+/* Light sensor (MSG_HW_LIGHT): a phototransistor, such as a BPT-BP0334, from 3.3 V to a
+   sense node on an ADC pin, with load resistors from the sense node: one to GND that is
+   always on (or none), and up to LIGHT_LOADS more, each to a GPIO the device drives low to
+   switch it in and lets go (high impedance) to switch it out. A range is the load the
+   photocurrent flows through: range 0 the always-on load alone, range k (1 to LIGHT_LOADS)
+   load k in parallel with it. It reads its background light; with LIGHT_REFLECT it also
+   detects an object, by the light it sends back from an LED it turns on and off through
+   its LED output, a scan on and a scan off: each reading with the LED on less the mean of
+   the readings with it off on either side. With LIGHT_DIRECTION too, while the object's
+   reflection is at least its minimum, it also lights a left and a right LED in turn, and
+   gives the object's direction. Payload, LIGHT_PAYLOAD_LEN bytes:
+     byte 0       the ADC channel of the sense node, 0 to ADC_CHANNELS - 1
+     byte 1       options: LIGHT_AUTO (it picks its range), LIGHT_REFLECT (object
+                  detection), LIGHT_DIRECTION (directional detection; only with LIGHT_REFLECT)
+     byte 2       its range, without LIGHT_AUTO
+     byte 3       the range it measures reflections on
+     bytes 4-6    the GPIO of loads 1 to 3, or LIGHT_NO_PIN
+     bytes 7-22   the always-on load, then loads 1 to 3, in ohms, 32-bit big endian each,
+                  LIGHT_OHMS_MIN to LIGHT_OHMS_MAX; 0 for none (a load without a pin)
+     bytes 23-24  µs it waits after switching range, up to LIGHT_SETTLE_MAX_US
+     byte 25      ADC reads averaged into a reading, 1 to LIGHT_SAMPLES_MAX
+     byte 26      LED bursts (on for a scan, between two scans off) averaged into a
+                  reflection, 1 to LIGHT_BURSTS_MAX
+     bytes 27-30  its minimum reflection in µA, a 32-bit big-endian float, finite and 0
+                  or more: an object reflecting less is not there
+     bytes 31-32  ms from the start of one reflection reading to the next, big endian, up
+                  to LIGHT_EVERY_MAX_MS; its LEDs stay off in between. 0: one after another
+   The pins (its ADC pin's included) differ, its range and reflection range have their
+   load, and it has at least one range. Its outputs (LIGHT_OUT_): its background light, in
+   µA, read with its LEDs off; the object's reflected light in µA; the left and the right
+   LED's reflected light in µA; the object's direction, -1 (left) to 1 (right), 0 with no
+   object; all floating. Then its LED, left LED and right LED, boolean: each on for the
+   scans it reads with that LED on. Two more signals, not outputs (nothing can be wired
+   to them), are for its Command view tile: its last background reading, 0 to
+   ADC_RAW_FULL (LIGHT_SIG_RAW), and the load it was read through, in kΩ (LIGHT_SIG_LOAD). */
+#define LIGHT_PAYLOAD_LEN       33
+#define LIGHT_AUTO              0x01
+#define LIGHT_REFLECT           0x02
+#define LIGHT_DIRECTION         0x04
+#define LIGHT_NO_PIN            0xFF
+#define LIGHT_LOADS             3       /* switched loads */
+#define LIGHT_RANGES            4       /* the always-on load alone, then each switched one */
+#define LIGHT_OUT_BACKGROUND    0
+#define LIGHT_OUT_REFLECTED     1
+#define LIGHT_OUT_LEFT          2
+#define LIGHT_OUT_RIGHT         3
+#define LIGHT_OUT_DIRECTION     4
+#define LIGHT_OUT_LED           5       /* the first boolean output */
+#define LIGHT_OUT_LED_LEFT      6
+#define LIGHT_OUT_LED_RIGHT     7
+#define LIGHT_OUTPUTS           8
+#define LIGHT_SIG_RAW           8       /* signals past its outputs, for its tile */
+#define LIGHT_SIG_LOAD          9
+#define LIGHT_SIGNALS           10
+#define LIGHT_OHMS_MIN          10
+#define LIGHT_OHMS_MAX          100000000
+#define LIGHT_SETTLE_MAX_US     3000
+#define LIGHT_SAMPLES_MAX       64
+#define LIGHT_BURSTS_MAX        50
+#define LIGHT_EVERY_MAX_MS      60000
 
 /* Clock (MSG_HW_CLOCK): the device has one clock, a time of day, which every clock node
    reads. Three outputs, each a whole number: its hour (0, 0 to 23), its minute (1) and its
@@ -433,6 +495,75 @@ static inline int ultrasonic_payload_valid(const uint8_t *pay, uint8_t len) {
     if (len != ULTRASONIC_PAYLOAD_LEN || !pin_usable(pay[0])) return 0;
     uint16_t range = (uint16_t)(pay[1] << 8 | pay[2]);
     return range >= ULTRASONIC_RANGE_MIN && range <= ULTRASONIC_RANGE_MAX;
+}
+
+/* A light sensor's settings (MSG_HW_LIGHT), as light_payload_read reads them. Range k
+   switches in pins[k] (pins[0], the always-on load's, is LIGHT_NO_PIN). */
+typedef struct {
+    uint8_t channel;                        /* the ADC channel of the sense node */
+    uint8_t options;                        /* LIGHT_AUTO, LIGHT_REFLECT, LIGHT_DIRECTION */
+    uint8_t range;                          /* without LIGHT_AUTO */
+    uint8_t reflect_range;
+    uint8_t pins[LIGHT_RANGES];             /* each range's GPIO; LIGHT_NO_PIN for none */
+    uint32_t ohms[LIGHT_RANGES];            /* each range's own load; 0 for none */
+    uint16_t settle_us;
+    uint8_t samples, bursts;
+    float min_ua;                           /* the least reflection that is an object, µA */
+    uint16_t every_ms;                      /* from one reflection reading's start to the next's; 0: at once */
+} light_payload;
+
+static inline uint32_t light_u32(const uint8_t *p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+/* Whether a light sensor has range k: its always-on load (0), or load k's pin (1 to 3). */
+static inline int light_has_range(const light_payload *l, uint8_t k) {
+    return k < LIGHT_RANGES && (k == 0 ? l->ohms[0] != 0 : l->pins[k] != LIGHT_NO_PIN);
+}
+
+/* Read a light sensor's payload (see MSG_HW_LIGHT). Returns 0 if it is not one the
+   device runs. */
+static inline int light_payload_read(const uint8_t *pay, uint8_t len, light_payload *out) {
+    if (len != LIGHT_PAYLOAD_LEN) return 0;
+    memset(out, 0, sizeof *out);
+    out->channel = pay[0];
+    out->options = pay[1];
+    out->range = pay[2];
+    out->reflect_range = pay[3];
+    out->pins[0] = LIGHT_NO_PIN;
+    for (uint8_t k = 0; k < LIGHT_RANGES; k++) {
+        if (k) out->pins[k] = pay[3 + k];
+        out->ohms[k] = light_u32(pay + 7 + 4 * k);
+    }
+    out->settle_us = (uint16_t)(pay[23] << 8 | pay[24]);
+    out->samples = pay[25];
+    out->bursts = pay[26];
+    uint32_t min = light_u32(pay + 27);
+    memcpy(&out->min_ua, &min, sizeof out->min_ua);
+    out->every_ms = (uint16_t)(pay[31] << 8 | pay[32]);
+
+    if (out->channel >= ADC_CHANNELS || (out->options & ~(LIGHT_AUTO | LIGHT_REFLECT | LIGHT_DIRECTION))) return 0;
+    if ((out->options & LIGHT_DIRECTION) && !(out->options & LIGHT_REFLECT)) return 0;
+    if ((min & 0x7F800000u) == 0x7F800000u || !(out->min_ua >= 0)) return 0;     /* not finite, or below 0 */
+    uint32_t pins = 1u << (ADC_PIN_FIRST + out->channel);
+    uint8_t ranges = 0;
+    for (uint8_t k = 0; k < LIGHT_RANGES; k++) {
+        uint8_t pin = out->pins[k];
+        if (k && pin != LIGHT_NO_PIN) {
+            if (!pin_usable(pin) || (pins >> pin & 1)) return 0;
+            pins |= 1u << pin;
+        }
+        uint32_t ohms = out->ohms[k];
+        int fitted = k ? pin != LIGHT_NO_PIN : ohms != 0;
+        if (fitted ? ohms < LIGHT_OHMS_MIN || ohms > LIGHT_OHMS_MAX : ohms != 0) return 0;
+        ranges += (uint8_t)fitted;
+    }
+    if (!ranges) return 0;
+    if (out->range >= LIGHT_RANGES || out->reflect_range >= LIGHT_RANGES) return 0;
+    if (!(out->options & LIGHT_AUTO) && !light_has_range(out, out->range)) return 0;
+    if ((out->options & LIGHT_REFLECT) && !light_has_range(out, out->reflect_range)) return 0;
+    return out->settle_us <= LIGHT_SETTLE_MAX_US && out->samples >= 1 && out->samples <= LIGHT_SAMPLES_MAX
+        && out->bursts >= 1 && out->bursts <= LIGHT_BURSTS_MAX && out->every_ms <= LIGHT_EVERY_MAX_MS;
 }
 
 /* A 3-byte source reference's output byte, bit 7: the wire is a feedback wire, which

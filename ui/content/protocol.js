@@ -23,7 +23,7 @@ const MSG_HEADER_LEN         = 5;     // type (1), flags (1), element ID (2, BE)
 const MSG_FLAG_OUTPUT        = 0x01;
 
 // Message header byte 1, bit 1: a hardware input (core temperature, ADC, GPIO input, DS18B20,
-// rotary encoder, clock, ultrasonic ranger) or
+// rotary encoder, clock, ultrasonic ranger, light sensor) or
 // a logic element shows a tile in the Command view (MSG_FLAG_SHOWN). The device ignores it.
 const MSG_FLAG_SHOWN         = 0x02;
 
@@ -66,6 +66,7 @@ const MSG_HW_DS18B20         = 0x33;  // a DS18B20 temperature sensor on a 1-Wir
 const MSG_HW_ENCODER         = 0x34;  // a rotary encoder and its push switch; two outputs
 const MSG_HW_CLOCK           = 0x35;  // the device's clock, a time of day: hour, minute, second
 const MSG_HW_ULTRASONIC      = 0x36;  // an ultrasonic ranger on one pin: a distance; two outputs
+const MSG_HW_LIGHT           = 0x37;  // a phototransistor on an ADC pin with switched load resistors; eight outputs
 
 // Logic element types (0x40-0x7F): run on the device. Each reads sources and is a
 // source itself, with one output, 0: boolean, or floating for a scale, min or max.
@@ -178,6 +179,44 @@ const ENCODER_STEPS_MAX      = 1000;
 const ULTRASONIC_PAYLOAD_LEN = 3;
 const ULTRASONIC_RANGE_MIN   = 10;    // cm
 const ULTRASONIC_RANGE_MAX   = 400;   // cm: as far as the ranger hears
+
+// Light sensor (MSG_HW_LIGHT) payload, LIGHT_PAYLOAD_LEN bytes: the ADC channel of the
+// sense node; options (LIGHT_AUTO, LIGHT_REFLECT: object detection, LIGHT_DIRECTION:
+// directional detection, only with LIGHT_REFLECT); its range without LIGHT_AUTO; its
+// reflection range; loads 1 to 3's GPIOs (LIGHT_NO_PIN: none); the always-on load then
+// loads 1 to 3 in ohms (4 bytes BE each, 0: none); settle µs (2 bytes BE); samples;
+// bursts; its minimum reflection in µA (float32 BE); ms from one reflection reading's
+// start to the next's, its LEDs off in between (2 bytes BE, up to LIGHT_EVERY_MAX_MS; 0:
+// one after another). Range 0 is the always-on load alone,
+// range k load k in parallel with it. Outputs (LIGHT_OUT_): background µA, reflected µA,
+// left µA, right µA, direction (-1 to 1), all numbers; then its LED, left LED and right
+// LED, on/off. Two more signals, not outputs, are for its tile: its last background
+// reading, 0 to ADC_RAW_FULL (LIGHT_SIG_RAW), and its load in kΩ (LIGHT_SIG_LOAD).
+const LIGHT_PAYLOAD_LEN      = 33;
+const LIGHT_AUTO             = 0x01;
+const LIGHT_REFLECT          = 0x02;
+const LIGHT_DIRECTION        = 0x04;
+const LIGHT_NO_PIN           = 0xFF;
+const LIGHT_LOADS            = 3;
+const LIGHT_RANGES           = 4;
+const LIGHT_OUT_BACKGROUND   = 0;
+const LIGHT_OUT_REFLECTED    = 1;
+const LIGHT_OUT_LEFT         = 2;
+const LIGHT_OUT_RIGHT        = 3;
+const LIGHT_OUT_DIRECTION    = 4;
+const LIGHT_OUT_LED          = 5;
+const LIGHT_OUT_LED_LEFT     = 6;
+const LIGHT_OUT_LED_RIGHT    = 7;
+const LIGHT_OUTPUTS          = 8;
+const LIGHT_SIG_RAW          = 8;
+const LIGHT_SIG_LOAD         = 9;
+const LIGHT_SIGNALS          = 10;
+const LIGHT_OHMS_MIN         = 10;
+const LIGHT_OHMS_MAX         = 100000000;
+const LIGHT_SETTLE_MAX_US    = 3000;
+const LIGHT_SAMPLES_MAX      = 64;
+const LIGHT_BURSTS_MAX       = 50;
+const LIGHT_EVERY_MAX_MS     = 60000;
 
 // Clock (MSG_HW_CLOCK): the device has one clock, which every clock node reads. Outputs:
 // its hour (0), minute (1) and second (2), whole numbers. Its payload: options

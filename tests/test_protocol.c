@@ -10,6 +10,7 @@
 #include "program.h"
 #include "ds18b20.h"
 #include "ultrasonic.h"
+#include "light.h"
 #include "encoder.h"
 #include "clock.h"
 #include "neopixel.h"
@@ -364,11 +365,12 @@ static void assert_floating_hw(const struct protocol_example *ex, msg_ref src)
     uint8_t type = element_type(ex, src.id);
     TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_SLIDER || type == MSG_UI_SLIDER_2D || type == MSG_HW_ADC
                              || type == MSG_HW_CORE || type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
-                             || type == MSG_HW_CLOCK || type == MSG_HW_ULTRASONIC
+                             || type == MSG_HW_CLOCK || type == MSG_HW_ULTRASONIC || type == MSG_HW_LIGHT
                              || program_logic_floating(type), ex->name);
     /* A DS18B20's temperature, an encoder's position, an ultrasonic ranger's distance:
-       their output 0; a clock's three. */
-    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : type == MSG_HW_CLOCK ? 3 : 1), ex->name);
+       their output 0; a clock's three; a light sensor's up to its LEDs. */
+    TEST_ASSERT_TRUE_MESSAGE(src.output < (type == MSG_UI_SLIDER_2D ? 2 : type == MSG_HW_CLOCK ? 3
+                                           : type == MSG_HW_LIGHT ? LIGHT_OUT_LED : 1), ex->name);
 }
 
 /* Wires join matching types (PROTOCOL.md, "Wire types"): an LED, GPO or keyboard is
@@ -397,12 +399,15 @@ void test_wires_join_matching_types(void)
                     uint8_t type = element_type(ex, src.id);
                     if (src.id) TEST_ASSERT_TRUE_MESSAGE(type == MSG_UI_BUTTON || type == MSG_HW_GPI || type == MSG_HW_DS18B20
                                                          || type == MSG_HW_ENCODER || type == MSG_HW_ULTRASONIC
+                                                         || type == MSG_HW_LIGHT
                                                          || (program_logic(type) && !program_logic_floating(type)), ex->name);
                     /* A DS18B20's found, an encoder's pressed, an ultrasonic ranger's echo, is
-                       its output 1; the others' only boolean output is 0. */
-                    TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
-                                                    || type == MSG_HW_ULTRASONIC ? 1 : 0,
-                                                    src.output, ex->name);
+                       its output 1; a light sensor's LEDs its outputs from LIGHT_OUT_LED; the
+                       others' only boolean output is 0. */
+                    if (type == MSG_HW_LIGHT) TEST_ASSERT_TRUE_MESSAGE(src.output >= LIGHT_OUT_LED && src.output < LIGHT_OUTPUTS, ex->name);
+                    else TEST_ASSERT_EQUAL_UINT8_MESSAGE(type == MSG_HW_DS18B20 || type == MSG_HW_ENCODER
+                                                         || type == MSG_HW_ULTRASONIC ? 1 : 0,
+                                                         src.output, ex->name);
                 }
             } else if (floating_in) {
                 for (uint8_t k = 0; k < refs; k++) assert_floating_hw(ex, msg_ref_at(it.pay + k * r, it.flags));
@@ -443,6 +448,7 @@ void test_element_type_bits(void)
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ADC & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_DS18B20 & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ULTRASONIC & (MSG_HW_BIT | MSG_INPUT_BIT));
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_LIGHT & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_ENCODER & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(MSG_HW_BIT | MSG_INPUT_BIT, MSG_HW_CLOCK & (MSG_HW_BIT | MSG_INPUT_BIT));
     TEST_ASSERT_EQUAL_HEX8(0, MSG_UI_GAUGE & (MSG_HW_BIT | MSG_INPUT_BIT));
@@ -2355,6 +2361,304 @@ void test_ultrasonic_program(void)
     TEST_ASSERT_NOT_NULL(strstr(text, "ULTRASONIC n4 pin 17 range 400 cm -> s2 echo s3\n"));
 }
 
+/* ── Light sensors ────────────────────────────────────────────────────── */
+
+/* The brief's wiring: ADC0 (GPIO 26); 1 MΩ always on; 1 kΩ on GPIO 2, 10 kΩ on 3, 100 kΩ
+   on 4; auto-ranging, object and directional detection on 100 kΩ (range 3); 1000 µs
+   settle, 16 samples, 4 bursts, an object from 1 µA. */
+static const uint8_t LIGHT_PAY[LIGHT_PAYLOAD_LEN] = {
+    0, LIGHT_AUTO | LIGHT_REFLECT | LIGHT_DIRECTION, 0, 3, 2, 3, 4,
+    0x00, 0x0F, 0x42, 0x40,  0x00, 0x00, 0x03, 0xE8,  0x00, 0x00, 0x27, 0x10,  0x00, 0x01, 0x86, 0xA0,
+    0x03, 0xE8, 16, 4,  0x3F, 0x80, 0x00, 0x00,  0, 0,
+};
+
+void test_light_payload(void)
+{
+    light_payload l;
+    TEST_ASSERT_TRUE(light_payload_read(LIGHT_PAY, LIGHT_PAYLOAD_LEN, &l));
+    TEST_ASSERT_EQUAL_UINT8(0, l.channel);
+    TEST_ASSERT_EQUAL_HEX8(LIGHT_AUTO | LIGHT_REFLECT | LIGHT_DIRECTION, l.options);
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_NO_PIN, l.pins[0]);
+    TEST_ASSERT_EQUAL_UINT8(4, l.pins[3]);
+    TEST_ASSERT_EQUAL_UINT32(1000000, l.ohms[0]);
+    TEST_ASSERT_EQUAL_UINT32(100000, l.ohms[3]);
+    TEST_ASSERT_EQUAL_UINT16(1000, l.settle_us);
+    TEST_ASSERT_EQUAL_UINT8(16, l.samples);
+    TEST_ASSERT_EQUAL_UINT8(4, l.bursts);
+    TEST_ASSERT_EQUAL_FLOAT(1, l.min_ua);
+    TEST_ASSERT_EQUAL_UINT16(0, l.every_ms);
+    TEST_ASSERT_FALSE(light_payload_read(LIGHT_PAY, LIGHT_PAYLOAD_LEN - 1, &l));
+
+    /* Each change on its own is one the device doesn't run. */
+    static const struct { uint8_t at, value; } bad[] = {
+        { 0, ADC_CHANNELS },                /* no ADC3 */
+        { 1, 0x08 },                        /* an unknown option */
+        { 1, LIGHT_AUTO | LIGHT_DIRECTION },/* directional without object detection */
+        { 3, LIGHT_RANGES },                /* no such reflection range */
+        { 4, 25 },                          /* a load on the WiFi chip's pin */
+        { 5, 2 },                           /* loads 1 and 2 on one pin */
+        { 6, 26 },                          /* a load on its sense pin */
+        { 10, 5 },                          /* the always-on load under LIGHT_OHMS_MIN: 5 Ω */
+        { 23, 0x0B },                       /* settle over LIGHT_SETTLE_MAX_US */
+        { 25, 0 },                          /* no samples */
+        { 25, LIGHT_SAMPLES_MAX + 1 },
+        { 26, 0 },                          /* no bursts */
+        { 26, LIGHT_BURSTS_MAX + 1 },
+        { 27, 0xBF },                       /* a minimum of -1 µA */
+        { 27, 0x7F },                       /* not finite: 0x7F800000 is infinity */
+        { 31, 0xEA },                       /* every 60001 ms: over LIGHT_EVERY_MAX_MS */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        uint8_t pay[LIGHT_PAYLOAD_LEN];
+        memcpy(pay, LIGHT_PAY, sizeof pay);
+        pay[bad[i].at] = bad[i].value;
+        if (bad[i].at == 10) memset(pay + 7, 0, 3);
+        if (bad[i].at == 31) pay[32] = 0x61;
+        TEST_ASSERT_FALSE_MESSAGE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l), "a bad light payload was taken");
+    }
+
+    /* Load 3 without a pin: its ohms must be 0, and its range is no reflection range. */
+    uint8_t pay[LIGHT_PAYLOAD_LEN];
+    memcpy(pay, LIGHT_PAY, sizeof pay);
+    pay[6] = LIGHT_NO_PIN;
+    TEST_ASSERT_FALSE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l));
+    memset(pay + 19, 0, 4);
+    TEST_ASSERT_FALSE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l));     /* reflections on range 3 */
+    pay[1] = LIGHT_AUTO;
+    TEST_ASSERT_TRUE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l));      /* background only */
+    TEST_ASSERT_FALSE(light_has_range(&l, 3));
+
+    /* No always-on load: fine with a switched one; a fixed range must have its load. */
+    memset(pay + 7, 0, 4);
+    TEST_ASSERT_TRUE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l));
+    TEST_ASSERT_FALSE(light_has_range(&l, 0));
+    pay[1] = 0;
+    TEST_ASSERT_FALSE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l));     /* fixed on range 0 */
+    pay[2] = 1;
+    TEST_ASSERT_TRUE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l));
+    /* No load at all. */
+    pay[1] = LIGHT_AUTO;
+    pay[4] = pay[5] = LIGHT_NO_PIN;
+    memset(pay + 11, 0, 8);
+    TEST_ASSERT_FALSE(light_payload_read(pay, LIGHT_PAYLOAD_LEN, &l));
+}
+
+void test_light_ranges(void)
+{
+    light_payload l;
+    TEST_ASSERT_TRUE(light_payload_read(LIGHT_PAY, LIGHT_PAYLOAD_LEN, &l));
+
+    /* Each switched load is in parallel with the always-on 1 MΩ. */
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 1000000.0f, light_load_ohms(&l, 0));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 999.001f, light_load_ohms(&l, 1));
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 90909.09f, light_load_ohms(&l, 3));
+
+    /* Most sensitive first: 1 MΩ, then 100 kΩ, 10 kΩ, 1 kΩ. */
+    uint8_t order[LIGHT_RANGES];
+    TEST_ASSERT_EQUAL_UINT8(4, light_ranges(&l, order));
+    TEST_ASSERT_EQUAL_UINT8(0, order[0]);
+    TEST_ASSERT_EQUAL_UINT8(3, order[1]);
+    TEST_ASSERT_EQUAL_UINT8(2, order[2]);
+    TEST_ASSERT_EQUAL_UINT8(1, order[3]);
+
+    /* Near the top: one range less sensitive; at the least sensitive it stays. A
+       phototransistor saturated in sun on 1 MΩ reads about 3700, never 4095: it moves. */
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 0, 4000));
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 0, 3700));
+    TEST_ASSERT_EQUAL_UINT8(0, light_autorange(&l, 0, LIGHT_RAW_HIGH));
+    TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 2, LIGHT_RAW_HIGH + 1));
+    TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 1, 4095));
+    /* Between the two, it stays. */
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 3, LIGHT_RAW_HIGH));
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 3, LIGHT_RAW_LOW));
+    /* Low: one range more sensitive, if the reading there would be under LIGHT_RAW_TARGET:
+       199 on 10 kΩ is ~1980 on 100 kΩ; 199 on 100 kΩ is ~2189 on 1 MΩ. */
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 2, LIGHT_RAW_LOW - 1));
+    TEST_ASSERT_EQUAL_UINT8(0, light_autorange(&l, 3, LIGHT_RAW_LOW - 1));
+    TEST_ASSERT_EQUAL_UINT8(0, light_autorange(&l, 0, 0));
+    /* A range it doesn't have: its most sensitive. */
+    l.pins[2] = LIGHT_NO_PIN;
+    TEST_ASSERT_EQUAL_UINT8(0, light_autorange(&l, 2, 1000));
+    /* 10 kΩ gone, from 1 kΩ the next is 100 kΩ: 199 there would read ~18000, so it stays. */
+    TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 1, LIGHT_RAW_LOW - 1));
+    TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 1, 30));     /* ~2730 there: over LIGHT_RAW_TARGET, it stays */
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 1, 20));     /* ~1820 */
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 1, 3));      /* ~273 */
+}
+
+void test_light_current(void)
+{
+    /* I = V / R: full scale through 1 kΩ is 3.3 mA; 2048 through 100 kΩ ~16.5 µA. The same
+       light on two ranges is the same current: 2048 on 100 kΩ is 204.8 on 10 kΩ. */
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 3300.0f, light_microamps(ADC_RAW_FULL, 1000));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 16.504f, light_microamps(2048, 100000));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 16.504f, light_microamps(204.8f, 10000));
+    TEST_ASSERT_EQUAL_FLOAT(0, light_microamps(2048, 0));
+
+    light_payload l;
+    TEST_ASSERT_TRUE(light_payload_read(LIGHT_PAY, LIGHT_PAYLOAD_LEN, &l));
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 3303.3f, light_full(&l, LIGHT_OUT_BACKGROUND));  /* 1 kΩ ‖ 1 MΩ */
+    for (uint8_t k = LIGHT_OUT_REFLECTED; k <= LIGHT_OUT_RIGHT; k++)
+        TEST_ASSERT_FLOAT_WITHIN(0.01f, 36.3f, light_full(&l, k));                    /* 100 kΩ ‖ 1 MΩ */
+    for (uint8_t k = LIGHT_OUT_DIRECTION; k < LIGHT_OUTPUTS; k++) TEST_ASSERT_EQUAL_FLOAT(1, light_full(&l, k));
+
+    /* Direction: (right - left) / (right + left); 0 with neither at the minimum. */
+    TEST_ASSERT_EQUAL_FLOAT(0, light_direction(0.5f, 0.9f, 1));
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.5f, light_direction(1, 3, 1));
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -1, light_direction(2, -0.1f, 1));        /* below 0 is 0 */
+    TEST_ASSERT_EQUAL_FLOAT(0, light_direction(0, 0, 0));
+}
+
+void test_light_reflect(void)
+{
+    light_reflect r = { .lit = LIGHT_DARK };
+    float counts[LIGHT_LEDS] = { -1, -1, -1 };
+    /* One LED: an off reading lights it for the next scan, an on reading puts it out. */
+    TEST_ASSERT_EQUAL_HEX8(0, light_reflect_take(&r, 1000, 1, 2, counts));
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_LED_OBJECT, r.lit);
+    TEST_ASSERT_EQUAL_HEX8(0, light_reflect_take(&r, 1505, 1, 2, counts));
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_DARK, r.lit);
+    /* The next off reading ends the burst, on less the mean of its offs (a drift from 1000
+       to 1010 drops out), and starts the next one. */
+    TEST_ASSERT_EQUAL_HEX8(0, light_reflect_take(&r, 1010, 1, 2, counts));
+    TEST_ASSERT_EQUAL_FLOAT(-1, counts[0]);
+    light_reflect_take(&r, 1410, 1, 2, counts);
+    TEST_ASSERT_EQUAL_HEX8(1, light_reflect_take(&r, 1010, 1, 2, counts));    /* the second burst: 400 */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, (500 + 400) / 2.0f, counts[0]);
+
+    /* Three LEDs, a burst each: object, left, right, in turn, each between offs. */
+    light_reflect_take(&r, 1100, LIGHT_LEDS, 1, counts);                      /* object on */
+    TEST_ASSERT_EQUAL_HEX8(1 << LIGHT_LED_OBJECT, light_reflect_take(&r, 1000, LIGHT_LEDS, 1, counts));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1100 - (1010 + 1000) / 2.0f, counts[LIGHT_LED_OBJECT]);
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_LED_LEFT, r.lit);
+    light_reflect_take(&r, 1030, LIGHT_LEDS, 1, counts);                      /* left on */
+    TEST_ASSERT_EQUAL_HEX8(1 << LIGHT_LED_LEFT, light_reflect_take(&r, 1000, LIGHT_LEDS, 1, counts));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 30, counts[LIGHT_LED_LEFT]);
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_LED_RIGHT, r.lit);
+    light_reflect_take(&r, 1090, LIGHT_LEDS, 1, counts);                      /* right on */
+    TEST_ASSERT_EQUAL_HEX8(1 << LIGHT_LED_RIGHT, light_reflect_take(&r, 1000, LIGHT_LEDS, 1, counts));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 90, counts[LIGHT_LED_RIGHT]);
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_LED_OBJECT, r.lit);                          /* and round again */
+
+    /* Back to one LED with a left burst half done: it is dropped. */
+    light_reflect_take(&r, 1100, LIGHT_LEDS, 2, counts);
+    light_reflect_take(&r, 1000, LIGHT_LEDS, 2, counts);                      /* object: 1 of 2 */
+    light_reflect_take(&r, 1050, LIGHT_LEDS, 2, counts);                      /* left on */
+    TEST_ASSERT_EQUAL_HEX8(0, light_reflect_take(&r, 1000, 1, 2, counts));     /* left: dropped */
+    TEST_ASSERT_EQUAL_UINT8(0, r.count[LIGHT_LED_LEFT]);
+    TEST_ASSERT_EQUAL_UINT8(LIGHT_LED_OBJECT, r.lit);
+
+    /* An on reading with no off one before it (an LED lit as it starts) is dropped. */
+    light_reflect fresh = { .lit = LIGHT_LED_OBJECT };
+    TEST_ASSERT_EQUAL_HEX8(0, light_reflect_take(&fresh, 3000, 1, 1, counts));
+    TEST_ASSERT_EQUAL_HEX8(0, light_reflect_take(&fresh, 1000, 1, 1, counts));
+    light_reflect_take(&fresh, 1200, 1, 1, counts);
+    TEST_ASSERT_EQUAL_HEX8(1, light_reflect_take(&fresh, 1000, 1, 1, counts));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 200, counts[0]);
+}
+
+/* Its LEDs over `scans` scans, measuring every `every` scans with `leds` LEDs (as
+   light_scan runs them): how many scans each LED was lit, and how many readings came in. */
+static void light_run(uint32_t every, uint8_t leds, uint8_t bursts, uint32_t scans, uint32_t lit[LIGHT_LEDS],
+                      uint32_t *readings, uint32_t *first_on)
+{
+    light_reflect r = { .lit = LIGHT_DARK };
+    light_pace pace = { 0 };
+    float counts[LIGHT_LEDS];
+    memset(lit, 0, LIGHT_LEDS * sizeof lit[0]);
+    *readings = 0;
+    *first_on = UINT32_MAX;
+    for (uint32_t scan = 0; scan < scans; scan++) {
+        if (!light_pace_measure(&pace, every)) continue;
+        uint8_t ready = light_reflect_take(&r, r.lit == LIGHT_DARK ? 1000 : 1100, leds, bursts, counts);
+        if (ready >> (leds - 1) & 1) ++*readings;
+        if (light_pace_rest(&pace, every, ready >> (leds - 1) & 1)) light_reflect_rest(&r);
+        if (r.lit != LIGHT_DARK) {
+            lit[r.lit]++;
+            if (*first_on == UINT32_MAX) *first_on = scan;
+        }
+    }
+}
+
+void test_light_pace(void)
+{
+    uint32_t lit[LIGHT_LEDS], readings, first;
+    /* One after another (every 0), one burst a reading: lit every other scan, a reading
+       every 2 scans. */
+    light_run(0, 1, 1, 100, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(50, lit[LIGHT_LED_OBJECT]);
+    TEST_ASSERT_EQUAL_UINT32(49, readings);
+    /* Every 200 scans (2 s), one burst: lit one scan in 200, a reading each time. */
+    light_run(200, 1, 1, 1000, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(5, lit[LIGHT_LED_OBJECT]);
+    TEST_ASSERT_EQUAL_UINT32(5, readings);
+    TEST_ASSERT_EQUAL_UINT32(0, first);
+    /* Every 100 scans, 4 bursts: 4 scans lit each time. */
+    light_run(100, 1, 4, 1000, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(40, lit[LIGHT_LED_OBJECT]);
+    TEST_ASSERT_EQUAL_UINT32(10, readings);
+    /* Three LEDs, 2 bursts each, every 50 scans: 12 scans of 50 measuring, 2 lit each. */
+    light_run(50, LIGHT_LEDS, 2, 500, lit, &readings, &first);
+    for (uint8_t led = 0; led < LIGHT_LEDS; led++) TEST_ASSERT_EQUAL_UINT32(20, lit[led]);
+    TEST_ASSERT_EQUAL_UINT32(10, readings);
+    /* A time shorter than a reading takes: one after another. */
+    light_run(3, 1, 4, 100, lit, &readings, &first);
+    TEST_ASSERT_EQUAL_UINT32(50, lit[LIGHT_LED_OBJECT]);
+}
+
+void test_light_program(void)
+{
+    static hw_program p;
+    uint8_t cfg[256];
+    size_t at = 0;
+    const uint8_t head[] = { MSG_HW_LIGHT, 0, 0, 1, LIGHT_PAYLOAD_LEN };
+    memcpy(cfg + at, head, sizeof head); at += sizeof head;
+    memcpy(cfg + at, LIGHT_PAY, LIGHT_PAYLOAD_LEN); at += LIGHT_PAYLOAD_LEN;
+    /* PWM n2 on GPIO 17, its duty from n1's reflected µA. */
+    const uint8_t pwm[] = { MSG_HW_PWM, MSG_FLAG_OUTPUT, 0, 2, 17, 0, 1, LIGHT_OUT_REFLECTED, 17, 0x03, 0xE8, PWM_DUTY_INPUT,
+                            50, 0, 100, 0, 0, 0, 0, 100, 0x27, 0x10 };
+    memcpy(cfg + at, pwm, sizeof pwm); at += sizeof pwm;
+    /* GPO n3 on GPIO 18, driven by n1's left LED. */
+    const uint8_t gpo[] = { MSG_HW_GPO, MSG_FLAG_OUTPUT, 0, 3, 4, 0, 1, LIGHT_OUT_LED_LEFT, 18 };
+    memcpy(cfg + at, gpo, sizeof gpo); at += sizeof gpo;
+    /* n4 with no samples: skipped. */
+    memcpy(cfg + at, head, sizeof head);
+    cfg[at + 3] = 4;
+    at += sizeof head;
+    memcpy(cfg + at, LIGHT_PAY, LIGHT_PAYLOAD_LEN);
+    cfg[at + 25] = 0;
+    at += LIGHT_PAYLOAD_LEN;
+    /* n5: a reading every 2 s. */
+    memcpy(cfg + at, head, sizeof head);
+    cfg[at + 3] = 5;
+    at += sizeof head;
+    memcpy(cfg + at, LIGHT_PAY, LIGHT_PAYLOAD_LEN);
+    memcpy(cfg + at, (const uint8_t[]){ 1 }, 1);    /* ADC1 */
+    cfg[at + 31] = 0x07;
+    cfg[at + 32] = 0xD0;
+    at += LIGHT_PAYLOAD_LEN;
+
+    program_compile(cfg, at, &p);
+    TEST_ASSERT_EQUAL_UINT8(2 * LIGHT_SIGNALS, p.signal_count);
+    TEST_ASSERT_EQUAL_UINT8(4, p.node_count);
+    const prog_node *n = &p.nodes[0];
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_LIGHT, n->type);
+    TEST_ASSERT_EQUAL_UINT8(26, n->pin);
+    for (uint8_t k = 0; k < LIGHT_SIGNALS; k++) TEST_ASSERT_EQUAL_UINT8(program_signal(&p, 1, k), n->out + k);
+    TEST_ASSERT_EQUAL_FLOAT(1, n->light.min_ua);
+    TEST_ASSERT_EQUAL_HEX8(MSG_HW_LIGHT, p.nodes[1].type);         /* n5: inputs come first */
+    TEST_ASSERT_EQUAL_UINT16(2000, p.nodes[1].light.every_ms);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 36.3f, p.nodes[2].in_full[0]);
+    TEST_ASSERT_EQUAL_UINT8(n->out + LIGHT_OUT_LED_LEFT, p.nodes[3].in[0]);
+    char text[2048];
+    TEST_ASSERT_LESS_THAN(sizeof text, program_describe(&p, text, sizeof text));
+    TEST_ASSERT_NOT_NULL(strstr(text, "s9 n1.9 light = 0\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "LIGHT n1 adc 0 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 "
+                                      "min 1 direction settle 1000 us samples 16 -> s0 s1 s2 s3 s4 s5 s6 s7 raw s8 load s9\n"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "LIGHT n5 adc 1 auto loads 1000000 2:1000 3:10000 4:100000 reflect 3 bursts 4 "
+                                      "min 1 direction every 2000 ms settle 1000 us samples 16 -> s10 "));
+}
+
 /* A counter: its count and reset references, then a preset from 1 to COUNTER_MAX. */
 void test_counter_payload_valid(void)
 {
@@ -2611,6 +2915,12 @@ int main(void)
     RUN_TEST(test_ds18b20_program);
     RUN_TEST(test_ultrasonic_echo);
     RUN_TEST(test_ultrasonic_program);
+    RUN_TEST(test_light_payload);
+    RUN_TEST(test_light_ranges);
+    RUN_TEST(test_light_current);
+    RUN_TEST(test_light_reflect);
+    RUN_TEST(test_light_pace);
+    RUN_TEST(test_light_program);
     RUN_TEST(test_sine);
     RUN_TEST(test_clock);
     RUN_TEST(test_encoder_decode);

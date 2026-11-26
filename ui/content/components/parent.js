@@ -115,6 +115,18 @@ function parsePin(pin) {
     return /^\d+$/.test(pin) && pinUsable(Number(pin)) ? Number(pin) : null;
 }
 
+// Set a Command view tile's text. Tiles show it in capitals, and a capital µ (Μ) reads as
+// an M, so each µ is kept as it is: µA stays µA, not MA.
+function setTileText(el, text) {
+    el.replaceChildren(...String(text).split('µ').flatMap((part, i) => {
+        if (i === 0) return [part];
+        const mu = document.createElement('span');
+        mu.className = 'keep-case';
+        mu.textContent = 'µ';
+        return [mu, part];
+    }));
+}
+
 // A settings field for a hardware input: whether the Command view shows its
 // tile (MSG_FLAG_SHOWN). Picking one shows or hides the tile at once.
 // Then its place there (see orderSetting).
@@ -194,6 +206,10 @@ function refAt(m, i) {
         feedback: len === 3 && !!(m.pay[i + 2] & MSG_REF_FEEDBACK),
     };
 }
+
+// The unit of the value a wire carries: its source's, for the output it leaves from
+// (a source whose outputs differ in unit says so with outputUnit). Undefined if none.
+const connUnit = (conn) => conn ? conn.start.node.outputUnit?.(conn.start.output) ?? conn.start.node.unit : undefined;
 
 // The source reference of a wire, as saved: see refBytes. ID 0 if none.
 const connRef = (conn) => refBytes(conn?.start.node, conn?.start.output, conn?.feedback);

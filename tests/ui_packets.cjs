@@ -352,7 +352,7 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
         await page.locator(`#add .group[data-group="${g}"]`).dispatchEvent('click');
         groups.push((await menu()).split(' | ')[1]);
     }
-    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US, PLT LGT, KEY MSE, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
+    expect(groups.join(', ') === 'BTN SLD XY, LED GPO PWM STP SRV NPX, TMP ADC GPI DS ENC US LS, PLT LGT, KEY MSE, DLY PLS BLK CLK, CMP SCL MIN MAX SIN, AND OR NOT TGL LCH CNT, NEW', 'the groups show ' + groups.join(', '));
     await page.locator('#add .group[data-group="sub"]').dispatchEvent('click');
     expect(await menu() === 'UII HWO HWI UIO USB TM ANL LGC SUB | ', 'clicking the open group again left ' + await menu());
     await page.locator('#add .group[data-group="hwo"]').dispatchEvent('click');
@@ -2087,6 +2087,165 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
     });
     expect(usBack === '16,100,true,n1:1,n1:0,400', 'an ultrasonic ranger restored as ' + usBack);
 
+    // A light sensor: its loads and ranges; object detection, then directional detection
+    // only with it; its numbers wire into number inputs, its LEDs into on/off ones; a plot
+    // of one takes that output's unit; its tile shows the device's readings. With the
+    // example's pins it marshals as the light-sensor-config example in PROTOCOL.md, and it
+    // restores.
+    await page.locator('#add .toggle').dispatchEvent('click');
+    await page.locator('#add .group[data-group="hwi"]').dispatchEvent('click');
+    await page.locator('#add [title="Add a light sensor"]').dispatchEvent('click');
+    // Every kind of node has a type of its own, and so How it works text of its own.
+    const kinds = await page.evaluate(() => {
+        const sensor = selected;
+        const made = Object.entries(NODE_CLASSES).map(([tc, cls]) => {
+            const n = addNode(Number(tc));
+            const t = [n?.constructor.name, n?.type];
+            n?.remove();
+            return t;
+        }).filter(([cls]) => cls);
+        const byType = new Map();
+        made.forEach(([cls, type]) => byType.set(type, [...(byType.get(type) ?? []), cls]));
+        selectById(sensor.id);
+        return { shared: [...byType].filter(([, c]) => new Set(c).size > 1).map(([t, c]) => t + ': ' + c.join('/')),
+            helpless: made.filter(([, type]) => !NODE_HELP[type]).map(([cls]) => cls),
+            sensor: NODE_HELP[sensor.type][0].slice(0, 30), header: document.querySelector('#settings h3').textContent };
+    });
+    expect(!kinds.shared.length, 'node kinds share a type, so a header and How it works: ' + kinds.shared.join('; '));
+    expect(kinds.sensor === 'A phototransistor light sensor' && kinds.header.startsWith('LIGHTSENSOR '),
+        'a light sensor\'s settings show ' + JSON.stringify(kinds));
+    const lsRows = 'Label:|Sense pin:|Load 1 pin:|Load 1:|Load 2 pin:|Load 2:|Load 3 pin:|Load 3:|Always-on load:|Ranging:'
+        + '|Settle (µs):|Samples:|Object detection:';
+    expect(await keyRows() === lsRows + '|Wire from:|Command view:|Order:',
+        'a new light sensor does not show its settings: ' + await keyRows());
+    const ls = await page.evaluate(() => {
+        const s = selected;
+        const rows = () => [...document.querySelectorAll('#settings .editable .label')].map(l => l.textContent).join('|');
+        // Free the example's pins for it: GPIO 2, 3, 4, 13, 14 and 15, and ADC0.
+        const want = [2, 3, 4, 13, 14, 15, 26];
+        Object.values(elements).filter(e => e !== s && e.usedPins().some(p => want.includes(p))).forEach(e => e.remove());
+        s.setChannel(1);
+        const first = [s.ohms.join(), s.auto, s.reflect, s.direction, s.reflectRange, s.settleUs, s.samples, s.bursts, s.minUa,
+            s.outputs.map(o => o.name + ':' + o.type).join(' ')].join(' ');
+        const before = JSON.stringify(s.payload());
+        const rejected = [
+            s.setChannel(3), s.setLoadPin(1, '29'), s.setLoadPin(0, '5'), s.setLoadPin(1, String(ADC_PIN_FIRST + 1)),
+            s.setLoadOhms(1, '5'), s.setLoadOhms(1, '2m'), s.setLoadOhms(1, '200M'), s.setBaseOhms('abc'),
+            s.setSettle(LIGHT_SETTLE_MAX_US + 1), s.setSamples(0), s.setBursts(LIGHT_BURSTS_MAX + 1), s.setRange(4),
+            s.setWireOutput(LIGHT_OUTPUTS), s.setMinReflection('-1'), s.setMinReflection('abc'),
+            s.setDirection(true),                               // not without object detection
+            s.setEvery('61'), s.setEvery('-1'), s.setEvery('x'),
+        ].every(r => r === false) && JSON.stringify(s.payload()) === before;
+        // Its pins: loads on 2, 3, 4 (one pin can't be two of them).
+        s.setChannel(0);
+        [2, 3, 4].forEach((pin, k) => s.setLoadPin(k + 1, 'none'));
+        const keptOne = s.setBaseOhms('none') === false;       // no range left
+        [2, 3, 4].forEach((pin, k) => s.setLoadPin(k + 1, String(pin)));
+        const clash = s.setLoadPin(1, '3') === false;
+        s.setLoadOhms(1, '1k'); s.setLoadOhms(2, '10 kΩ'); s.setLoadOhms(3, '100000'); s.setBaseOhms('1M');
+        s.setReflectRange(3);                   // it moved to range 0 while it had no loads
+        const ranges = s.ranges().map(k => s.rangeName(k)).join('; ');
+        // Object detection shows its settings, and Directional with them.
+        s.setReflect(true);
+        s.createSettings();
+        const reflectRows = rows();
+        const directed = s.setDirection(true) !== false;
+        // Wires: its numbers into compares, its LEDs into GPOs, not the other way round;
+        // a plot of its direction has no unit.
+        const wired = [0, 1, 2, 3, 4].every(o => { s.setWireOutput(o); return !!createEdge(s.name, addNode(MSG_LOGIC_COMPARE).name); })
+            && createEdge(s.name, addNode(MSG_HW_GPO).name) === null
+            && [5, 6, 7].every(o => { s.setWireOutput(o); return !!createEdge(s.name, addNode(MSG_HW_GPO).name); })
+            && createEdge(s.name, addNode(MSG_LOGIC_COMPARE).name) === null;
+        s.setWireOutput(LIGHT_OUT_DIRECTION);
+        const plot = addNode(MSG_UI_GRAPH);
+        createEdge(s.name, plot.name);
+        s.setWireOutput(LIGHT_OUT_LEFT);
+        const plot2 = addNode(MSG_UI_GRAPH);
+        createEdge(s.name, plot2.name);
+        const units = plot.unit() + '|' + plot2.unit();
+        s.shown = true;
+        buildCommandInterface();
+        const tile = () => s.tileState.textContent;
+        const tiles = [tile()];
+        receiveTelemetry(`sig ${s.id} 0 16.5`);
+        tiles.push(tile());                     // no reading or load yet
+        receiveTelemetry(`sig ${s.id} ${LIGHT_SIG_RAW} 2048`);
+        receiveTelemetry(`sig ${s.id} ${LIGHT_SIG_LOAD} 90.91`);
+        receiveTelemetry(`sig ${s.id} 1 0.5`);
+        tiles.push(tile());                     // under its minimum: no object, no left or right
+        receiveTelemetry(`sig ${s.id} 1 1.2`);
+        receiveTelemetry(`sig ${s.id} 2 0.4`);
+        receiveTelemetry(`sig ${s.id} 3 0.95`);
+        receiveTelemetry(`sig ${s.id} 4 0.4074`);
+        receiveTelemetry(`sig ${s.id} 6 1`);
+        tiles.push(tile(), s.values.map((v, o) => s.outputValue(o)).join());
+        // Its reading and load are no outputs: nothing wires from them, and Wire from doesn't offer them.
+        s.createSettings();
+        const hidden = s.setWireOutput(LIGHT_SIG_RAW) === false && s.outputs.length === LIGHT_OUTPUTS
+            && ![...document.querySelectorAll('#settings select option')].some(o => o.textContent === 'Raw');
+        const pay = s.payload().map(b => b.toString(16).padStart(2, '0')).join('');
+        // Object detection off takes directional detection with it, and hides their settings.
+        s.setReflect(false);
+        s.auto = false;
+        s.setRange(2);
+        s.createSettings();
+        const fixedRows = rows();
+        const offPay = s.payload().slice(1, 3).join();
+        // A load taken away moves the ranges onto one it has.
+        s.setLoadPin(2, 'none');
+        const moved = [s.range, s.reflectRange].join();
+        s.setLoadPin(2, '3');
+        s.auto = true;
+        s.setReflect(true);
+        s.setDirection(true);
+        s.setReflectRange(3);
+        s.setMinReflection('0.25');
+        s.setEvery('2.5');
+        const every = s.payload().slice(31).join();
+        saveGraph();
+        return { first, rejected, keptOne, clash, ranges, reflectRows, directed, wired, units, hidden, tiles: tiles.join('|'), pay,
+            fixedRows, offPay, moved, min: s.payload().slice(27, 31).join(), every };
+    });
+    packets.push(...await sent(page));
+    expect(ls.first === '1000000,1000,10000,100000 true false false 3 1000 16 4 1 '
+        + 'µA:float Reflected:float Left:float Right:float Direction:float LED:bool LED Left:bool LED Right:bool',
+        'a new light sensor looks ' + ls.first);
+    expect(ls.rejected, 'a light sensor took settings out of range');
+    expect(ls.keptOne && ls.clash, 'a light sensor was left with no range, or two loads on one pin');
+    expect(ls.ranges === '1 MΩ (always on); 90.91 kΩ (GPIO 4); 9.901 kΩ (GPIO 3); 999 Ω (GPIO 2)', 'a light sensor\'s ranges are ' + ls.ranges);
+    expect(ls.reflectRows === lsRows + '|Reflection range:|Bursts:|Measure every (s):|Min reflection (µA):|Directional:|Wire from:|Command view:|Order:',
+        'a light sensor with object detection shows ' + ls.reflectRows);
+    expect(ls.directed, 'a light sensor with object detection took no directional detection');
+    expect(ls.wired, 'a light sensor\'s outputs did not wire by type');
+    expect(ls.units === '|µA', 'plots of a light sensor\'s direction and left show ' + ls.units);
+    expect(ls.tiles === '–|16.5 µA|16.5 µA (90.91 kΩ, raw 2048), reflected 0.50 µA'
+        + '|16.5 µA (90.91 kΩ, raw 2048), reflected 1.20 µA, left 0.40 µA, right 0.95 µA'
+        + '|16.5,1.2,0.4,0.95,0.4074,,1,,2048,90.91', 'a light sensor\'s tile showed ' + ls.tiles);
+    expect(ls.hidden, 'a light sensor offers its reading or load to wire from');
+    expect(ls.pay === '00070003020304' + '000f4240' + '000003e8' + '00002710' + '000186a0' + '03e81004' + '3f800000' + '0000',
+        'a light sensor marshals as ' + ls.pay);
+    expect(ls.fixedRows === lsRows.replace('|Ranging:', '|Ranging:|Range:') + '|Wire from:|Command view:|Order:',
+        'a fixed light sensor without object detection shows ' + ls.fixedRows);
+    expect(ls.offPay === '0,2', 'a light sensor without detection or ranging marshals options and range as ' + ls.offPay);
+    expect(ls.moved === '0,3', 'a light sensor without its range\'s load moved to ' + ls.moved);
+    expect(ls.min === '62,128,0,0', 'a light sensor\'s minimum of 0.25 µA marshals as ' + ls.min);
+    expect(ls.every === '9,196', 'a light sensor measuring every 2.5 s marshals that as ' + ls.every);
+    const lsBack = await page.evaluate(() => {
+        const light = [0x37, MSG_FLAG_SHOWN, 0, 1, LIGHT_PAYLOAD_LEN,
+            1, LIGHT_REFLECT | LIGHT_DIRECTION, 2, 1, 5, 6, LIGHT_NO_PIN,
+            0, 0, 0, 0,  0, 0, 0x01, 0xF4,  0, 0, 0x13, 0x88,  0, 0, 0, 0,  0, 50, 4, 1,  0x40, 0x00, 0x00, 0x00,  0x03, 0xE8];
+        const bad = [...light];
+        bad[3] = 2;
+        bad[5 + 1] = LIGHT_DIRECTION;           // directional without object detection: kept as a new one
+        restoreGraph(configMessages(Uint8Array.from([...light, ...bad])));
+        const s = elements.n1;
+        return [s.channel, s.auto, s.reflect, s.direction, s.range, s.reflectRange, s.pins.slice(1).join(':'), s.ohms.join(':'),
+            s.settleUs, s.samples, s.bursts, s.minUa, s.everyMs, s.shown, s.ranges().join(''),
+            elements.n2.reflect, elements.n2.direction, elements.n2.channel].join();
+    });
+    expect(lsBack === '1,false,true,true,2,1,5:6:255,0:500:5000:100000,50,4,1,2,1000,true,21,false,false,0',
+        'a light sensor restored as ' + lsBack);
+
     // A sine: an on/off wire in runs it, a number wire leaves it; the browser runs the
     // wave, from its offset; off, it rests at its offset. It marshals as the sine-config
     // example's layout in PROTOCOL.md, and restores.
@@ -2465,6 +2624,68 @@ const sent = (page) => page.evaluate(() => window.__sent.splice(0));
             elements.n3.inConns().map(c => c.start.node.name).join(), copy.partMessages().join('.'), idCounter].join();
     });
     expect(example === 'n1 n2 n3,Flip,10,n1,n2,74.5.0.10.3.0.1.0,11', 'the block-config example restored as ' + example);
+
+    // Export and import: the graph (with that block, and a light sensor) downloads as a
+    // graph file; a different graph is put in its place; importing the file through the
+    // Import button brings the first back, byte for byte, and Save sends it. Files that
+    // aren't graph files are turned away with a message, and leave the graph as it was.
+    const dialogs = [];
+    page.on('dialog', d => { dialogs.push(d.type() + ': ' + d.message()); d.accept(); });
+    const before = await page.evaluate(() => {
+        const s = addNode(MSG_HW_LIGHT);
+        s.setLabel('Window');
+        s.setReflect(true);
+        s.setEvery('2');
+        return hexBytes(graphBytes());
+    });
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#graph .export').dispatchEvent('click')]);
+    const exported = fs.readFileSync(await download.path(), 'utf8');
+    const file = JSON.parse(exported);
+    expect(/^neograph-graph-\d{4}-\d{2}-\d{2}\.json$/.test(download.suggestedFilename()), 'the export is named ' + download.suggestedFilename());
+    expect(file.format === 'neograph-graph' && file.version === 1 && !Number.isNaN(Date.parse(file.saved)),
+        'the export\'s header is ' + JSON.stringify({ ...file, nodes: undefined, messages: undefined }));
+    expect(file.nodes.map(n => `${n.id}:${n.type}:${n.label}`).join() === '1:button:BUTTON,2:block:Flip,3:led:Onboard LED,11:lightsensor:Window',
+        'the export lists its nodes as ' + JSON.stringify(file.nodes));
+    expect(file.messages.join(' ') === before, 'the export\'s messages are not the graph\'s');
+    const changed = await page.evaluate(() => {
+        restoreGraph(configMessages(Uint8Array.from([0x10, 0, 0, 1, 1, 1])));
+        return Object.keys(elements).join();
+    });
+    dialogs.length = 0;
+    await page.setInputFiles('#import-file', { name: 'graph.json', mimeType: 'application/json', buffer: Buffer.from(exported) });
+    await page.waitForFunction(() => Object.keys(elements).length > 1);
+    const imported = await page.evaluate(() => {
+        const back = hexBytes(graphBytes());
+        saveGraph();
+        return { back, light: [elements.n11.label, elements.n11.reflect, elements.n11.everyMs].join() };
+    });
+    packets.push(...await sent(page));
+    expect(changed === 'n1', 'the graph was not replaced before the import: ' + changed);
+    expect(dialogs.join() === 'confirm: Replace the graph with the imported one? Save sends it to the device.',
+        'importing over a graph asked ' + JSON.stringify(dialogs));
+    expect(imported.back === before, 'the imported graph differs from the exported one');
+    expect(imported.light === 'Window,true,2000', 'the imported light sensor is ' + imported.light);
+    dialogs.length = 0;
+    const badFiles = await page.evaluate((good) => {
+        const f = JSON.parse(good);
+        const tries = [
+            'not json',
+            JSON.stringify({ ...f, format: 'something-else' }),
+            JSON.stringify({ ...f, version: 2 }),
+            JSON.stringify({ ...f, messages: ['10 00 00 01 01 zz'] }),
+            JSON.stringify({ ...f, messages: ['10 00 00 01 05 01'] }),          // says 5 payload bytes, has 1
+            JSON.stringify({ ...f, messages: [] }),
+        ];
+        const was = hexBytes(graphBytes());
+        return { results: tries.map(importGraphText).join(), kept: hexBytes(graphBytes()) === was };
+    }, exported);
+    expect(badFiles.results === 'false,false,false,false,false,false' && badFiles.kept, 'a bad graph file was taken: ' + JSON.stringify(badFiles));
+    expect(dialogs.join('|') === ["alert: That file can't be imported: it is not JSON.",
+        "alert: That file can't be imported: it is not a neoGraph graph file.",
+        "alert: That file can't be imported: it is version 2, newer than this page reads (1).",
+        "alert: That file can't be imported: message 1 is not hex bytes.",
+        "alert: That file can't be imported: message 1 is not one whole message.",
+        "alert: That file can't be imported: it has no nodes."].join('|'), 'bad graph files said ' + JSON.stringify(dialogs));
     expect(errors.length === 0, 'page errors: ' + errors.join('; '));
 
     await browser.close();

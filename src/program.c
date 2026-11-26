@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "program.h"
+#include "light.h"
 #include "protocol.h"
 #include "config/config_iterator.h"
 
@@ -208,7 +209,8 @@ static prog_node *add_node(hw_program *p, uint8_t type, uint16_t id) {
 // PWM's: 1 for a slider (its values are 0 to 1) or a scale, 3.3 V for an ADC,
 // CORE_TEMP_FULL °C for the core temperature, for a min or max that of what it
 // picks from, for a counter's count its preset, for an encoder's position its
-// steps, and for an ultrasonic ranger's distance its range.
+// steps, for an ultrasonic ranger's distance its range, and for a light sensor's
+// photocurrent the most its least sensitive range reads (see light_full).
 static float signal_full(const hw_program *p, uint8_t s) {
     if (s == PROG_NO_SIGNAL) return 1;
     switch (p->signals[s].type) {
@@ -226,6 +228,12 @@ static float signal_full(const hw_program *p, uint8_t s) {
         // Its distance: its range; echo: 0 or 1.
         for (uint8_t i = 0; i < p->node_count; i++) {
             if (p->nodes[i].type == MSG_HW_ULTRASONIC && p->nodes[i].out == s) return (float)p->nodes[i].range;
+        }
+        return 1;
+    case MSG_HW_LIGHT:
+        for (uint8_t i = 0; i < p->node_count; i++) {
+            const prog_node *n = &p->nodes[i];
+            if (n->type == MSG_HW_LIGHT && s >= n->out && s < n->out + LIGHT_OUTPUTS) return light_full(&n->light, (uint8_t)(s - n->out));
         }
         return 1;
     case MSG_LOGIC_COUNTER:
@@ -447,6 +455,23 @@ void program_compile(const uint8_t *payload, size_t len, hw_program *p) {
             break;
         }
 
+        case MSG_HW_LIGHT: {
+            // LIGHT_SIGNALS signals, in a row: its background, reflected, left and right µA, its
+            // direction, its LED, left LED and right LED; then its reading and load, for its tile.
+            light_payload light;
+            if (!light_payload_read(itr.pay, itr.len, &light)) break;
+            if ((s = add_signal(p, itr.id, 0, itr.type, 0)) == PROG_NO_SIGNAL) break;
+            bool all = true;
+            for (uint8_t k = 1; k < LIGHT_SIGNALS; k++) all = all && add_signal(p, itr.id, k, itr.type, 0) == s + k;
+            if (!all) break;
+            if ((n = add_node(p, itr.type, itr.id))) {
+                n->out = s;
+                n->pin = ADC_PIN_FIRST + light.channel;
+                n->light = light;
+            }
+            break;
+        }
+
         default:
             // A logic element's signal, for the elements that read it; its node
             // comes after the inputs.
@@ -619,6 +644,7 @@ static const char *type_name(uint8_t type) {
     case MSG_HW_DS18B20: return "ds18b20";
     case MSG_HW_ENCODER: return "encoder";
     case MSG_HW_ULTRASONIC: return "ultrasonic";
+    case MSG_HW_LIGHT: return "light";
     case MSG_HW_CLOCK: return "clock";
     case MSG_LOGIC_COMPARE: return "compare";
     case MSG_LOGIC_AND: return "and";
@@ -713,6 +739,29 @@ size_t program_describe(const hw_program *p, char *buf, size_t size) {
             put(&t, " echo ");
             put_signal(&t, n->out_count);
             break;
+        case MSG_HW_LIGHT: {
+            const light_payload *l = &n->light;
+            put(&t, "LIGHT n%u adc %u", n->id, l->channel);
+            if (l->options & LIGHT_AUTO) put(&t, " auto");
+            else put(&t, " range %u", l->range);
+            put(&t, " loads");
+            for (uint8_t k = 0; k < LIGHT_RANGES; k++) {
+                if (!light_has_range(l, k)) continue;
+                if (k) put(&t, " %u:%lu", l->pins[k], (unsigned long)l->ohms[k]);
+                else put(&t, " %lu", (unsigned long)l->ohms[0]);
+            }
+            if (l->options & LIGHT_REFLECT) {
+                put(&t, " reflect %u bursts %u min %.4g%s", l->reflect_range, l->bursts, (double)l->min_ua,
+                    l->options & LIGHT_DIRECTION ? " direction" : "");
+                if (l->every_ms) put(&t, " every %u ms", l->every_ms);
+            }
+            put(&t, " settle %u us samples %u -> ", l->settle_us, l->samples);
+            for (uint8_t k = 0; k < LIGHT_SIGNALS; k++) {
+                if (k) put(&t, k == LIGHT_SIG_RAW ? " raw " : k == LIGHT_SIG_LOAD ? " load " : " ");
+                put_signal(&t, (uint8_t)(n->out + k));
+            }
+            break;
+        }
         case MSG_LOGIC_COMPARE:
             put(&t, "COMPARE n%u %s %.4g hysteresis %.4g <- ", n->id, n->options == COMPARE_BELOW ? "below" : "above",
                 (double)n->threshold, (double)n->hysteresis);
