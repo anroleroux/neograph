@@ -1,6 +1,6 @@
 // Auto-ranging moves to a less sensitive range above this reading (LIGHT_RAW_HIGH in
 // src/light.h); the offline demo reads on the most sensitive range under it.
-const LIGHT_RAW_HIGH = 3900;
+const LIGHT_RAW_HIGH = 3000;
 
 // A light sensor: a phototransistor (such as a BPT-BP0334) from 3.3 V into a sense node
 // on an ADC pin, with load resistors from the sense node: one to GND that is always on

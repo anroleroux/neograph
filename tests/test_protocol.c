@@ -2461,8 +2461,11 @@ void test_light_ranges(void)
     TEST_ASSERT_EQUAL_UINT8(2, order[2]);
     TEST_ASSERT_EQUAL_UINT8(1, order[3]);
 
-    /* Near the top: one range less sensitive; at the least sensitive it stays. */
+    /* Near the top: one range less sensitive; at the least sensitive it stays. A
+       phototransistor saturated in sun on 1 MΩ reads about 3700, never 4095: it moves. */
     TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 0, 4000));
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 0, 3700));
+    TEST_ASSERT_EQUAL_UINT8(0, light_autorange(&l, 0, LIGHT_RAW_HIGH));
     TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 2, LIGHT_RAW_HIGH + 1));
     TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 1, 4095));
     /* Between the two, it stays. */
@@ -2478,7 +2481,8 @@ void test_light_ranges(void)
     TEST_ASSERT_EQUAL_UINT8(0, light_autorange(&l, 2, 1000));
     /* 10 kΩ gone, from 1 kΩ the next is 100 kΩ: 199 there would read ~18000, so it stays. */
     TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 1, LIGHT_RAW_LOW - 1));
-    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 1, 30));     /* ~2730 there */
+    TEST_ASSERT_EQUAL_UINT8(1, light_autorange(&l, 1, 30));     /* ~2730 there: over LIGHT_RAW_TARGET, it stays */
+    TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 1, 20));     /* ~1820 */
     TEST_ASSERT_EQUAL_UINT8(3, light_autorange(&l, 1, 3));      /* ~273 */
 }
 

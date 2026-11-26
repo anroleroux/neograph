@@ -16,9 +16,13 @@
  * PROTOCOL.md, "Light sensors", describes it.
  */
 
-#define LIGHT_RAW_HIGH          3900    /* a reading above this is near the top: a less sensitive range */
+// The phototransistor needs a few hundred mV across it, so a saturated one, in bright
+// light on a high load, leaves the sense node at 2.9-3.1 V: a reading of about 3600-3850,
+// never 4095. LIGHT_RAW_HIGH is well under that, about 2.4 V, leaving the transistor about
+// 0.9 V, so it moves before it saturates, not after.
+#define LIGHT_RAW_HIGH          3000    /* a reading above this is near the top: a less sensitive range */
 #define LIGHT_RAW_LOW           200     /* below this, a more sensitive range, if the reading there ... */
-#define LIGHT_RAW_TARGET        3000    /* ... would be under this: the gap keeps it from flapping */
+#define LIGHT_RAW_TARGET        2400    /* ... would be under this: the gap keeps it from flapping */
 #define LIGHT_NO_RANGE          0xFF
 
 // The load range k puts on the sense node, in ohms: its own load in parallel with the

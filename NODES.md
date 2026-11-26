@@ -596,7 +596,8 @@ Things to know:
   a time by driving its pin low, and lets the others go. On the RP2350 a let-go pin also
   has its input buffer turned off, so it doesn't leak into the sense pin (erratum E9).
 - **Auto** starts on the most sensitive range, steps down one range when a reading
-  passes 3900 and back up when one is under 200, if it would fit there; the gap keeps
+  passes 3000 (a sensor saturated in sun reads about 3700, never 4095, so it must move
+  before then) and back up when one is under 200, if it would fit there; the gap keeps
   it from flapping. Reflections stay on their own range.
 - **µA** is the reading in volts over the load it read through. It is approximate: the
   resistors' tolerance, and on the 1 MΩ range the ADC itself, shift it. It is read only

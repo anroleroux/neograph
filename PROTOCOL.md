@@ -1116,9 +1116,13 @@ A photocurrent is I = V / R: the reading in volts over its range's load
 (`light_microamps`), so its background light doesn't jump when it changes range.
 
 **Auto-ranging** (`LIGHT_AUTO`, `light_autorange`) starts on its most sensitive range.
-A background reading above 3900 (`LIGHT_RAW_HIGH`), near the top, moves it to the next
-less sensitive range for the next reading; one below 200 (`LIGHT_RAW_LOW`) to the next
-more sensitive one, if the reading there would be under 3000 (`LIGHT_RAW_TARGET`), so it
+A background reading above 3000 (`LIGHT_RAW_HIGH`, about 2.4 V) moves it to the next
+less sensitive range for the next reading. That is well under the top: the
+phototransistor needs a few hundred mV across it, so one saturated by bright light on a
+high load leaves the sense pin at 2.9–3.1 V, a reading of about 3600–3850 that never
+reaches 4095, and 3000 leaves it about 0.9 V, before it saturates. A reading below 200
+(`LIGHT_RAW_LOW`) moves it to the next more sensitive one, if the reading there would be
+under 2400 (`LIGHT_RAW_TARGET`), so it
 doesn't move back and forth between them. Without `LIGHT_AUTO` it reads on its range
 (byte 2).
 
